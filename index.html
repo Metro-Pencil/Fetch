@@ -4,6 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Room Logger — Console</title>
+<!--
+  VERSIONING — read before editing this file.
+  Bump the version number below on every edit, big or small — a copy fix
+  counts too. Follow semantic versioning (MAJOR.MINOR.PATCH), same idea
+  GitHub releases use:
+    MAJOR — breaking change (e.g. Firebase schema changes, a feature is removed)
+    MINOR — new feature, backwards compatible (e.g. added a new chart, new control)
+    PATCH — fix or tweak, no new capability (e.g. styling, copy, a bug fix)
+  Update BOTH of these in the same edit:
+    1. The APP_VERSION constant in the <script> below
+    2. The visible "v#.#.#" badge in the header markup
+-->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -196,7 +208,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger Console</h1>
+        <h1>Room Logger Console <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v1.0.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -265,9 +277,14 @@
         </div>
       </div>
 
-      <div class="chart-wrap">
-        <canvas id="chart" style="display:none;"></canvas>
-        <div class="empty-state" id="chart-empty">No readings fetched yet. Click "Refresh now".</div>
+      <div class="chart-wrap" style="height:220px;">
+        <canvas id="temp-chart" style="display:none;"></canvas>
+        <div class="empty-state" id="temp-chart-empty">No readings fetched yet. Click "Refresh now".</div>
+      </div>
+
+      <div class="chart-wrap" style="height:220px;">
+        <canvas id="hum-chart" style="display:none;"></canvas>
+        <div class="empty-state" id="hum-chart-empty">No readings fetched yet. Click "Refresh now".</div>
       </div>
 
       <div class="controls-row">
@@ -283,6 +300,13 @@
 </div>
 
 <script>
+  // Single source of truth for the version — the badge in the header reads
+  // from this on load. Still update the visible badge's fallback text too
+  // (see comment near the top of the file) so it's correct even if someone
+  // views the HTML without JS running.
+  const APP_VERSION = '1.0.0';
+  document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
+
   // ---------- mixed content warning ----------
   if (location.protocol === 'https:') {
     document.getElementById('mixed-content-banner').classList.add('show');
@@ -338,7 +362,6 @@
   }
 
   // ---------- Firebase readings ----------
-  let chart = null;
   let autoTimer = null;
   let lastFetchOk = null;
 
@@ -423,51 +446,70 @@
     });
   }
 
-  function renderChart(entries){
-    document.getElementById('chart-empty').style.display = 'none';
-    const canvas = document.getElementById('chart');
-    canvas.style.display = 'block';
+  // The ESP32 keys each reading by millis() — time since it booted, not a
+  // real clock. There's no wall-clock time on the device at all right now.
+  // Since readings only ever get uploaded while online (near-real-time),
+  // we approximate real time here: anchor the newest reading to "now", and
+  // walk backwards using the millis() gaps between entries. Good enough for
+  // a live graph; if the ESP32 reboots mid-session, millis() resets to 0,
+  // which would throw this approximation off until it re-syncs — a real
+  // fix would mean adding NTP time sync in the firmware so each reading
+  // carries its own true timestamp instead of a boot-relative one.
+  function approxTimeLabels(entries){
+    const newest = entries[entries.length - 1].key;
+    const nowMs = Date.now();
+    return entries.map(e => {
+      const approxEpoch = nowMs - (newest - e.key);
+      return new Date(approxEpoch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    });
+  }
 
-    const labels = entries.map((_, i) => '#' + (i + 1));
+  function renderChart(entries){
+    const labels = approxTimeLabels(entries);
     const temps = entries.map(e => e.temp);
     const hums = entries.map(e => e.hum);
 
-    if (chart){
-      chart.data.labels = labels;
-      chart.data.datasets[0].data = temps;
-      chart.data.datasets[1].data = hums;
-      chart.update();
+    renderOneChart('temp-chart', 'temp-chart-empty', 'tempChart', labels, {
+      label: 'Temp (°C)', data: temps,
+      borderColor: '#FF8A5B', backgroundColor: 'rgba(255,138,91,0.08)',
+      tickColor: '#FF8A5B', axisTitle: '°C'
+    });
+    renderOneChart('hum-chart', 'hum-chart-empty', 'humChart', labels, {
+      label: 'Humidity (%)', data: hums,
+      borderColor: '#4FC3E8', backgroundColor: 'rgba(79,195,232,0.06)',
+      tickColor: '#4FC3E8', axisTitle: '%RH'
+    });
+  }
+
+  const chartInstances = { tempChart: null, humChart: null };
+
+  function renderOneChart(canvasId, emptyId, instanceKey, labels, series){
+    document.getElementById(emptyId).style.display = 'none';
+    const canvas = document.getElementById(canvasId);
+    canvas.style.display = 'block';
+
+    const existing = chartInstances[instanceKey];
+    if (existing){
+      existing.data.labels = labels;
+      existing.data.datasets[0].data = series.data;
+      existing.update();
       return;
     }
 
-    chart = new Chart(canvas.getContext('2d'), {
+    chartInstances[instanceKey] = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: {
         labels,
-        datasets: [
-          {
-            label: 'Temp (°C)',
-            data: temps,
-            borderColor: '#FF8A5B',
-            backgroundColor: 'rgba(255,138,91,0.08)',
-            yAxisID: 'y',
-            tension: 0.3,
-            pointRadius: 0,
-            borderWidth: 2,
-            fill: true,
-          },
-          {
-            label: 'Humidity (%)',
-            data: hums,
-            borderColor: '#4FC3E8',
-            backgroundColor: 'rgba(79,195,232,0.06)',
-            yAxisID: 'y1',
-            tension: 0.3,
-            pointRadius: 0,
-            borderWidth: 2,
-            fill: true,
-          }
-        ]
+        datasets: [{
+          label: series.label,
+          data: series.data,
+          borderColor: series.borderColor,
+          backgroundColor: series.backgroundColor,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2,
+          fill: true,
+        }]
       },
       options: {
         responsive: true,
@@ -484,20 +526,13 @@
         },
         scales: {
           x: {
-            ticks: { color: '#525C6B', font: { family: 'IBM Plex Mono', size: 10 }, maxTicksLimit: 8 },
+            ticks: { color: '#525C6B', font: { family: 'IBM Plex Mono', size: 10 }, maxTicksLimit: 6 },
             grid: { color: '#1A222C' }
           },
           y: {
-            position: 'left',
-            ticks: { color: '#FF8A5B', font: { family: 'IBM Plex Mono', size: 10 } },
+            ticks: { color: series.tickColor, font: { family: 'IBM Plex Mono', size: 10 } },
             grid: { color: '#1A222C' },
-            title: { display: true, text: '°C', color: '#7C8798' }
-          },
-          y1: {
-            position: 'right',
-            ticks: { color: '#4FC3E8', font: { family: 'IBM Plex Mono', size: 10 } },
-            grid: { display: false },
-            title: { display: true, text: '%RH', color: '#7C8798' }
+            title: { display: true, text: series.axisTitle, color: '#7C8798' }
           }
         }
       }
