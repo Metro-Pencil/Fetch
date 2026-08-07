@@ -332,7 +332,7 @@
     };
     xhr.onerror = function(){
       btn.disabled = false;
-      logStatus('Request failed. Likely a mixed-content block (see banner above) or you\\'re not on the device\\'s network.', 'error');
+      logStatus('Request failed. Likely a mixed-content block (see banner above), or this device is not on the same network.', 'error');
     };
     xhr.send(formData);
   }
@@ -515,4 +515,4 @@
   fetchReadings();
 </script>
 </body>
-  </html>
+</html>
