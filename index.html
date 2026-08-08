@@ -16,6 +16,30 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.5.3 — lowered TARGET_POINTS (900 → 400) so long spans (a day or
+  more) go back to being bucket-averaged into a smoother line instead of
+  rendering every raw reading, which looked noisy/jagged at that scale.
+  Chosen against the ESP32's known 60s reading interval so shorter spans
+  (up to ~6-7h) still render fully raw — this only pulls back smoothing
+  on the longer end, not the short one.
+
+  v2.5.2 — the 5-minute MIN_DOMAIN_MS floor from v2.5.0 turned out to be
+  much wider than real reading clusters, so it was the thing actually
+  being rendered in most views: every range picker clamped to that same
+  5-minute window around the same cluster (looked "stuck" — different
+  picker options rendered identically), the axis was still padded past
+  the real data (the original stretch-to-fill bug, just caused by the
+  floor instead of the nominal window), and interactive zoom-in had
+  nowhere to go since the view already sat at that floor by default.
+  Dropped the floor to 15s (MIN_DOMAIN_MS is now only a zero-width guard,
+  not a "comfortable minimum"), and reused the same constant for the zoom
+  plugin's minRange so the auto-picker floor and the interactive zoom-in
+  floor always agree. Also added a caption note — "only Xs/m/h/d of
+  readings logged so far" — for when a wider range renders the same as a
+  narrower one because that's genuinely all the history that exists yet,
+  vs. "showing available history only" for when more history might still
+  be fetchable but the guarded fetch loop hasn't confirmed that yet.
+
   v2.5.1 — raised TARGET_POINTS (300 → 900) so views render raw,
   unaveraged readings for longer before bucket-averaging kicks in — more
   of the zoomed-in and mid-range views now show true per-reading detail
@@ -286,7 +310,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.5.1</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.5.3</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -370,13 +394,19 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.5.1';
+  const APP_VERSION = '2.5.3';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
   const PAGE_SIZE = 200;          // initial fetch size
   const MAX_FETCH_LIMIT = 50000;  // hard ceiling on how much history one session will pull in
-  const TARGET_POINTS = 900;      // rendered points per view before bucket-averaging kicks in
+  const TARGET_POINTS = 400;      // rendered points per view before bucket-averaging kicks in.
+                                   // ESP reads once every 60s, so this stays raw (1 pt/reading)
+                                   // up to ~6-7h spans, and averages progressively harder beyond
+                                   // that as the span grows — a day averages ~4 readings/pt, a
+                                   // month ~130/pt, etc. (bucketize() below recomputes bucket
+                                   // width from the current span every time, so it scales
+                                   // automatically with whatever range or zoom level is visible).
   const DAY = 86400000;
 
   const RANGE_DEFS = {
@@ -595,12 +625,20 @@
   }
 
   // ---------- range selection ----------
-  // Smallest x-domain width we'll ever set. Mirrors the zoom plugin's own
-  // minRange (see limits.x.minRange below) — that guard only kicks in for
-  // interactive zoom/pan, so setChartDomain() needs its own copy to avoid
-  // ever collapsing to a zero/near-zero width span (e.g. a handful of
-  // readings that all landed within the same second).
-  const MIN_DOMAIN_MS = 5 * 60 * 1000;
+  // Smallest x-domain width we'll ever set. This is ONLY a degenerate-case
+  // guard (e.g. every visible reading landing at the exact same
+  // millisecond, which would otherwise collapse the axis to zero width) —
+  // it is deliberately much smaller than any real "comfortable viewing
+  // window". A bigger value here silently overrides real data: if actual
+  // readings span less time than this floor, every stretch gets padded
+  // out to the floor instead of the data's real extent, which (a) leaves
+  // blank space again — the exact bug this was meant to fix — and (b)
+  // means picking a wider nominal range (1h vs 24h vs 3mo) can render
+  // identically, since they all clamp to the same floor around the same
+  // cluster of points. Mirrors the zoom plugin's own minRange (see
+  // limits.x.minRange below) so the auto-picker floor and the interactive
+  // zoom-in floor agree — you can always zoom in at least this far.
+  const MIN_DOMAIN_MS = 15 * 1000;
 
   // Narrows [start, end] down to the actual first/last timestamp of
   // whatever data falls inside it, so the chart always stretches edge to
@@ -620,6 +658,20 @@
     return [actualStart, actualEnd];
   }
 
+  // Short human-readable span, for the "that's all there is" caption note
+  // (e.g. "42s", "3m", "5h", "2d") — not a formal duration format, just
+  // enough for the user to see why a wider range looks the same as a
+  // narrower one.
+  function formatSpan(ms){
+    const s = Math.round(ms / 1000);
+    if (s < 90) return s + 's';
+    const m = Math.round(s / 60);
+    if (m < 90) return m + 'm';
+    const h = Math.round(m / 60);
+    if (h < 48) return h + 'h';
+    return Math.round(h / 24) + 'd';
+  }
+
   async function applyRangeSelection(){
     if (!getSorted().length) return;
     const mode = document.getElementById('range-select').value;
@@ -637,7 +689,8 @@
       const slice = sorted.slice(-def.n);
       if (!slice.length) return;
       const [start, end] = stretchToData(slice, slice[0].epochMs, slice[slice.length - 1].epochMs);
-      setChartDomain(start, end);
+      const shortNote = slice.length < def.n ? ('only ' + slice.length + ' of ' + def.n + ' readings logged so far') : null;
+      setChartDomain(start, end, shortNote);
       return;
     }
 
@@ -658,10 +711,20 @@
 
     const sorted = getSorted();
     if (!sorted.length) return;
-    const incomplete = cutoff > -Infinity && sorted[0].epochMs > cutoff && !noMoreHistory;
+    const stillMore = cutoff > -Infinity && sorted[0].epochMs > cutoff && !noMoreHistory;
     const domainStart = Math.max(cutoff, sorted[0].epochMs);
     const [start, end] = stretchToData(sorted, domainStart, now);
-    setChartDomain(start, end, incomplete ? 'showing available history only' : null);
+    // Two distinct reasons the shown span can be shorter than the nominal
+    // picker window, worth telling apart: we stopped early and there
+    // might be more (stillMore) vs. we've confirmed this really is
+    // everything logged so far (noMoreHistory) — in which case every
+    // wider range will look identical to this one until more data comes in.
+    let note = null;
+    if (stillMore) note = 'showing available history only';
+    else if (cutoff > -Infinity && noMoreHistory && (end - start) < (now - domainStart) * 0.9){
+      note = 'only ' + formatSpan(end - start) + ' of readings logged so far';
+    }
+    setChartDomain(start, end, note);
   }
 
   function resetView(){
@@ -745,7 +808,7 @@
             }
           },
           zoom: {
-            limits: { x: { min: 0, minRange: 5 * 60 * 1000 } },
+            limits: { x: { min: 0, minRange: MIN_DOMAIN_MS } },
             pan: { enabled: true, mode: 'xy', onPan: syncOtherChart, onPanComplete: onViewChanged },
             zoom: {
               wheel: { enabled: true }, pinch: { enabled: true }, drag: { enabled: false },
