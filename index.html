@@ -16,6 +16,15 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.1.0 — split the combined dual-axis chart back into two stacked,
+  single-axis charts (temperature, humidity) so each series reads at a
+  glance instead of sharing a busy dual-axis plot. The two charts share
+  one time axis: only the bottom chart draws x-axis tick labels, and
+  panning/zooming either chart keeps the other in sync (see
+  syncOtherChart()/onViewChanged()). All v2.0.0 behavior — zoom/pan,
+  the time-range picker, backward history loading, bucket-averaging,
+  12-hour clock, editable auto-refresh — carries over unchanged.
+
   v2.0.0 — removed the OTA firmware-update section entirely (breaking:
   a feature was removed). Replaced the two separate temp/humidity charts
   with one combined dual-axis chart that supports pinch/wheel zoom and
@@ -169,8 +178,19 @@
   .chart-caption{font-family:var(--mono);font-size:10.5px;color:var(--muted);line-height:1.4;}
   .chart-loading{font-family:var(--mono);font-size:10.5px;color:var(--warn);display:none;flex-shrink:0;}
   .chart-loading.show{display:inline;}
-  .chart-canvas-box{position:relative;height:280px;}
-  @media (min-width:600px){ .chart-canvas-box{height:360px;} }
+  .charts-stack{position:relative;}
+  .chart-panel + .chart-panel{margin-top:16px;padding-top:14px;border-top:1px solid var(--border);}
+  .chart-panel-label{
+    display:flex;align-items:center;gap:6px;margin-bottom:6px;
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--muted);
+  }
+  .chart-panel-label .dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+  .chart-panel-label.temp .dot{background:var(--temp);}
+  .chart-panel-label.hum .dot{background:var(--hum);}
+  .chart-panel-label .unit{margin-left:auto;color:var(--muted-2);letter-spacing:0;text-transform:none;}
+  .chart-canvas-box{position:relative;height:120px;}
+  @media (min-width:600px){ .chart-canvas-box{height:165px;} }
   .chart-hint{font-size:10px;color:var(--muted-2);font-family:var(--mono);margin-top:8px;text-align:center;}
   .empty-state{
     position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
@@ -213,7 +233,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.0.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.1.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -263,11 +283,18 @@
         <span class="chart-caption" id="chart-caption">—</span>
         <span class="chart-loading" id="chart-loading">loading earlier readings…</span>
       </div>
-      <div class="chart-canvas-box">
-        <canvas id="rt-chart"></canvas>
+      <div class="charts-stack">
+        <div class="chart-panel">
+          <div class="chart-panel-label temp"><span class="dot"></span>Temperature<span class="unit">°C</span></div>
+          <div class="chart-canvas-box"><canvas id="rt-chart-temp"></canvas></div>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-panel-label hum"><span class="dot"></span>Humidity<span class="unit">%RH</span></div>
+          <div class="chart-canvas-box"><canvas id="rt-chart-hum"></canvas></div>
+        </div>
         <div class="empty-state" id="chart-empty">No readings fetched yet. Tap "Refresh now".</div>
       </div>
-      <div class="chart-hint">Drag to scroll through time · pinch or scroll to zoom</div>
+      <div class="chart-hint">Drag to scroll through time · pinch or scroll to zoom · charts stay in sync</div>
     </div>
 
     <div class="controls-row">
@@ -290,7 +317,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.0.0';
+  const APP_VERSION = '2.1.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
@@ -322,7 +349,8 @@
   let userHasInteracted = false;
   let latestReadingEpoch = null;
   let lastFetchOk = null;
-  let chartInstance = null;
+  let chartTemp = null;
+  let chartHum = null;
   let autoTimer = null;
   let viewChangeTimer = null;
 
@@ -447,7 +475,7 @@
       if (!userHasInteracted){
         await applyRangeSelection();
       } else {
-        const xScale = chartInstance.scales.x;
+        const xScale = chartTemp.scales.x;
         redrawChart(xScale.min, xScale.max);
       }
     } catch(err){
@@ -588,26 +616,22 @@
   }
 
   // ---------- chart ----------
-  function ensureChart(){
-    if (chartInstance) return chartInstance;
-    const ctx = document.getElementById('rt-chart').getContext('2d');
-    chartInstance = new Chart(ctx, {
+  // Two independent single-axis charts (instead of one combined dual-axis
+  // chart) so each series gets its own clean scale. They share a single
+  // time axis: only the bottom (humidity) chart draws x tick labels, and
+  // syncOtherChart()/onViewChanged() keep both charts' visible window
+  // identical whichever one the user drags or zooms.
+  function buildSeriesChart(canvasId, color, bg, seriesLabel, unit, showXLabels){
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    return new Chart(ctx, {
       type: 'line',
       data: {
-        datasets: [
-          {
-            label: 'Temp (°C)', yAxisID: 'yTemp', data: [],
-            borderColor: '#FF8A5B', backgroundColor: 'rgba(255,138,91,0.08)',
-            tension: 0.25, pointRadius: 0, pointHoverRadius: 4,
-            pointHoverBackgroundColor: '#FF8A5B', borderWidth: 2, fill: false, parsing: false
-          },
-          {
-            label: 'Humidity (%)', yAxisID: 'yHum', data: [],
-            borderColor: '#4FC3E8', backgroundColor: 'rgba(79,195,232,0.06)',
-            tension: 0.25, pointRadius: 0, pointHoverRadius: 4,
-            pointHoverBackgroundColor: '#4FC3E8', borderWidth: 2, fill: false, parsing: false
-          }
-        ]
+        datasets: [{
+          label: seriesLabel, data: [],
+          borderColor: color, backgroundColor: bg,
+          tension: 0.25, pointRadius: 0, pointHoverRadius: 4,
+          pointHoverBackgroundColor: color, borderWidth: 2, fill: false, parsing: false
+        }]
       },
       options: {
         responsive: true,
@@ -615,24 +639,21 @@
         animation: false,
         interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: {
-            labels: { color: '#7C8798', font: { family: 'IBM Plex Mono', size: 11 }, boxWidth: 10 }
-          },
+          legend: { display: false },
           tooltip: {
             backgroundColor: '#151B23', borderColor: '#232C38', borderWidth: 1,
             titleColor: '#E7EBF1', bodyColor: '#E7EBF1',
             callbacks: {
               title: (items) => formatFull(items[0].parsed.x, true),
-              label: (item) => item.dataset.label.split(' ')[0] + ': ' + item.parsed.y.toFixed(1) +
-                (item.dataset.yAxisID === 'yTemp' ? '°C' : '%RH')
+              label: (item) => seriesLabel + ': ' + item.parsed.y.toFixed(1) + unit
             }
           },
           zoom: {
             limits: { x: { min: 0, minRange: 5 * 60 * 1000 } },
-            pan: { enabled: true, mode: 'x', onPanComplete: onViewChanged },
+            pan: { enabled: true, mode: 'x', onPan: syncOtherChart, onPanComplete: onViewChanged },
             zoom: {
               wheel: { enabled: true }, pinch: { enabled: true }, drag: { enabled: false },
-              mode: 'x', onZoomComplete: onViewChanged
+              mode: 'x', onZoom: syncOtherChart, onZoomComplete: onViewChanged
             }
           }
         },
@@ -640,41 +661,50 @@
           x: {
             type: 'linear',
             ticks: {
+              display: showXLabels,
               color: '#525C6B', font: { family: 'IBM Plex Mono', size: 10 }, maxTicksLimit: 6,
               callback: function(value){ return xTickLabel(value, this.max - this.min); }
             },
             grid: { color: '#1A222C' }
           },
-          yTemp: {
+          y: {
             type: 'linear', position: 'left',
-            ticks: { color: '#FF8A5B', font: { family: 'IBM Plex Mono', size: 10 } },
-            grid: { color: '#1A222C' },
-            title: { display: true, text: '°C', color: '#7C8798' }
-          },
-          yHum: {
-            type: 'linear', position: 'right',
-            ticks: { color: '#4FC3E8', font: { family: 'IBM Plex Mono', size: 10 } },
-            grid: { drawOnChartArea: false },
-            title: { display: true, text: '%RH', color: '#7C8798' }
+            ticks: { color: color, font: { family: 'IBM Plex Mono', size: 10 } },
+            grid: { color: '#1A222C' }
           }
         }
       }
     });
-    return chartInstance;
+  }
+
+  function ensureChart(){
+    if (chartTemp && chartHum) return;
+    chartTemp = buildSeriesChart('rt-chart-temp', '#FF8A5B', 'rgba(255,138,91,0.08)', 'Temperature', '°C', false);
+    chartHum = buildSeriesChart('rt-chart-hum', '#4FC3E8', 'rgba(79,195,232,0.06)', 'Humidity', '%RH', true);
+  }
+
+  // Keeps the chart NOT being dragged/zoomed visually in step with the one
+  // that is, during the gesture itself (not just once it completes).
+  function syncOtherChart({ chart }){
+    const other = chart === chartTemp ? chartHum : chartTemp;
+    if (!other) return;
+    other.options.scales.x.min = chart.scales.x.min;
+    other.options.scales.x.max = chart.scales.x.max;
+    other.update('none');
   }
 
   function setChartDomain(min, max, extraNote){
-    chartInstance.options.scales.x.min = min;
-    chartInstance.options.scales.x.max = max;
+    [chartTemp, chartHum].forEach(c => { c.options.scales.x.min = min; c.options.scales.x.max = max; });
     redrawChart(min, max, extraNote);
   }
 
   function redrawChart(rangeStart, rangeEnd, extraNote){
     const sorted = getSorted();
     const { points, avgPerPoint } = bucketize(sorted, rangeStart, rangeEnd);
-    chartInstance.data.datasets[0].data = points.map(p => ({ x: p.x, y: p.tempY }));
-    chartInstance.data.datasets[1].data = points.map(p => ({ x: p.x, y: p.humY }));
-    chartInstance.update('none');
+    chartTemp.data.datasets[0].data = points.map(p => ({ x: p.x, y: p.tempY }));
+    chartHum.data.datasets[0].data = points.map(p => ({ x: p.x, y: p.humY }));
+    chartTemp.update('none');
+    chartHum.update('none');
     updateCaption(rangeStart, rangeEnd, points.length, avgPerPoint, extraNote);
     if (entriesByKey.size > 0) hideEmptyState();
   }
@@ -690,19 +720,18 @@
   function hideEmptyState(){ document.getElementById('chart-empty').style.display = 'none'; }
   function showEmptyState(){ document.getElementById('chart-empty').style.display = 'flex'; }
 
-  // debounced: fires after the user stops panning/zooming
-  function onViewChanged(){
+  // debounced: fires after the user stops panning/zooming either chart
+  function onViewChanged({ chart }){
     clearTimeout(viewChangeTimer);
     viewChangeTimer = setTimeout(async () => {
       userHasInteracted = true;
-      const xScale = chartInstance.scales.x;
-      const min = xScale.min, max = xScale.max;
+      const min = chart.scales.x.min, max = chart.scales.x.max;
       const sorted = getSorted();
       const edgeBuffer = (max - min) * 0.15;
       if (sorted.length && min <= sorted[0].epochMs + edgeBuffer && !noMoreHistory){
         await fetchOlderPage();
       }
-      redrawChart(chartInstance.scales.x.min, chartInstance.scales.x.max);
+      redrawChart(chart.scales.x.min, chart.scales.x.max);
     }, 400);
   }
 
