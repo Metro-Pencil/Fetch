@@ -16,6 +16,37 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.4.0 — fixed pinch/drag zoom and pan not working on mobile: the chart
+  canvases had no `touch-action` set, so the browser was intercepting
+  touch gestures for native page scroll/zoom before Chart.js ever saw
+  them. Also added vertical (y-axis) zoom and pan alongside the existing
+  horizontal (time-axis) zoom/pan — pinch or drag now moves both axes.
+  The two charts' time axis was already kept in sync whichever chart you
+  touch (see syncOtherChart()); y-axis zoom stays independent per chart
+  since temp and humidity have different units. "Reset zoom" now also
+  clears any y-axis zoom via Chart.js's resetZoom(), not just the time
+  range.
+
+  v2.3.0 — fixed a timestamp-anchoring bug where every auto-refresh poll
+  re-anchored ALL loaded readings' timestamps against the current moment,
+  even when no new reading had actually arrived; over idle polls this
+  dragged old readings' apparent times forward and clumped them together,
+  which showed up as much heavier bucket-averaging than the data actually
+  warranted. Timestamps are now only re-anchored when a genuinely newer
+  reading is fetched. Also raised the raw-detail threshold (TARGET_POINTS
+  150 → 300) so more of a zoomed-in view renders unaveraged, and doubled
+  both charts' height. Bucket-averaging was already zoom/pan-driven
+  (bucket width is always recomputed from the current visible time span in
+  bucketize()) and backward history loading on pan was already wired up
+  via fetchOlderPage()/onViewChanged() — both carry over, now on top of
+  correct timestamps.
+
+  v2.2.0 — fully separated the temperature and humidity charts into their
+  own boxed cards (previously two panels sharing one card with a divider),
+  made both taller, and every chart now shows its own x-axis with date
+  alongside time on every tick (previously time-only until you zoomed out
+  past a day). Pan/zoom on either chart still mirrors onto the other.
+
   v2.1.0 — split the combined dual-axis chart back into two stacked,
   single-axis charts (temperature, humidity) so each series reads at a
   glance instead of sharing a busy dual-axis plot. The two charts share
@@ -168,18 +199,20 @@
 
   /* chart */
   .chart-wrap{
-    background:var(--panel-2);border:1px solid var(--border);border-radius:9px;
-    padding:12px 12px 10px;margin-top:14px;display:flex;flex-direction:column;
+    margin-top:14px;display:flex;flex-direction:column;
   }
   .chart-head{
     display:flex;align-items:baseline;justify-content:space-between;gap:8px;
-    margin-bottom:8px;flex-wrap:wrap;
+    margin-bottom:10px;flex-wrap:wrap;
   }
   .chart-caption{font-family:var(--mono);font-size:10.5px;color:var(--muted);line-height:1.4;}
   .chart-loading{font-family:var(--mono);font-size:10.5px;color:var(--warn);display:none;flex-shrink:0;}
   .chart-loading.show{display:inline;}
-  .charts-stack{position:relative;}
-  .chart-panel + .chart-panel{margin-top:16px;padding-top:14px;border-top:1px solid var(--border);}
+  .charts-stack{display:flex;flex-direction:column;gap:12px;position:relative;}
+  .chart-box{
+    background:var(--panel-2);border:1px solid var(--border);border-radius:9px;
+    padding:12px 12px 8px;
+  }
   .chart-panel-label{
     display:flex;align-items:center;gap:6px;margin-bottom:6px;
     font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
@@ -189,9 +222,10 @@
   .chart-panel-label.temp .dot{background:var(--temp);}
   .chart-panel-label.hum .dot{background:var(--hum);}
   .chart-panel-label .unit{margin-left:auto;color:var(--muted-2);letter-spacing:0;text-transform:none;}
-  .chart-canvas-box{position:relative;height:120px;}
-  @media (min-width:600px){ .chart-canvas-box{height:165px;} }
-  .chart-hint{font-size:10px;color:var(--muted-2);font-family:var(--mono);margin-top:8px;text-align:center;}
+  .chart-canvas-box{position:relative;height:420px;touch-action:none;}
+  @media (min-width:600px){ .chart-canvas-box{height:540px;} }
+  .chart-canvas-box canvas{touch-action:none;}
+  .chart-hint{font-size:10px;color:var(--muted-2);font-family:var(--mono);margin-top:10px;text-align:center;}
   .empty-state{
     position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     color:var(--muted-2);font-family:var(--mono);font-size:12px;text-align:center;padding:20px;
@@ -233,7 +267,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.1.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.4.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -284,11 +318,11 @@
         <span class="chart-loading" id="chart-loading">loading earlier readings…</span>
       </div>
       <div class="charts-stack">
-        <div class="chart-panel">
+        <div class="chart-box">
           <div class="chart-panel-label temp"><span class="dot"></span>Temperature<span class="unit">°C</span></div>
           <div class="chart-canvas-box"><canvas id="rt-chart-temp"></canvas></div>
         </div>
-        <div class="chart-panel">
+        <div class="chart-box">
           <div class="chart-panel-label hum"><span class="dot"></span>Humidity<span class="unit">%RH</span></div>
           <div class="chart-canvas-box"><canvas id="rt-chart-hum"></canvas></div>
         </div>
@@ -317,13 +351,13 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.1.0';
+  const APP_VERSION = '2.4.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
   const PAGE_SIZE = 200;          // initial fetch size
   const MAX_FETCH_LIMIT = 50000;  // hard ceiling on how much history one session will pull in
-  const TARGET_POINTS = 150;      // rendered points per view before bucket-averaging kicks in
+  const TARGET_POINTS = 300;      // rendered points per view before bucket-averaging kicks in
   const DAY = 86400000;
 
   const RANGE_DEFS = {
@@ -400,7 +434,6 @@
     return d.getTime();
   }
   function xTickLabel(ms, spanMs){
-    if (spanMs <= DAY * 1.5) return formatClock(ms);
     if (spanMs <= DAY * 120) return [formatDateShort(ms), formatClock(ms)];
     return formatDateYear(ms);
   }
@@ -463,7 +496,19 @@
       invalidateSorted();
 
       const newestKey = fetched.reduce((m, e) => Math.max(m, e.key), fetched[0].key);
-      setAnchor(newestKey);
+      // Only re-anchor when a genuinely new reading has arrived. Anchoring
+      // on every poll (even when the newest key hasn't moved) was the bug:
+      // it re-derived every entry's epochMs against a fresh Date.now() each
+      // time, which — during any stretch with no new sensor data — dragged
+      // ALL previously-anchored readings' apparent times forward by ~one
+      // poll interval each cycle. Over several idle polls that compounds
+      // into old readings appearing to bunch up near "now", which is what
+      // was collapsing an hour of data into a handful of chart buckets.
+      if (anchorNewestKey === null || newestKey > anchorNewestKey){
+        setAnchor(newestKey);
+      } else {
+        getSorted().forEach(e => { if (e.epochMs === undefined) e.epochMs = anchorEpoch(e.key); });
+      }
 
       setConnState('online');
       lastFetchOk = Date.now();
@@ -574,6 +619,11 @@
   }
 
   function resetView(){
+    // resetZoom() clears any y-axis zoom/pan (vertical zoom is per-chart and
+    // isn't touched by applyRangeSelection, which only manages the shared
+    // x/time domain), then applyRangeSelection puts the time range back.
+    if (chartTemp) chartTemp.resetZoom();
+    if (chartHum) chartHum.resetZoom();
     applyRangeSelection();
   }
 
@@ -616,11 +666,11 @@
   }
 
   // ---------- chart ----------
-  // Two independent single-axis charts (instead of one combined dual-axis
-  // chart) so each series gets its own clean scale. They share a single
-  // time axis: only the bottom (humidity) chart draws x tick labels, and
-  // syncOtherChart()/onViewChanged() keep both charts' visible window
-  // identical whichever one the user drags or zooms.
+  // Temperature and humidity render as two fully separate boxed charts,
+  // each with its own axis, rather than a combined dual-axis chart or a
+  // shared-axis pair. They still track the same time window together:
+  // syncOtherChart()/onViewChanged() mirror pan/zoom from whichever chart
+  // the user drags onto the other, so scrolling one scrolls both.
   function buildSeriesChart(canvasId, color, bg, seriesLabel, unit, showXLabels){
     const ctx = document.getElementById(canvasId).getContext('2d');
     return new Chart(ctx, {
@@ -650,10 +700,10 @@
           },
           zoom: {
             limits: { x: { min: 0, minRange: 5 * 60 * 1000 } },
-            pan: { enabled: true, mode: 'x', onPan: syncOtherChart, onPanComplete: onViewChanged },
+            pan: { enabled: true, mode: 'xy', onPan: syncOtherChart, onPanComplete: onViewChanged },
             zoom: {
               wheel: { enabled: true }, pinch: { enabled: true }, drag: { enabled: false },
-              mode: 'x', onZoom: syncOtherChart, onZoomComplete: onViewChanged
+              mode: 'xy', onZoom: syncOtherChart, onZoomComplete: onViewChanged
             }
           }
         },
@@ -679,12 +729,14 @@
 
   function ensureChart(){
     if (chartTemp && chartHum) return;
-    chartTemp = buildSeriesChart('rt-chart-temp', '#FF8A5B', 'rgba(255,138,91,0.08)', 'Temperature', '°C', false);
+    chartTemp = buildSeriesChart('rt-chart-temp', '#FF8A5B', 'rgba(255,138,91,0.08)', 'Temperature', '°C', true);
     chartHum = buildSeriesChart('rt-chart-hum', '#4FC3E8', 'rgba(79,195,232,0.06)', 'Humidity', '%RH', true);
   }
 
   // Keeps the chart NOT being dragged/zoomed visually in step with the one
-  // that is, during the gesture itself (not just once it completes).
+  // that is, during the gesture itself (not just once it completes). Only
+  // the x (time) axis is mirrored — temp and humidity have different units,
+  // so each chart's y-axis zoom/pan stays independent.
   function syncOtherChart({ chart }){
     const other = chart === chartTemp ? chartHum : chartTemp;
     if (!other) return;
