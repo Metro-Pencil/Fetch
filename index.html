@@ -16,6 +16,42 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.7.0 — found the actual primary bug behind the timeline compression:
+  a unit mismatch, not (just) the reboot case v2.6.0 handled. With the
+  known 60s reading interval, ~1431 raw readings (477 pts × ~3/pt) should
+  span ~23.85 real hours but were rendering compressed into ~60-90
+  seconds — a ~1000x compression, matching the firmware's key being in a
+  different unit (e.g. seconds-since-boot) than the anchoring math
+  assumed (raw milliseconds). Added detectKeyScale(), which measures the
+  median gap between consecutive same-session keys and compares it
+  against the known interval, snapped to the nearest power of 10, instead
+  of hardcoding a unit guess — anchorEpoch() now multiplies key gaps by
+  the detected scale. This is the real explanation for the "1h looks
+  identical to 24h" and "impossible temperature swings in under a
+  minute" reports; v2.6.0's reboot-exclusion logic is still correct and
+  still in place, it just wasn't the dominant issue.
+
+  v2.6.0 — root-caused the "24h view looks identical to 1h, caption shows
+  the same start/end minute, tooltips only vary by milliseconds" report:
+  an ESP32 reboot resets millis() to 0, so a reading logged during an
+  earlier (longer-running) boot session can have a raw key LARGER than
+  the current session's newest key. anchorEpoch() was anchoring those the
+  same way as everything else, which computes anchorNowMs + (huge
+  number) — shoving old readings into the future or, worse, clustering a
+  whole prior session's shape into a sliver next to real current data.
+  anchorEpoch() now excludes (epochMs: null) any reading whose key
+  exceeds the current session's newest key, since there's no way to
+  recover its true time from millis() alone. Added getValidSorted() (all
+  chart-facing code now reads through it instead of raw getSorted()) and
+  a staleFromPriorBoot counter surfaced in the caption ("N readings from
+  before the sensor's last restart excluded") so it's visible when this
+  is happening rather than silently dropping data. Also switched
+  bucketize() from per-bucket averaging to per-bucket min/max decimation
+  (temp and humidity independently) — up to 2 points per bucket instead
+  of 1 averaged point, so a real spike or dip survives instead of being
+  blended into its neighbors, while still cutting the point count down
+  for a smoother line at long spans.
+
   v2.5.3 — lowered TARGET_POINTS (900 → 400) so long spans (a day or
   more) go back to being bucket-averaged into a smoother line instead of
   rendering every raw reading, which looked noisy/jagged at that scale.
@@ -310,7 +346,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.5.3</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.7.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -394,7 +430,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.5.3';
+  const APP_VERSION = '2.7.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
@@ -448,7 +484,7 @@
   function invalidateSorted(){ sortedCache = null; }
 
   function latestEntry(){
-    const sorted = getSorted();
+    const sorted = getValidSorted();
     return sorted.length ? sorted[sorted.length - 1] : null;
   }
 
@@ -498,22 +534,83 @@
   }
 
   // ---------- time anchoring ----------
-  // The ESP32 keys each reading by millis() — time since it booted, not a
-  // real clock. There's no wall-clock time on the device at all right now.
-  // Since readings only ever get uploaded while online (near-real-time), we
-  // approximate real time here: anchor the newest reading from the latest
-  // live fetch to "now", and derive every other loaded reading's time from
-  // the millis() gap to that anchor. Good enough for browsing recent
-  // history; if the ESP32 reboots, millis() resets to 0, which throws this
-  // off until the device is caught up again — a real fix means adding NTP
-  // sync in the firmware so each reading carries its own true timestamp.
+  // The ESP32 keys each reading by millis() (or so the code originally
+  // assumed) — time since it booted, not a real clock. There's no
+  // wall-clock time on the device at all right now. Since readings only
+  // ever get uploaded while online (near-real-time), we approximate real
+  // time here: anchor the newest reading from the latest live fetch to
+  // "now", and derive every other loaded reading's time from the key gap
+  // to that anchor.
+  //
+  // That assumed the key gap IS the millisecond gap. Evidence says
+  // otherwise: with a known 60s reading interval, ~1431 raw readings
+  // (477 pts × ~3/pt) should span ~23.85 real hours, but were rendering
+  // compressed into ~60-90 seconds — a ~1000x compression, the exact
+  // signature of the firmware writing something like seconds-since-boot
+  // while this code multiplied key gaps by 1 (treating them as already
+  // being milliseconds). Rather than hardcode a guess at the real unit,
+  // detectKeyScale() below measures the TYPICAL gap between consecutive
+  // readings' keys and compares it to the known ~60s interval, so this
+  // keeps working correctly even if the firmware's unit is something else
+  // entirely (or changes later).
+  //
+  // Separately: a reboot resets the device's counter back to 0, so a
+  // stored reading's raw key can no longer be trusted as "same continuous
+  // counter as now" — a reading from an earlier, longer-running boot has
+  // a key LARGER than the current session's newest key. Anchoring that
+  // the same way as everything else would shove it into the future or
+  // cluster it right next to real current data. There's no way to
+  // recover an old-boot reading's true time from its key alone, so
+  // rather than guess, anchorEpoch() excludes (null) any reading whose
+  // key exceeds the current session's newest key.
+  //
+  // A real fix for all of this means adding NTP sync in the firmware so
+  // each reading carries its own true timestamp; everything here is a
+  // best-effort mitigation on the data we're actually given.
+  const KNOWN_INTERVAL_MS = 60 * 1000; // told directly: ESP reads once every 60s
+  let keyScaleToMs = 1;
+  let staleFromPriorBoot = 0; // count of readings currently excluded as pre-reboot/unplaceable
+
+  // Median gap between consecutive (same-session) keys, compared against
+  // the known real reading interval, snapped to the nearest power of 10 —
+  // a firmware unit choice is always a clean multiple (1 for ms, 1000 for
+  // seconds, etc.), so snapping avoids chasing noise in the raw ratio.
+  // Negative/zero gaps (reboot boundaries) are excluded so they can't
+  // skew the estimate.
+  function detectKeyScale(sorted){
+    const deltas = [];
+    for (let i = 1; i < sorted.length; i++){
+      const d = sorted[i].key - sorted[i - 1].key;
+      if (d > 0) deltas.push(d);
+    }
+    if (!deltas.length) return 1;
+    deltas.sort((a, b) => a - b);
+    const median = deltas[Math.floor(deltas.length / 2)];
+    if (median <= 0) return 1;
+    const pow = Math.round(Math.log10(KNOWN_INTERVAL_MS / median));
+    return Math.pow(10, Math.max(0, pow));
+  }
+
   function anchorEpoch(key){
-    return anchorNowMs - (anchorNewestKey - key);
+    if (key > anchorNewestKey) return null;
+    return anchorNowMs - (anchorNewestKey - key) * keyScaleToMs;
   }
   function setAnchor(newestKey){
     anchorNewestKey = newestKey;
     anchorNowMs = Date.now();
-    getSorted().forEach(e => { e.epochMs = anchorEpoch(e.key); });
+    keyScaleToMs = detectKeyScale(getSorted());
+    staleFromPriorBoot = 0;
+    getSorted().forEach(e => {
+      e.epochMs = anchorEpoch(e.key);
+      if (e.epochMs === null) staleFromPriorBoot++;
+    });
+  }
+
+  // Entries with a null epochMs are from a boot session we can't place in
+  // real time (see anchorEpoch() above) — every chart-facing code path
+  // should read through this instead of the raw getSorted().
+  function getValidSorted(){
+    return getSorted().filter(e => typeof e.epochMs === 'number');
   }
 
   async function fbGet(host, query){
@@ -556,7 +653,12 @@
       if (anchorNewestKey === null || newestKey > anchorNewestKey){
         setAnchor(newestKey);
       } else {
-        getSorted().forEach(e => { if (e.epochMs === undefined) e.epochMs = anchorEpoch(e.key); });
+        getSorted().forEach(e => {
+          if (e.epochMs === undefined){
+            e.epochMs = anchorEpoch(e.key);
+            if (e.epochMs === null) staleFromPriorBoot++;
+          }
+        });
       }
 
       setConnState('online');
@@ -606,7 +708,12 @@
       currentFetchLimit = nextLimit;
 
       if (anchorNewestKey !== null){
-        getSorted().forEach(e => { if (e.epochMs === undefined) e.epochMs = anchorEpoch(e.key); });
+        getSorted().forEach(e => {
+          if (e.epochMs === undefined){
+            e.epochMs = anchorEpoch(e.key);
+            if (e.epochMs === null) staleFromPriorBoot++;
+          }
+        });
       }
       const gained = entriesByKey.size - prevCount;
       if (gained === 0) noMoreHistory = true;
@@ -673,19 +780,19 @@
   }
 
   async function applyRangeSelection(){
-    if (!getSorted().length) return;
+    if (!getValidSorted().length) return;
     const mode = document.getElementById('range-select').value;
     userHasInteracted = false;
     const def = RANGE_DEFS[mode] || RANGE_DEFS['24h'];
 
     if (def.type === 'count'){
       let guard = 0;
-      while (getSorted().length < def.n && !noMoreHistory && guard < 25){
+      while (getValidSorted().length < def.n && !noMoreHistory && guard < 25){
         const got = await fetchOlderPage();
         guard++;
         if (!got) break;
       }
-      const sorted = getSorted();
+      const sorted = getValidSorted();
       const slice = sorted.slice(-def.n);
       if (!slice.length) return;
       const [start, end] = stretchToData(slice, slice[0].epochMs, slice[slice.length - 1].epochMs);
@@ -702,14 +809,14 @@
 
     let guard = 0;
     while (!noMoreHistory && guard < 25){
-      const oldest = getSorted()[0];
+      const oldest = getValidSorted()[0];
       if (oldest && oldest.epochMs <= cutoff) break;
       const got = await fetchOlderPage();
       guard++;
       if (!got) break;
     }
 
-    const sorted = getSorted();
+    const sorted = getValidSorted();
     if (!sorted.length) return;
     const stillMore = cutoff > -Infinity && sorted[0].epochMs > cutoff && !noMoreHistory;
     const domainStart = Math.max(cutoff, sorted[0].epochMs);
@@ -741,9 +848,19 @@
   // chart never has to render more than ~TARGET_POINTS points. A short,
   // zoomed-in window has few enough raw points that no averaging happens
   // at all (raw resolution); a long window (weeks/months/years) gets
-  // averaged into wider buckets. Re-run on every pan/zoom so it adapts
-  // as the visible window changes, without flattening things more than
-  // the current zoom level calls for.
+  // bucketed down. Re-run on every pan/zoom so it adapts as the visible
+  // window changes, without flattening things more than the current zoom
+  // level calls for.
+  //
+  // Each over-threshold bucket contributes up to 2 points — its min and
+  // its max reading, in time order — rather than a single averaged point.
+  // Plain averaging is what was clipping real spikes/dips (a brief 32°C
+  // peak gets blended down with its cooler neighbors and disappears);
+  // min/max decimation still cuts the point count down for a smoother
+  // overall line, but a genuine extreme within a bucket always survives
+  // as one of its two points instead of being averaged away. Temp and
+  // humidity are decimated independently since their extremes don't
+  // necessarily land on the same raw reading.
   function bucketize(sorted, rangeStart, rangeEnd){
     const visible = [];
     for (const e of sorted){
@@ -751,7 +868,8 @@
     }
     if (visible.length <= TARGET_POINTS){
       return {
-        points: visible.map(e => ({ x: e.epochMs, tempY: e.temp, humY: e.hum })),
+        tempPoints: visible.map(e => ({ x: e.epochMs, y: e.temp })),
+        humPoints: visible.map(e => ({ x: e.epochMs, y: e.hum })),
         avgPerPoint: 1
       };
     }
@@ -762,14 +880,43 @@
       const idx = Math.floor((e.epochMs - rangeStart) / bucketMs);
       if (idx !== curIdx){
         if (cur) buckets.push(cur);
-        cur = { sumX: 0, sumT: 0, sumH: 0, n: 0 };
+        cur = [];
         curIdx = idx;
       }
-      cur.sumX += e.epochMs; cur.sumT += e.temp; cur.sumH += e.hum; cur.n++;
+      cur.push(e);
     }
     if (cur) buckets.push(cur);
+
+    const tempPoints = [];
+    const humPoints = [];
+    for (const entries of buckets){
+      if (entries.length === 1){
+        tempPoints.push({ x: entries[0].epochMs, y: entries[0].temp });
+        humPoints.push({ x: entries[0].epochMs, y: entries[0].hum });
+        continue;
+      }
+      let tMin = entries[0], tMax = entries[0], hMin = entries[0], hMax = entries[0];
+      for (const e of entries){
+        if (e.temp < tMin.temp) tMin = e;
+        if (e.temp > tMax.temp) tMax = e;
+        if (e.hum < hMin.hum) hMin = e;
+        if (e.hum > hMax.hum) hMax = e;
+      }
+      if (tMin === tMax){
+        tempPoints.push({ x: tMin.epochMs, y: tMin.temp });
+      } else {
+        [tMin, tMax].sort((a, b) => a.epochMs - b.epochMs)
+          .forEach(e => tempPoints.push({ x: e.epochMs, y: e.temp }));
+      }
+      if (hMin === hMax){
+        humPoints.push({ x: hMin.epochMs, y: hMin.hum });
+      } else {
+        [hMin, hMax].sort((a, b) => a.epochMs - b.epochMs)
+          .forEach(e => humPoints.push({ x: e.epochMs, y: e.hum }));
+      }
+    }
     return {
-      points: buckets.map(b => ({ x: b.sumX / b.n, tempY: b.sumT / b.n, humY: b.sumH / b.n })),
+      tempPoints, humPoints,
       avgPerPoint: Math.round(visible.length / buckets.length)
     };
   }
@@ -860,13 +1007,19 @@
   }
 
   function redrawChart(rangeStart, rangeEnd, extraNote){
-    const sorted = getSorted();
-    const { points, avgPerPoint } = bucketize(sorted, rangeStart, rangeEnd);
-    chartTemp.data.datasets[0].data = points.map(p => ({ x: p.x, y: p.tempY }));
-    chartHum.data.datasets[0].data = points.map(p => ({ x: p.x, y: p.humY }));
+    const sorted = getValidSorted();
+    const { tempPoints, humPoints, avgPerPoint } = bucketize(sorted, rangeStart, rangeEnd);
+    chartTemp.data.datasets[0].data = tempPoints;
+    chartHum.data.datasets[0].data = humPoints;
     chartTemp.update('none');
     chartHum.update('none');
-    updateCaption(rangeStart, rangeEnd, points.length, avgPerPoint, extraNote);
+    let note = extraNote;
+    if (staleFromPriorBoot > 0){
+      const staleNote = staleFromPriorBoot + ' reading' + (staleFromPriorBoot === 1 ? '' : 's') +
+        " from before the sensor's last restart excluded (no real clock onboard)";
+      note = note ? (note + ' · ' + staleNote) : staleNote;
+    }
+    updateCaption(rangeStart, rangeEnd, tempPoints.length, avgPerPoint, note);
     if (entriesByKey.size > 0) hideEmptyState();
   }
 
@@ -887,7 +1040,7 @@
     viewChangeTimer = setTimeout(async () => {
       userHasInteracted = true;
       const min = chart.scales.x.min, max = chart.scales.x.max;
-      const sorted = getSorted();
+      const sorted = getValidSorted();
       const edgeBuffer = (max - min) * 0.15;
       if (sorted.length && min <= sorted[0].epochMs + edgeBuffer && !noMoreHistory){
         await fetchOlderPage();
@@ -956,7 +1109,7 @@
   document.getElementById('fb-host').addEventListener('change', () => {
     entriesByKey.clear();
     invalidateSorted();
-    anchorNewestKey = null; anchorNowMs = null;
+    anchorNewestKey = null; anchorNowMs = null; keyScaleToMs = 1;
     noMoreHistory = false; currentFetchLimit = PAGE_SIZE;
     userHasInteracted = false; latestReadingEpoch = null;
     document.getElementById('temp-value').innerHTML = '—<span class="unit">°C</span>';
