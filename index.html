@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Room Logger — Console</title>
+<title>Room Logger — Dashboard</title>
 <!--
   VERSIONING — read before editing this file.
   Bump the version number below on every edit, big or small — a copy fix
@@ -15,10 +15,21 @@
   Update BOTH of these in the same edit:
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
+
+  v2.0.0 — removed the OTA firmware-update section entirely (breaking:
+  a feature was removed). Replaced the two separate temp/humidity charts
+  with one combined dual-axis chart that supports pinch/wheel zoom and
+  drag-to-pan, a time-range picker (30 readings up to all-time), backward
+  history loading as you pan/zoom past what's loaded, zoom-adaptive
+  bucket-averaging, 12-hour clock everywhere, and an editable auto-refresh
+  interval. See the "Firebase key ordering" comment near fetchOlderPage()
+  for a real caveat in how deep history can be loaded with this schema.
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.2.0/chartjs-plugin-zoom.min.js"></script>
 <style>
   :root{
     --bg:#0B0F14;
@@ -37,7 +48,7 @@
     --sans:'Inter', system-ui, sans-serif;
   }
   *{box-sizing:border-box;}
-  html,body{margin:0;padding:0;}
+  html,body{margin:0;padding:0;overflow-x:hidden;}
   body{
     background:
       radial-gradient(ellipse 900px 500px at 15% -10%, #14202b 0%, transparent 60%),
@@ -45,50 +56,39 @@
     color:var(--text);
     font-family:var(--sans);
     min-height:100vh;
-    padding:28px 20px 60px;
+    padding:22px 16px 48px;
+    width:100%;
   }
-  .wrap{max-width:1080px;margin:0 auto;}
+  .wrap{max-width:720px;margin:0 auto;width:100%;}
 
   /* header */
   header{
     display:flex;align-items:center;justify-content:space-between;
-    margin-bottom:22px;flex-wrap:wrap;gap:12px;
+    margin-bottom:18px;flex-wrap:wrap;gap:10px;
   }
-  .brand{display:flex;align-items:center;gap:12px;}
+  .brand{display:flex;align-items:center;gap:10px;min-width:0;}
   .brand .led{
     width:10px;height:10px;border-radius:50%;background:var(--muted-2);
     box-shadow:0 0 0 3px rgba(124,135,152,0.12);
     transition:background .3s, box-shadow .3s;
+    flex-shrink:0;
   }
   .brand .led.online{background:var(--ok);box-shadow:0 0 0 3px rgba(74,222,128,0.18);}
   .brand .led.stale{background:var(--warn);box-shadow:0 0 0 3px rgba(251,191,36,0.18);}
   .brand .led.offline{background:var(--err);box-shadow:0 0 0 3px rgba(248,113,113,0.18);}
   .brand h1{
-    font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:0.06em;
+    font-family:var(--mono);font-size:14px;font-weight:600;letter-spacing:0.05em;
     margin:0;text-transform:uppercase;color:var(--text);
   }
-  .brand .sub{font-size:12px;color:var(--muted);font-family:var(--mono);}
-  .conn-label{font-size:12px;color:var(--muted);font-family:var(--mono);text-align:right;}
-
-  /* mixed-content banner */
-  .banner{
-    display:none;
-    background:#241A11;border:1px solid #4A3419;color:#F0C48A;
-    font-size:13px;line-height:1.5;padding:12px 14px;border-radius:8px;
-    margin-bottom:20px;
-  }
-  .banner.show{display:block;}
-  .banner strong{color:#FFD9A8;}
-
-  /* grid */
-  .grid{display:grid;grid-template-columns:340px 1fr;gap:18px;}
-  @media (max-width:840px){.grid{grid-template-columns:1fr;}}
+  .brand .sub{font-size:11px;color:var(--muted);font-family:var(--mono);}
+  .conn-label{font-size:11px;color:var(--muted);font-family:var(--mono);text-align:right;}
 
   .card{
     background:var(--panel);
     border:1px solid var(--border);
     border-radius:12px;
-    padding:20px;
+    padding:18px;
+    width:100%;
   }
   .card h2{
     font-family:var(--mono);font-size:11px;letter-spacing:0.12em;
@@ -100,25 +100,33 @@
   label{
     display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-family:var(--sans);
   }
+  .field-row{margin-bottom:14px;}
   input[type=text]{
     width:100%;background:var(--panel-2);border:1px solid var(--border);
     color:var(--text);font-family:var(--mono);font-size:13px;
-    padding:9px 11px;border-radius:7px;margin-bottom:14px;
+    padding:9px 11px;border-radius:7px;
   }
   input[type=text]:focus{outline:2px solid var(--temp);outline-offset:1px;border-color:transparent;}
 
-  .file-row{
-    border:1px dashed var(--border);border-radius:8px;padding:14px;
-    margin-bottom:14px;background:var(--panel-2);
+  select{
+    width:100%;background:var(--panel-2);border:1px solid var(--border);
+    color:var(--text);font-family:var(--mono);font-size:13px;
+    padding:9px 30px 9px 11px;border-radius:7px;
+    appearance:none;-webkit-appearance:none;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%237C8798'/></svg>");
+    background-repeat:no-repeat;background-position:right 12px center;
   }
-  input[type=file]{
-    width:100%;color:var(--muted);font-size:12px;font-family:var(--sans);
+  select:focus{outline:2px solid var(--temp);outline-offset:1px;border-color:transparent;}
+
+  input[type=number]{
+    width:64px;background:var(--panel-2);border:1px solid var(--border);
+    color:var(--text);font-family:var(--mono);font-size:13px;
+    padding:8px 9px;border-radius:7px;text-align:center;
+    -moz-appearance:textfield;
   }
-  input[type=file]::file-selector-button{
-    background:var(--panel);border:1px solid var(--border);color:var(--text);
-    padding:6px 12px;border-radius:6px;font-family:var(--sans);font-size:12px;
-    margin-right:10px;cursor:pointer;
-  }
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+  input[type=number]:focus{outline:2px solid var(--temp);outline-offset:1px;border-color:transparent;}
 
   button{
     font-family:var(--sans);font-weight:600;font-size:13px;
@@ -127,68 +135,59 @@
   }
   button:active{transform:scale(0.98);}
   button:focus-visible{outline:2px solid var(--temp);outline-offset:2px;}
-  .btn-primary{background:var(--temp);color:#1A0E08;width:100%;}
-  .btn-primary:disabled{opacity:0.5;cursor:not-allowed;}
   .btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text);}
   .btn-ghost:hover{border-color:var(--muted);}
 
-  .progress-track{
-    height:6px;background:var(--panel-2);border-radius:99px;overflow:hidden;
-    margin-top:14px;border:1px solid var(--border);
-  }
-  .progress-fill{
-    height:100%;width:0%;background:linear-gradient(90deg,var(--temp),#FFB088);
-    transition:width .2s ease;
-  }
-  .log{
-    margin-top:12px;font-family:var(--mono);font-size:12px;line-height:1.6;
-    color:var(--muted);min-height:18px;
-  }
-  .log.success{color:var(--ok);}
-  .log.error{color:var(--err);}
-
-  .setup-notes{
-    margin-top:18px;padding-top:16px;border-top:1px solid var(--border);
-    font-size:12px;color:var(--muted-2);line-height:1.7;
-  }
-  .setup-notes summary{cursor:pointer;color:var(--muted);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;}
-  .setup-notes code{background:var(--panel-2);padding:1px 5px;border-radius:4px;color:var(--hum);font-family:var(--mono);}
-  .setup-notes ol{margin:10px 0 0;padding-left:18px;}
-  .setup-notes li{margin-bottom:6px;}
-
-  /* right column */
-  .readings-top{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px;}
+  /* stat cards */
+  .readings-top{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:6px;}
   .stat{
-    flex:1;min-width:140px;background:var(--panel-2);border:1px solid var(--border);
-    border-radius:9px;padding:16px 18px;position:relative;overflow:hidden;
+    flex:1 1 140px;min-width:140px;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:9px;padding:14px 16px;position:relative;overflow:hidden;
   }
   .stat .bar{position:absolute;left:0;top:0;bottom:0;width:3px;}
   .stat.temp .bar{background:var(--temp);}
   .stat.hum .bar{background:var(--hum);}
   .stat .label{font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-family:var(--mono);}
   .stat .value{
-    font-family:var(--mono);font-size:32px;font-weight:600;margin-top:6px;
+    font-family:var(--mono);font-size:30px;font-weight:600;margin-top:6px;
     color:var(--text);transition:opacity .25s ease;
   }
-  .stat .value .unit{font-size:16px;color:var(--muted);font-weight:400;}
+  .stat .value .unit{font-size:15px;color:var(--muted);font-weight:400;}
   .stat.pulse .value{animation:pulseVal .5s ease;}
   @keyframes pulseVal{0%{opacity:0.3;transform:translateY(2px);}100%{opacity:1;transform:translateY(0);}}
-  .stat .age{font-size:11px;color:var(--muted-2);font-family:var(--mono);margin-top:4px;}
+  .stat .age{font-size:11px;color:var(--muted-2);font-family:var(--mono);margin-top:4px;word-break:break-word;}
 
+  /* chart */
   .chart-wrap{
     background:var(--panel-2);border:1px solid var(--border);border-radius:9px;
-    padding:16px;margin-top:14px;height:280px;position:relative;
+    padding:12px 12px 10px;margin-top:14px;display:flex;flex-direction:column;
   }
+  .chart-head{
+    display:flex;align-items:baseline;justify-content:space-between;gap:8px;
+    margin-bottom:8px;flex-wrap:wrap;
+  }
+  .chart-caption{font-family:var(--mono);font-size:10.5px;color:var(--muted);line-height:1.4;}
+  .chart-loading{font-family:var(--mono);font-size:10.5px;color:var(--warn);display:none;flex-shrink:0;}
+  .chart-loading.show{display:inline;}
+  .chart-canvas-box{position:relative;height:280px;}
+  @media (min-width:600px){ .chart-canvas-box{height:360px;} }
+  .chart-hint{font-size:10px;color:var(--muted-2);font-family:var(--mono);margin-top:8px;text-align:center;}
   .empty-state{
     position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     color:var(--muted-2);font-family:var(--mono);font-size:12px;text-align:center;padding:20px;
   }
 
   .controls-row{
-    display:flex;align-items:center;justify-content:space-between;
-    margin-top:14px;flex-wrap:wrap;gap:10px;
+    display:flex;align-items:center;gap:10px;
+    margin-top:14px;flex-wrap:wrap;
   }
-  .toggle-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);font-family:var(--mono);}
+  .controls-row button{flex:1 1 auto;}
+
+  .refresh-row{
+    display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+    margin-top:14px;padding-top:14px;border-top:1px solid var(--border);
+    font-size:12px;color:var(--muted);font-family:var(--mono);
+  }
   .switch{
     width:34px;height:19px;background:var(--panel-2);border:1px solid var(--border);
     border-radius:99px;position:relative;cursor:pointer;flex-shrink:0;
@@ -199,6 +198,12 @@
   }
   .switch.on{background:rgba(74,222,128,0.15);border-color:var(--ok);}
   .switch.on .knob{transform:translateX(15px);background:var(--ok);}
+
+  @media (max-width:380px){
+    body{padding:18px 12px 40px;}
+    .card{padding:14px;}
+    .stat .value{font-size:26px;}
+  }
 </style>
 </head>
 <body>
@@ -208,95 +213,76 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger Console <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v1.0.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.0.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
     <div class="conn-label" id="conn-label">not connected</div>
   </header>
 
-  <div class="banner" id="mixed-content-banner">
-    <strong>Heads up:</strong> this page is loaded over HTTPS, but your ESP32 serves plain HTTP on your LAN.
-    Browsers block that request from a secure page, so the firmware upload below will fail here.
-    Download this file and open it directly (double-click it) or serve it from the device itself — see
-    "Setup notes" in the upload panel.
-  </div>
+  <div class="card">
+    <h2>Live Readings</h2>
 
-  <div class="grid">
-
-    <!-- LEFT: OTA -->
-    <div class="card">
-      <h2>Firmware Update</h2>
-
-      <label for="esp-ip">Device IP address</label>
-      <input type="text" id="esp-ip" placeholder="192.168.1.42" autocomplete="off">
-
-      <label for="fw-file">Compiled firmware (.bin)</label>
-      <div class="file-row">
-        <input type="file" id="fw-file" accept=".bin">
-      </div>
-
-      <button class="btn-primary" id="upload-btn" onclick="uploadFirmware()">Flash device</button>
-
-      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
-      <div class="log" id="upload-log"></div>
-
-      <details class="setup-notes">
-        <summary>Setup notes</summary>
-        <ol>
-          <li>Your computer must be on the same Wi-Fi network as the ESP32.</li>
-          <li>Find the device IP from the Serial Monitor on boot.</li>
-          <li>
-            For the upload result to show correctly here (not just on the device), add one line
-            to the <code>/update</code> POST handler in your sketch, before <code>server.send(...)</code>:<br>
-            <code>server.sendHeader("Access-Control-Allow-Origin", "*");</code>
-          </li>
-        </ol>
-      </details>
-    </div>
-
-    <!-- RIGHT: READINGS -->
-    <div class="card">
-      <h2>Live Readings</h2>
-
+    <div class="field-row">
       <label for="fb-host">Firebase RTDB host</label>
       <input type="text" id="fb-host" value="esp32-19dd8-default-rtdb.firebaseio.com" autocomplete="off">
+    </div>
 
-      <div class="readings-top">
-        <div class="stat temp" id="stat-temp">
-          <div class="bar"></div>
-          <div class="label">Temperature</div>
-          <div class="value" id="temp-value">—<span class="unit">°C</span></div>
-          <div class="age" id="temp-age">no data yet</div>
-        </div>
-        <div class="stat hum" id="stat-hum">
-          <div class="bar"></div>
-          <div class="label">Humidity</div>
-          <div class="value" id="hum-value">—<span class="unit">%RH</span></div>
-          <div class="age" id="hum-age">no data yet</div>
-        </div>
+    <div class="readings-top">
+      <div class="stat temp" id="stat-temp">
+        <div class="bar"></div>
+        <div class="label">Temperature</div>
+        <div class="value" id="temp-value">—<span class="unit">°C</span></div>
+        <div class="age" id="temp-age">no data yet</div>
       </div>
-
-      <div class="chart-wrap" style="height:220px;">
-        <canvas id="temp-chart" style="display:none;"></canvas>
-        <div class="empty-state" id="temp-chart-empty">No readings fetched yet. Click "Refresh now".</div>
-      </div>
-
-      <div class="chart-wrap" style="height:220px;">
-        <canvas id="hum-chart" style="display:none;"></canvas>
-        <div class="empty-state" id="hum-chart-empty">No readings fetched yet. Click "Refresh now".</div>
-      </div>
-
-      <div class="controls-row">
-        <button class="btn-ghost" onclick="fetchReadings()">Refresh now</button>
-        <div class="toggle-row">
-          <span>Auto-refresh (15s)</span>
-          <div class="switch" id="auto-switch" onclick="toggleAuto()"><div class="knob"></div></div>
-        </div>
+      <div class="stat hum" id="stat-hum">
+        <div class="bar"></div>
+        <div class="label">Humidity</div>
+        <div class="value" id="hum-value">—<span class="unit">%RH</span></div>
+        <div class="age" id="hum-age">no data yet</div>
       </div>
     </div>
 
+    <div class="field-row" style="margin-top:14px;">
+      <label for="range-select">Time range</label>
+      <select id="range-select">
+        <option value="30">Last 30 readings</option>
+        <option value="1h">Last hour</option>
+        <option value="24h" selected>Last 24 hours</option>
+        <option value="today">Today</option>
+        <option value="3d">Last few days</option>
+        <option value="2w">Last few weeks</option>
+        <option value="3mo">Last few months</option>
+        <option value="1y">Last year</option>
+        <option value="all">All time</option>
+      </select>
+    </div>
+
+    <div class="chart-wrap">
+      <div class="chart-head">
+        <span class="chart-caption" id="chart-caption">—</span>
+        <span class="chart-loading" id="chart-loading">loading earlier readings…</span>
+      </div>
+      <div class="chart-canvas-box">
+        <canvas id="rt-chart"></canvas>
+        <div class="empty-state" id="chart-empty">No readings fetched yet. Tap "Refresh now".</div>
+      </div>
+      <div class="chart-hint">Drag to scroll through time · pinch or scroll to zoom</div>
+    </div>
+
+    <div class="controls-row">
+      <button class="btn-ghost" onclick="fetchReadings()">Refresh now</button>
+      <button class="btn-ghost" onclick="resetView()">Reset zoom</button>
+    </div>
+
+    <div class="refresh-row">
+      <div class="switch" id="auto-switch" onclick="toggleAuto()"><div class="knob"></div></div>
+      <span>Auto-refresh every</span>
+      <input type="number" id="refresh-secs" value="15" min="3" step="1" inputmode="numeric">
+      <span>sec</span>
+    </div>
   </div>
+
 </div>
 
 <script>
@@ -304,78 +290,94 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '1.0.0';
+  const APP_VERSION = '2.0.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
-  // ---------- mixed content warning ----------
-  if (location.protocol === 'https:') {
-    document.getElementById('mixed-content-banner').classList.add('show');
-  }
+  // ---------- constants ----------
+  const PAGE_SIZE = 200;          // initial fetch size
+  const MAX_FETCH_LIMIT = 50000;  // hard ceiling on how much history one session will pull in
+  const TARGET_POINTS = 150;      // rendered points per view before bucket-averaging kicks in
+  const DAY = 86400000;
 
-  // ---------- OTA upload ----------
-  function logStatus(msg, cls){
-    const el = document.getElementById('upload-log');
-    el.textContent = msg;
-    el.className = 'log' + (cls ? ' ' + cls : '');
-  }
-  function setProgress(pct){
-    document.getElementById('progress-fill').style.width = pct + '%';
-  }
+  const RANGE_DEFS = {
+    '30':   { type:'count',    n:30 },
+    '1h':   { type:'duration', ms: 60*60*1000 },
+    '24h':  { type:'duration', ms: 24*60*60*1000 },
+    'today':{ type:'today' },
+    '3d':   { type:'duration', ms: 3*DAY },
+    '2w':   { type:'duration', ms: 14*DAY },
+    '3mo':  { type:'duration', ms: 90*DAY },
+    '1y':   { type:'duration', ms: 365*DAY },
+    'all':  { type:'all' }
+  };
 
-  function uploadFirmware(){
-    const ip = document.getElementById('esp-ip').value.trim();
-    const fileInput = document.getElementById('fw-file');
-    const btn = document.getElementById('upload-btn');
-
-    if (!ip){ logStatus('Enter the device IP address first.', 'error'); return; }
-    if (!fileInput.files.length){ logStatus('Choose a .bin file first.', 'error'); return; }
-
-    const file = fileInput.files[0];
-    const formData = new FormData();
-    formData.append('update', file);
-
-    btn.disabled = true;
-    setProgress(0);
-    logStatus('Uploading ' + file.name + ' (' + Math.round(file.size/1024) + ' KB)…');
-
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', 'http://' + ip + '/update');
-    xhr.upload.onprogress = function(e){
-      if (e.lengthComputable){
-        setProgress(Math.round((e.loaded / e.total) * 100));
-      }
-    };
-    xhr.onload = function(){
-      btn.disabled = false;
-      if (xhr.status === 200){
-        setProgress(100);
-        logStatus('Flashed successfully — device is rebooting.', 'success');
-      } else {
-        logStatus('Device responded with HTTP ' + xhr.status + '.', 'error');
-      }
-    };
-    xhr.onerror = function(){
-      btn.disabled = false;
-      logStatus('Request failed. Likely a mixed-content block (see banner above), or this device is not on the same network.', 'error');
-    };
-    xhr.send(formData);
-  }
-
-  // ---------- Firebase readings ----------
-  let autoTimer = null;
+  // ---------- state ----------
+  const entriesByKey = new Map(); // key(number, device millis()) -> {key, temp, hum, epochMs}
+  let sortedCache = null;
+  let anchorNewestKey = null;
+  let anchorNowMs = null;
+  let noMoreHistory = false;
+  let isFetchingOlder = false;
+  let currentFetchLimit = PAGE_SIZE;
+  let userHasInteracted = false;
+  let latestReadingEpoch = null;
   let lastFetchOk = null;
+  let chartInstance = null;
+  let autoTimer = null;
+  let viewChangeTimer = null;
 
-  function toggleAuto(){
-    const sw = document.getElementById('auto-switch');
-    const isOn = sw.classList.toggle('on');
-    if (isOn){
-      fetchReadings();
-      autoTimer = setInterval(fetchReadings, 15000);
-    } else {
-      clearInterval(autoTimer);
+  function getHost(){ return document.getElementById('fb-host').value.trim(); }
+
+  function getSorted(){
+    if (!sortedCache){
+      sortedCache = [...entriesByKey.values()].sort((a, b) => a.key - b.key);
     }
+    return sortedCache;
+  }
+  function invalidateSorted(){ sortedCache = null; }
+
+  function latestEntry(){
+    const sorted = getSorted();
+    return sorted.length ? sorted[sorted.length - 1] : null;
   }
 
+  // ---------- time formatting (all 12-hour, explicit AM/PM) ----------
+  function formatClock(ms){
+    return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
+  function formatDateShort(ms){
+    return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+  function formatDateYear(ms){
+    return new Date(ms).toLocaleDateString([], { month: 'short', year: 'numeric' });
+  }
+  function formatFull(ms, withSeconds){
+    const opts = { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true };
+    if (withSeconds) opts.second = '2-digit';
+    return new Date(ms).toLocaleString([], opts);
+  }
+  function timeAgo(ms){
+    const s = Math.round(ms / 1000);
+    if (s < 5) return 'just now';
+    if (s < 60) return s + 's ago';
+    const m = Math.round(s / 60);
+    if (m < 60) return m + 'm ago';
+    const h = Math.round(m / 60);
+    if (h < 24) return h + 'h ago';
+    return Math.round(h / 24) + 'd ago';
+  }
+  function startOfLocalDay(ms){
+    const d = new Date(ms);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+  function xTickLabel(ms, spanMs){
+    if (spanMs <= DAY * 1.5) return formatClock(ms);
+    if (spanMs <= DAY * 120) return [formatDateShort(ms), formatClock(ms)];
+    return formatDateYear(ms);
+  }
+
+  // ---------- connection status ----------
   function setConnState(state, detail){
     const led = document.getElementById('fb-led');
     const label = document.getElementById('conn-label');
@@ -385,135 +387,232 @@
     else label.textContent = detail || 'firebase unreachable';
   }
 
-  function timeAgo(ms){
-    const s = Math.round(ms/1000);
-    if (s < 60) return s + 's ago';
-    const m = Math.round(s/60);
-    if (m < 60) return m + 'm ago';
-    return Math.round(m/60) + 'h ago';
+  // ---------- time anchoring ----------
+  // The ESP32 keys each reading by millis() — time since it booted, not a
+  // real clock. There's no wall-clock time on the device at all right now.
+  // Since readings only ever get uploaded while online (near-real-time), we
+  // approximate real time here: anchor the newest reading from the latest
+  // live fetch to "now", and derive every other loaded reading's time from
+  // the millis() gap to that anchor. Good enough for browsing recent
+  // history; if the ESP32 reboots, millis() resets to 0, which throws this
+  // off until the device is caught up again — a real fix means adding NTP
+  // sync in the firmware so each reading carries its own true timestamp.
+  function anchorEpoch(key){
+    return anchorNowMs - (anchorNewestKey - key);
+  }
+  function setAnchor(newestKey){
+    anchorNewestKey = newestKey;
+    anchorNowMs = Date.now();
+    getSorted().forEach(e => { e.epochMs = anchorEpoch(e.key); });
   }
 
+  async function fbGet(host, query){
+    const url = 'https://' + host + '/readings.json?' + query;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }
+  function parseEntries(data){
+    if (!data) return [];
+    return Object.entries(data)
+      .map(([key, v]) => ({ key: Number(key), temp: Number(v.temp), hum: Number(v.hum) }))
+      .filter(e => !isNaN(e.key) && !isNaN(e.temp) && !isNaN(e.hum));
+  }
+
+  // ---------- live fetch (initial load, manual refresh, auto-refresh) ----------
   async function fetchReadings(){
-    const host = document.getElementById('fb-host').value.trim();
+    const host = getHost();
     if (!host) return;
-    const url = 'https://' + host + '/readings.json?orderBy=%22$key%22&limitToLast=50';
 
     try{
-      const res = await fetch(url);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-
-      if (!data){
+      const data = await fbGet(host, 'orderBy=%22$key%22&limitToLast=' + currentFetchLimit);
+      const fetched = parseEntries(data);
+      if (!fetched.length){
         setConnState('stale');
         return;
       }
+      fetched.forEach(e => entriesByKey.set(e.key, e));
+      invalidateSorted();
 
-      const entries = Object.entries(data)
-        .map(([key, v]) => ({ key, temp: Number(v.temp), hum: Number(v.hum) }))
-        .filter(e => !isNaN(e.temp) && !isNaN(e.hum))
-        .sort((a, b) => Number(a.key) - Number(b.key));
+      const newestKey = fetched.reduce((m, e) => Math.max(m, e.key), fetched[0].key);
+      setAnchor(newestKey);
 
-      if (!entries.length){
-        setConnState('stale');
-        return;
-      }
-
-      renderChart(entries);
-      renderCurrent(entries[entries.length - 1]);
       setConnState('online');
       lastFetchOk = Date.now();
+
+      const latest = latestEntry();
+      renderCurrent(latest);
+      ensureChart();
+
+      if (!userHasInteracted){
+        await applyRangeSelection();
+      } else {
+        const xScale = chartInstance.scales.x;
+        redrawChart(xScale.min, xScale.max);
+      }
     } catch(err){
       setConnState('offline', 'fetch failed: ' + err.message);
     }
   }
 
-  function renderCurrent(latest){
-    const tEl = document.getElementById('temp-value');
-    const hEl = document.getElementById('hum-value');
-    const tAge = document.getElementById('temp-age');
-    const hAge = document.getElementById('hum-age');
+  // ---------- backward history loading ----------
+  // Firebase's `$key` ordering compares keys as STRINGS, not numbers. Since
+  // the firmware writes raw millis() as the key (no zero-padding), a bound
+  // like endAt(oldestKey - 1) can't be trusted once key lengths differ
+  // (e.g. "999999" vs "1000000") or after a reboot resets millis() back to
+  // a small number. So instead of paging with startAt/endAt, we just widen
+  // limitToLast and re-fetch — slower for very deep history, but it doesn't
+  // depend on key ordering being numerically correct. A firmware-side fix
+  // (zero-padded keys, or better, NTP-synced epoch timestamps) would let
+  // this page properly instead of re-fetching a growing window.
+  async function fetchOlderPage(){
+    if (noMoreHistory || isFetchingOlder) return false;
+    const host = getHost();
+    if (!host) return false;
 
-    tEl.innerHTML = latest.temp.toFixed(1) + '<span class="unit">°C</span>';
-    hEl.innerHTML = latest.hum.toFixed(1) + '<span class="unit">%RH</span>';
-    tAge.textContent = 'last upload just now';
-    hAge.textContent = 'last upload just now';
+    const nextLimit = Math.min(currentFetchLimit * 2, MAX_FETCH_LIMIT);
+    if (nextLimit === currentFetchLimit){ noMoreHistory = true; return false; }
 
-    ['stat-temp','stat-hum'].forEach(id => {
-      const el = document.getElementById(id);
-      el.classList.remove('pulse');
-      void el.offsetWidth;
-      el.classList.add('pulse');
-    });
+    isFetchingOlder = true;
+    setLoadingOlder(true);
+    try{
+      const prevCount = entriesByKey.size;
+      const data = await fbGet(host, 'orderBy=%22$key%22&limitToLast=' + nextLimit);
+      const fetched = parseEntries(data);
+      fetched.forEach(e => { if (!entriesByKey.has(e.key)) entriesByKey.set(e.key, e); });
+      invalidateSorted();
+      currentFetchLimit = nextLimit;
+
+      if (anchorNewestKey !== null){
+        getSorted().forEach(e => { if (e.epochMs === undefined) e.epochMs = anchorEpoch(e.key); });
+      }
+      const gained = entriesByKey.size - prevCount;
+      if (gained === 0) noMoreHistory = true;
+      return gained > 0;
+    } catch(err){
+      console.error('older page fetch failed', err);
+      return false;
+    } finally{
+      isFetchingOlder = false;
+      setLoadingOlder(false);
+    }
   }
 
-  // The ESP32 keys each reading by millis() — time since it booted, not a
-  // real clock. There's no wall-clock time on the device at all right now.
-  // Since readings only ever get uploaded while online (near-real-time),
-  // we approximate real time here: anchor the newest reading to "now", and
-  // walk backwards using the millis() gaps between entries. Good enough for
-  // a live graph; if the ESP32 reboots mid-session, millis() resets to 0,
-  // which would throw this approximation off until it re-syncs — a real
-  // fix would mean adding NTP time sync in the firmware so each reading
-  // carries its own true timestamp instead of a boot-relative one.
-  function approxTimeLabels(entries){
-    const newest = entries[entries.length - 1].key;
-    const nowMs = Date.now();
-    return entries.map(e => {
-      const approxEpoch = nowMs - (newest - e.key);
-      return new Date(approxEpoch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    });
+  function setLoadingOlder(on){
+    document.getElementById('chart-loading').classList.toggle('show', !!on);
   }
 
-  function renderChart(entries){
-    const labels = approxTimeLabels(entries);
-    const temps = entries.map(e => e.temp);
-    const hums = entries.map(e => e.hum);
+  // ---------- range selection ----------
+  async function applyRangeSelection(){
+    if (!getSorted().length) return;
+    const mode = document.getElementById('range-select').value;
+    userHasInteracted = false;
+    const def = RANGE_DEFS[mode] || RANGE_DEFS['24h'];
 
-    renderOneChart('temp-chart', 'temp-chart-empty', 'tempChart', labels, {
-      label: 'Temp (°C)', data: temps,
-      borderColor: '#FF8A5B', backgroundColor: 'rgba(255,138,91,0.08)',
-      tickColor: '#FF8A5B', axisTitle: '°C'
-    });
-    renderOneChart('hum-chart', 'hum-chart-empty', 'humChart', labels, {
-      label: 'Humidity (%)', data: hums,
-      borderColor: '#4FC3E8', backgroundColor: 'rgba(79,195,232,0.06)',
-      tickColor: '#4FC3E8', axisTitle: '%RH'
-    });
-  }
-
-  const chartInstances = { tempChart: null, humChart: null };
-
-  function renderOneChart(canvasId, emptyId, instanceKey, labels, series){
-    document.getElementById(emptyId).style.display = 'none';
-    const canvas = document.getElementById(canvasId);
-    canvas.style.display = 'block';
-
-    const existing = chartInstances[instanceKey];
-    if (existing){
-      existing.data.labels = labels;
-      existing.data.datasets[0].data = series.data;
-      existing.update();
+    if (def.type === 'count'){
+      let guard = 0;
+      while (getSorted().length < def.n && !noMoreHistory && guard < 25){
+        const got = await fetchOlderPage();
+        guard++;
+        if (!got) break;
+      }
+      const sorted = getSorted();
+      const slice = sorted.slice(-def.n);
+      if (!slice.length) return;
+      setChartDomain(slice[0].epochMs, slice[slice.length - 1].epochMs);
       return;
     }
 
-    chartInstances[instanceKey] = new Chart(canvas.getContext('2d'), {
+    const now = Date.now();
+    let cutoff;
+    if (def.type === 'duration') cutoff = now - def.ms;
+    else if (def.type === 'today') cutoff = startOfLocalDay(now);
+    else cutoff = -Infinity; // 'all'
+
+    let guard = 0;
+    while (!noMoreHistory && guard < 25){
+      const oldest = getSorted()[0];
+      if (oldest && oldest.epochMs <= cutoff) break;
+      const got = await fetchOlderPage();
+      guard++;
+      if (!got) break;
+    }
+
+    const sorted = getSorted();
+    if (!sorted.length) return;
+    const incomplete = cutoff > -Infinity && sorted[0].epochMs > cutoff && !noMoreHistory;
+    const domainStart = Math.max(cutoff, sorted[0].epochMs);
+    setChartDomain(domainStart, now, incomplete ? 'showing available history only' : null);
+  }
+
+  function resetView(){
+    applyRangeSelection();
+  }
+
+  // ---------- smoothing ----------
+  // Buckets consecutive readings within the visible time window so the
+  // chart never has to render more than ~TARGET_POINTS points. A short,
+  // zoomed-in window has few enough raw points that no averaging happens
+  // at all (raw resolution); a long window (weeks/months/years) gets
+  // averaged into wider buckets. Re-run on every pan/zoom so it adapts
+  // as the visible window changes, without flattening things more than
+  // the current zoom level calls for.
+  function bucketize(sorted, rangeStart, rangeEnd){
+    const visible = [];
+    for (const e of sorted){
+      if (e.epochMs >= rangeStart && e.epochMs <= rangeEnd) visible.push(e);
+    }
+    if (visible.length <= TARGET_POINTS){
+      return {
+        points: visible.map(e => ({ x: e.epochMs, tempY: e.temp, humY: e.hum })),
+        avgPerPoint: 1
+      };
+    }
+    const bucketMs = (rangeEnd - rangeStart) / TARGET_POINTS;
+    const buckets = [];
+    let cur = null, curIdx = -1;
+    for (const e of visible){
+      const idx = Math.floor((e.epochMs - rangeStart) / bucketMs);
+      if (idx !== curIdx){
+        if (cur) buckets.push(cur);
+        cur = { sumX: 0, sumT: 0, sumH: 0, n: 0 };
+        curIdx = idx;
+      }
+      cur.sumX += e.epochMs; cur.sumT += e.temp; cur.sumH += e.hum; cur.n++;
+    }
+    if (cur) buckets.push(cur);
+    return {
+      points: buckets.map(b => ({ x: b.sumX / b.n, tempY: b.sumT / b.n, humY: b.sumH / b.n })),
+      avgPerPoint: Math.round(visible.length / buckets.length)
+    };
+  }
+
+  // ---------- chart ----------
+  function ensureChart(){
+    if (chartInstance) return chartInstance;
+    const ctx = document.getElementById('rt-chart').getContext('2d');
+    chartInstance = new Chart(ctx, {
       type: 'line',
       data: {
-        labels,
-        datasets: [{
-          label: series.label,
-          data: series.data,
-          borderColor: series.borderColor,
-          backgroundColor: series.backgroundColor,
-          tension: 0.3,
-          pointRadius: 0,
-          borderWidth: 2,
-          fill: true,
-        }]
+        datasets: [
+          {
+            label: 'Temp (°C)', yAxisID: 'yTemp', data: [],
+            borderColor: '#FF8A5B', backgroundColor: 'rgba(255,138,91,0.08)',
+            tension: 0.25, pointRadius: 0, pointHoverRadius: 4,
+            pointHoverBackgroundColor: '#FF8A5B', borderWidth: 2, fill: false, parsing: false
+          },
+          {
+            label: 'Humidity (%)', yAxisID: 'yHum', data: [],
+            borderColor: '#4FC3E8', backgroundColor: 'rgba(79,195,232,0.06)',
+            tension: 0.25, pointRadius: 0, pointHoverRadius: 4,
+            pointHoverBackgroundColor: '#4FC3E8', borderWidth: 2, fill: false, parsing: false
+          }
+        ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: false,
         interaction: { mode: 'index', intersect: false },
         plugins: {
           legend: {
@@ -521,30 +620,162 @@
           },
           tooltip: {
             backgroundColor: '#151B23', borderColor: '#232C38', borderWidth: 1,
-            titleColor: '#E7EBF1', bodyColor: '#E7EBF1'
+            titleColor: '#E7EBF1', bodyColor: '#E7EBF1',
+            callbacks: {
+              title: (items) => formatFull(items[0].parsed.x, true),
+              label: (item) => item.dataset.label.split(' ')[0] + ': ' + item.parsed.y.toFixed(1) +
+                (item.dataset.yAxisID === 'yTemp' ? '°C' : '%RH')
+            }
+          },
+          zoom: {
+            limits: { x: { min: 0, minRange: 5 * 60 * 1000 } },
+            pan: { enabled: true, mode: 'x', onPanComplete: onViewChanged },
+            zoom: {
+              wheel: { enabled: true }, pinch: { enabled: true }, drag: { enabled: false },
+              mode: 'x', onZoomComplete: onViewChanged
+            }
           }
         },
         scales: {
           x: {
-            ticks: { color: '#525C6B', font: { family: 'IBM Plex Mono', size: 10 }, maxTicksLimit: 6 },
+            type: 'linear',
+            ticks: {
+              color: '#525C6B', font: { family: 'IBM Plex Mono', size: 10 }, maxTicksLimit: 6,
+              callback: function(value){ return xTickLabel(value, this.max - this.min); }
+            },
             grid: { color: '#1A222C' }
           },
-          y: {
-            ticks: { color: series.tickColor, font: { family: 'IBM Plex Mono', size: 10 } },
+          yTemp: {
+            type: 'linear', position: 'left',
+            ticks: { color: '#FF8A5B', font: { family: 'IBM Plex Mono', size: 10 } },
             grid: { color: '#1A222C' },
-            title: { display: true, text: series.axisTitle, color: '#7C8798' }
+            title: { display: true, text: '°C', color: '#7C8798' }
+          },
+          yHum: {
+            type: 'linear', position: 'right',
+            ticks: { color: '#4FC3E8', font: { family: 'IBM Plex Mono', size: 10 } },
+            grid: { drawOnChartArea: false },
+            title: { display: true, text: '%RH', color: '#7C8798' }
           }
         }
       }
     });
+    return chartInstance;
   }
+
+  function setChartDomain(min, max, extraNote){
+    chartInstance.options.scales.x.min = min;
+    chartInstance.options.scales.x.max = max;
+    redrawChart(min, max, extraNote);
+  }
+
+  function redrawChart(rangeStart, rangeEnd, extraNote){
+    const sorted = getSorted();
+    const { points, avgPerPoint } = bucketize(sorted, rangeStart, rangeEnd);
+    chartInstance.data.datasets[0].data = points.map(p => ({ x: p.x, y: p.tempY }));
+    chartInstance.data.datasets[1].data = points.map(p => ({ x: p.x, y: p.humY }));
+    chartInstance.update('none');
+    updateCaption(rangeStart, rangeEnd, points.length, avgPerPoint, extraNote);
+    if (entriesByKey.size > 0) hideEmptyState();
+  }
+
+  function updateCaption(rangeStart, rangeEnd, pointCount, avgPerPoint, extraNote){
+    const el = document.getElementById('chart-caption');
+    const smoothNote = avgPerPoint > 1 ? (' · smoothed, ~' + avgPerPoint + ' readings/pt') : ' · raw resolution';
+    let text = formatFull(rangeStart) + ' \u2192 ' + formatFull(rangeEnd) + ' · ' + pointCount + ' pts' + smoothNote;
+    if (extraNote) text += ' · ' + extraNote;
+    el.textContent = text;
+  }
+
+  function hideEmptyState(){ document.getElementById('chart-empty').style.display = 'none'; }
+  function showEmptyState(){ document.getElementById('chart-empty').style.display = 'flex'; }
+
+  // debounced: fires after the user stops panning/zooming
+  function onViewChanged(){
+    clearTimeout(viewChangeTimer);
+    viewChangeTimer = setTimeout(async () => {
+      userHasInteracted = true;
+      const xScale = chartInstance.scales.x;
+      const min = xScale.min, max = xScale.max;
+      const sorted = getSorted();
+      const edgeBuffer = (max - min) * 0.15;
+      if (sorted.length && min <= sorted[0].epochMs + edgeBuffer && !noMoreHistory){
+        await fetchOlderPage();
+      }
+      redrawChart(chartInstance.scales.x.min, chartInstance.scales.x.max);
+    }, 400);
+  }
+
+  // ---------- stat cards ----------
+  function renderCurrent(latest){
+    if (!latest) return;
+    document.getElementById('temp-value').innerHTML = latest.temp.toFixed(1) + '<span class="unit">°C</span>';
+    document.getElementById('hum-value').innerHTML = latest.hum.toFixed(1) + '<span class="unit">%RH</span>';
+    latestReadingEpoch = latest.epochMs;
+    updateAgeText();
+
+    ['stat-temp', 'stat-hum'].forEach(id => {
+      const el = document.getElementById(id);
+      el.classList.remove('pulse');
+      void el.offsetWidth;
+      el.classList.add('pulse');
+    });
+  }
+  function updateAgeText(){
+    if (latestReadingEpoch === null) return;
+    const text = timeAgo(Date.now() - latestReadingEpoch) + ' · ' + formatClock(latestReadingEpoch);
+    document.getElementById('temp-age').textContent = text;
+    document.getElementById('hum-age').textContent = text;
+  }
+  setInterval(updateAgeText, 5000);
 
   // staleness sweep
   setInterval(() => {
-    if (lastFetchOk && Date.now() - lastFetchOk > 90000){
-      setConnState('stale');
-    }
+    if (lastFetchOk && Date.now() - lastFetchOk > 90000) setConnState('stale');
   }, 10000);
+
+  // ---------- auto-refresh ----------
+  function getRefreshSeconds(){
+    const input = document.getElementById('refresh-secs');
+    let v = parseInt(input.value, 10);
+    if (isNaN(v) || v < 3) v = 15;
+    input.value = v;
+    return v;
+  }
+  function toggleAuto(){
+    const sw = document.getElementById('auto-switch');
+    const isOn = sw.classList.toggle('on');
+    if (isOn){
+      fetchReadings();
+      autoTimer = setInterval(fetchReadings, getRefreshSeconds() * 1000);
+    } else {
+      clearInterval(autoTimer);
+      autoTimer = null;
+    }
+  }
+  document.getElementById('refresh-secs').addEventListener('change', () => {
+    const secs = getRefreshSeconds();
+    if (autoTimer){
+      clearInterval(autoTimer);
+      autoTimer = setInterval(fetchReadings, secs * 1000);
+    }
+  });
+
+  document.getElementById('range-select').addEventListener('change', () => { applyRangeSelection(); });
+
+  document.getElementById('fb-host').addEventListener('change', () => {
+    entriesByKey.clear();
+    invalidateSorted();
+    anchorNewestKey = null; anchorNowMs = null;
+    noMoreHistory = false; currentFetchLimit = PAGE_SIZE;
+    userHasInteracted = false; latestReadingEpoch = null;
+    document.getElementById('temp-value').innerHTML = '—<span class="unit">°C</span>';
+    document.getElementById('hum-value').innerHTML = '—<span class="unit">%RH</span>';
+    document.getElementById('temp-age').textContent = 'no data yet';
+    document.getElementById('hum-age').textContent = 'no data yet';
+    showEmptyState();
+    fetchReadings();
+  });
 
   // initial load
   fetchReadings();
