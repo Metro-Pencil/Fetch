@@ -16,6 +16,25 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.5.1 — raised TARGET_POINTS (300 → 900) so views render raw,
+  unaveraged readings for longer before bucket-averaging kicks in — more
+  of the zoomed-in and mid-range views now show true per-reading detail
+  instead of smoothed buckets. Trade-off: more points on screen per
+  redraw, which costs a bit more render time on longer/all-time views
+  before they fall back to averaging.
+
+  v2.5.0 — the chart now stretches edge-to-edge to the actual span of the
+  loaded readings instead of padding out to the nominal picker window
+  (e.g. "Last hour" no longer leaves the line squeezed into a sliver in
+  the middle if the readings inside that hour only cover a few minutes).
+  applyRangeSelection() narrows [domainStart, now] (or a count-mode
+  slice's own bounds) down to the first/last actual timestamp within it
+  via the new stretchToData(), with a MIN_DOMAIN_MS floor so a handful of
+  near-simultaneous readings never collapse the axis to zero width. Only
+  applies to picker-driven domains — manual pinch/drag zoom and pan
+  (onViewChanged()) are untouched, since those are the user intentionally
+  choosing a view.
+
   v2.4.0 — fixed pinch/drag zoom and pan not working on mobile: the chart
   canvases had no `touch-action` set, so the browser was intercepting
   touch gestures for native page scroll/zoom before Chart.js ever saw
@@ -267,7 +286,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.4.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.5.1</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -351,13 +370,13 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.4.0';
+  const APP_VERSION = '2.5.1';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
   const PAGE_SIZE = 200;          // initial fetch size
   const MAX_FETCH_LIMIT = 50000;  // hard ceiling on how much history one session will pull in
-  const TARGET_POINTS = 300;      // rendered points per view before bucket-averaging kicks in
+  const TARGET_POINTS = 900;      // rendered points per view before bucket-averaging kicks in
   const DAY = 86400000;
 
   const RANGE_DEFS = {
@@ -576,6 +595,31 @@
   }
 
   // ---------- range selection ----------
+  // Smallest x-domain width we'll ever set. Mirrors the zoom plugin's own
+  // minRange (see limits.x.minRange below) — that guard only kicks in for
+  // interactive zoom/pan, so setChartDomain() needs its own copy to avoid
+  // ever collapsing to a zero/near-zero width span (e.g. a handful of
+  // readings that all landed within the same second).
+  const MIN_DOMAIN_MS = 5 * 60 * 1000;
+
+  // Narrows [start, end] down to the actual first/last timestamp of
+  // whatever data falls inside it, so the chart always stretches edge to
+  // edge instead of leaving blank space where the nominal window (e.g.
+  // "last hour") extends past the readings that actually exist. Falls
+  // back to [start, end] untouched if nothing is loaded in range yet.
+  function stretchToData(sorted, start, end){
+    const visible = sorted.filter(e => e.epochMs >= start && e.epochMs <= end);
+    if (!visible.length) return [start, end];
+    let actualStart = visible[0].epochMs;
+    let actualEnd = visible[visible.length - 1].epochMs;
+    if (actualEnd - actualStart < MIN_DOMAIN_MS){
+      const mid = (actualStart + actualEnd) / 2;
+      actualStart = mid - MIN_DOMAIN_MS / 2;
+      actualEnd = mid + MIN_DOMAIN_MS / 2;
+    }
+    return [actualStart, actualEnd];
+  }
+
   async function applyRangeSelection(){
     if (!getSorted().length) return;
     const mode = document.getElementById('range-select').value;
@@ -592,7 +636,8 @@
       const sorted = getSorted();
       const slice = sorted.slice(-def.n);
       if (!slice.length) return;
-      setChartDomain(slice[0].epochMs, slice[slice.length - 1].epochMs);
+      const [start, end] = stretchToData(slice, slice[0].epochMs, slice[slice.length - 1].epochMs);
+      setChartDomain(start, end);
       return;
     }
 
@@ -615,7 +660,8 @@
     if (!sorted.length) return;
     const incomplete = cutoff > -Infinity && sorted[0].epochMs > cutoff && !noMoreHistory;
     const domainStart = Math.max(cutoff, sorted[0].epochMs);
-    setChartDomain(domainStart, now, incomplete ? 'showing available history only' : null);
+    const [start, end] = stretchToData(sorted, domainStart, now);
+    setChartDomain(start, end, incomplete ? 'showing available history only' : null);
   }
 
   function resetView(){
