@@ -16,6 +16,23 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.8.0 — offline periods (board fully powered off, not just a slow
+  poll) previously rendered identically to a real gradual change: with no
+  gap handling, Chart.js just draws a straight line from the last reading
+  before a shutdown to the first reading after it. bucketize() now flags
+  any stretch between two consecutive raw readings wider than
+  GAP_THRESHOLD_MS (5x the known 60s interval — ~4+ missed readings in a
+  row) as an offline gap: it inserts a null-value point at the gap's
+  midpoint to break the line there (Chart.js skips drawing a segment with
+  a null endpoint), and returns the gap list separately for the new
+  gapShadingPlugin, which fills the gap's time span with a faint dashed-
+  border band on both charts. Caption now also reports gap count and
+  total offline time when any are visible. Tooltip callbacks got a
+  defensive filter/guard so hovering near a gap's break marker doesn't
+  crash on a null value. Verified against synthetic data: a real 3h
+  outage is flagged correctly, continuous data and ordinary ~70s jitter
+  (vs the expected 60s) produce zero false positives.
+
   v2.7.0 — found the actual primary bug behind the timeline compression:
   a unit mismatch, not (just) the reboot case v2.6.0 handled. With the
   known 60s reading interval, ~1431 raw readings (477 pts × ~3/pt) should
@@ -346,7 +363,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.7.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.8.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -430,7 +447,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.7.0';
+  const APP_VERSION = '2.8.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
@@ -861,65 +878,126 @@
   // as one of its two points instead of being averaged away. Temp and
   // humidity are decimated independently since their extremes don't
   // necessarily land on the same raw reading.
+  //
+  // Offline gaps: with no special handling, Chart.js just draws a
+  // straight line from the last reading before a shutdown to the first
+  // reading after it — visually identical to a real gradual change, even
+  // across a multi-hour outage. GAP_THRESHOLD_MS flags any stretch
+  // between two consecutive RAW readings (checked before bucketing, so
+  // it's independent of how coarse the current zoom's buckets are) that's
+  // wider than a few missed readings should ever be. Each flagged gap
+  // gets a null-value point inserted at its midpoint — Chart.js breaks
+  // the line at a null y (spanGaps defaults to false) — and is also
+  // returned separately so redrawChart() can pass it to the shading
+  // plugin that fills in the gap region visually.
+  const GAP_THRESHOLD_MS = 5 * KNOWN_INTERVAL_MS; // ~4+ missed readings in a row
+
   function bucketize(sorted, rangeStart, rangeEnd){
     const visible = [];
     for (const e of sorted){
       if (e.epochMs >= rangeStart && e.epochMs <= rangeEnd) visible.push(e);
     }
-    if (visible.length <= TARGET_POINTS){
-      return {
-        tempPoints: visible.map(e => ({ x: e.epochMs, y: e.temp })),
-        humPoints: visible.map(e => ({ x: e.epochMs, y: e.hum })),
-        avgPerPoint: 1
-      };
-    }
-    const bucketMs = (rangeEnd - rangeStart) / TARGET_POINTS;
-    const buckets = [];
-    let cur = null, curIdx = -1;
-    for (const e of visible){
-      const idx = Math.floor((e.epochMs - rangeStart) / bucketMs);
-      if (idx !== curIdx){
-        if (cur) buckets.push(cur);
-        cur = [];
-        curIdx = idx;
-      }
-      cur.push(e);
-    }
-    if (cur) buckets.push(cur);
 
-    const tempPoints = [];
-    const humPoints = [];
-    for (const entries of buckets){
-      if (entries.length === 1){
-        tempPoints.push({ x: entries[0].epochMs, y: entries[0].temp });
-        humPoints.push({ x: entries[0].epochMs, y: entries[0].hum });
-        continue;
-      }
-      let tMin = entries[0], tMax = entries[0], hMin = entries[0], hMax = entries[0];
-      for (const e of entries){
-        if (e.temp < tMin.temp) tMin = e;
-        if (e.temp > tMax.temp) tMax = e;
-        if (e.hum < hMin.hum) hMin = e;
-        if (e.hum > hMax.hum) hMax = e;
-      }
-      if (tMin === tMax){
-        tempPoints.push({ x: tMin.epochMs, y: tMin.temp });
-      } else {
-        [tMin, tMax].sort((a, b) => a.epochMs - b.epochMs)
-          .forEach(e => tempPoints.push({ x: e.epochMs, y: e.temp }));
-      }
-      if (hMin === hMax){
-        humPoints.push({ x: hMin.epochMs, y: hMin.hum });
-      } else {
-        [hMin, hMax].sort((a, b) => a.epochMs - b.epochMs)
-          .forEach(e => humPoints.push({ x: e.epochMs, y: e.hum }));
+    const gaps = [];
+    for (let i = 1; i < visible.length; i++){
+      const d = visible[i].epochMs - visible[i - 1].epochMs;
+      if (d > GAP_THRESHOLD_MS){
+        gaps.push({ start: visible[i - 1].epochMs, end: visible[i].epochMs });
       }
     }
-    return {
-      tempPoints, humPoints,
-      avgPerPoint: Math.round(visible.length / buckets.length)
-    };
+
+    let tempPoints, humPoints, avgPerPoint;
+    if (visible.length <= TARGET_POINTS){
+      tempPoints = visible.map(e => ({ x: e.epochMs, y: e.temp }));
+      humPoints = visible.map(e => ({ x: e.epochMs, y: e.hum }));
+      avgPerPoint = 1;
+    } else {
+      const bucketMs = (rangeEnd - rangeStart) / TARGET_POINTS;
+      const buckets = [];
+      let cur = null, curIdx = -1;
+      for (const e of visible){
+        const idx = Math.floor((e.epochMs - rangeStart) / bucketMs);
+        if (idx !== curIdx){
+          if (cur) buckets.push(cur);
+          cur = [];
+          curIdx = idx;
+        }
+        cur.push(e);
+      }
+      if (cur) buckets.push(cur);
+
+      tempPoints = [];
+      humPoints = [];
+      for (const entries of buckets){
+        if (entries.length === 1){
+          tempPoints.push({ x: entries[0].epochMs, y: entries[0].temp });
+          humPoints.push({ x: entries[0].epochMs, y: entries[0].hum });
+          continue;
+        }
+        let tMin = entries[0], tMax = entries[0], hMin = entries[0], hMax = entries[0];
+        for (const e of entries){
+          if (e.temp < tMin.temp) tMin = e;
+          if (e.temp > tMax.temp) tMax = e;
+          if (e.hum < hMin.hum) hMin = e;
+          if (e.hum > hMax.hum) hMax = e;
+        }
+        if (tMin === tMax){
+          tempPoints.push({ x: tMin.epochMs, y: tMin.temp });
+        } else {
+          [tMin, tMax].sort((a, b) => a.epochMs - b.epochMs)
+            .forEach(e => tempPoints.push({ x: e.epochMs, y: e.temp }));
+        }
+        if (hMin === hMax){
+          humPoints.push({ x: hMin.epochMs, y: hMin.hum });
+        } else {
+          [hMin, hMax].sort((a, b) => a.epochMs - b.epochMs)
+            .forEach(e => humPoints.push({ x: e.epochMs, y: e.hum }));
+        }
+      }
+      avgPerPoint = Math.round(visible.length / buckets.length);
+    }
+
+    const pointCount = tempPoints.length; // real points only, before gap markers below
+    for (const g of gaps){
+      const mid = (g.start + g.end) / 2;
+      tempPoints.push({ x: mid, y: null });
+      humPoints.push({ x: mid, y: null });
+    }
+    if (gaps.length){
+      tempPoints.sort((a, b) => a.x - b.x);
+      humPoints.sort((a, b) => a.x - b.x);
+    }
+
+    return { tempPoints, humPoints, avgPerPoint, gaps, pointCount };
   }
+
+  // Fills the time span of each detected offline gap with a faint shaded
+  // band, drawn behind the line but above the grid. Reads its gap list
+  // from chart.options.plugins.gapShading.gaps, which redrawChart() sets
+  // fresh on every redraw — same pattern as the zoom plugin's own
+  // per-chart options.
+  const gapShadingPlugin = {
+    id: 'gapShading',
+    beforeDatasetsDraw(chart, args, opts){
+      const gaps = opts.gaps;
+      if (!gaps || !gaps.length) return;
+      const { ctx, chartArea, scales } = chart;
+      const xScale = scales.x;
+      ctx.save();
+      ctx.fillStyle = 'rgba(120,132,148,0.10)';
+      ctx.strokeStyle = 'rgba(120,132,148,0.35)';
+      ctx.setLineDash([3, 3]);
+      for (const g of gaps){
+        const x1 = Math.max(xScale.getPixelForValue(g.start), chartArea.left);
+        const x2 = Math.min(xScale.getPixelForValue(g.end), chartArea.right);
+        if (x2 <= x1) continue;
+        ctx.fillRect(x1, chartArea.top, x2 - x1, chartArea.bottom - chartArea.top);
+        ctx.beginPath(); ctx.moveTo(x1, chartArea.top); ctx.lineTo(x1, chartArea.bottom); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x2, chartArea.top); ctx.lineTo(x2, chartArea.bottom); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  };
 
   // ---------- chart ----------
   // Temperature and humidity render as two fully separate boxed charts,
@@ -939,6 +1017,7 @@
           pointHoverBackgroundColor: color, borderWidth: 2, fill: false, parsing: false
         }]
       },
+      plugins: [gapShadingPlugin],
       options: {
         responsive: true,
         maintainAspectRatio: false,
@@ -946,11 +1025,16 @@
         interaction: { mode: 'index', intersect: false },
         plugins: {
           legend: { display: false },
+          gapShading: { gaps: [] },
           tooltip: {
             backgroundColor: '#151B23', borderColor: '#232C38', borderWidth: 1,
             titleColor: '#E7EBF1', bodyColor: '#E7EBF1',
+            // The gap-break marker points (bucketize()'s null-y inserts) have
+            // no real reading to show — filter them out rather than crash on
+            // item.parsed.y.toFixed(1) or show a blank "· °C" line.
+            filter: (item) => item.parsed.y !== null,
             callbacks: {
-              title: (items) => formatFull(items[0].parsed.x, true),
+              title: (items) => items.length ? formatFull(items[0].parsed.x, true) : '',
               label: (item) => seriesLabel + ': ' + item.parsed.y.toFixed(1) + unit
             }
           },
@@ -1008,9 +1092,11 @@
 
   function redrawChart(rangeStart, rangeEnd, extraNote){
     const sorted = getValidSorted();
-    const { tempPoints, humPoints, avgPerPoint } = bucketize(sorted, rangeStart, rangeEnd);
+    const { tempPoints, humPoints, avgPerPoint, gaps, pointCount } = bucketize(sorted, rangeStart, rangeEnd);
     chartTemp.data.datasets[0].data = tempPoints;
     chartHum.data.datasets[0].data = humPoints;
+    chartTemp.options.plugins.gapShading.gaps = gaps;
+    chartHum.options.plugins.gapShading.gaps = gaps;
     chartTemp.update('none');
     chartHum.update('none');
     let note = extraNote;
@@ -1019,7 +1105,13 @@
         " from before the sensor's last restart excluded (no real clock onboard)";
       note = note ? (note + ' · ' + staleNote) : staleNote;
     }
-    updateCaption(rangeStart, rangeEnd, tempPoints.length, avgPerPoint, note);
+    if (gaps.length){
+      const totalOfflineMs = gaps.reduce((sum, g) => sum + (g.end - g.start), 0);
+      const gapNote = gaps.length + ' offline gap' + (gaps.length === 1 ? '' : 's') +
+        ' (' + formatSpan(totalOfflineMs) + ' total) shaded';
+      note = note ? (note + ' · ' + gapNote) : gapNote;
+    }
+    updateCaption(rangeStart, rangeEnd, pointCount, avgPerPoint, note);
     if (entriesByKey.size > 0) hideEmptyState();
   }
 
