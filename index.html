@@ -16,6 +16,17 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.9.0 — added a device-status line under the Firebase host field,
+  showing which network the ESP32 is currently on and a direct link to its
+  /update page. This reads status.json off the same RTDB host as the
+  readings (populated by the firmware's publishStatusToFirebase(), added
+  because mDNS's ".local" hostname turned out to be unreliable across
+  Android versions — many phones just don't resolve it in a plain browser).
+  fetchStatus() is fire-and-forget from inside fetchReadings(), so it rides
+  along with the existing initial-load/manual-refresh/auto-refresh triggers
+  without adding a new polling path; a failed status fetch is swallowed
+  silently so it can't disturb the main readings/chart UI.
+
   v2.8.0 — offline periods (board fully powered off, not just a slow
   poll) previously rendered identically to a real gradual change: with no
   gap handling, Chart.js just draws a straight line from the last reading
@@ -237,6 +248,10 @@
     display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-family:var(--sans);
   }
   .field-row{margin-bottom:14px;}
+  .device-status{font-family:var(--mono);font-size:12px;color:var(--muted);}
+  .device-status a{color:var(--text);text-decoration:none;border-bottom:1px dotted var(--muted-2);}
+  .device-status a:hover{border-bottom-color:var(--text);}
+  .device-status .dev-age{color:var(--muted-2);margin-left:6px;}
   input[type=text]{
     width:100%;background:var(--panel-2);border:1px solid var(--border);
     color:var(--text);font-family:var(--mono);font-size:13px;
@@ -363,7 +378,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.8.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.9.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -376,6 +391,11 @@
     <div class="field-row">
       <label for="fb-host">Firebase RTDB host</label>
       <input type="text" id="fb-host" value="esp32-19dd8-default-rtdb.firebaseio.com" autocomplete="off">
+    </div>
+
+    <div class="field-row" id="device-status-row" style="display:none;">
+      <label>Device</label>
+      <div class="device-status" id="device-status"></div>
     </div>
 
     <div class="readings-top">
@@ -447,7 +467,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.8.0';
+  const APP_VERSION = '2.9.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
@@ -643,10 +663,35 @@
       .filter(e => !isNaN(e.key) && !isNaN(e.temp) && !isNaN(e.hum));
   }
 
+  // ---------- device status (current IP/SSID, reported by the firmware) ----------
+  // Added because mDNS's roomlogger.local turned out to be unreliable
+  // across Android versions -- this reads status.json off the same RTDB
+  // host instead, which the firmware now writes on every (re)connect.
+  // Fire-and-forget: a failed status fetch should never disturb the main
+  // readings/chart UI, so errors are swallowed rather than surfaced.
+  async function fetchStatus(){
+    const host = getHost();
+    if (!host) return;
+    try{
+      const res = await fetch('https://' + host + '/status.json');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const status = await res.json();
+      if (!status || !status.ip) return;
+      document.getElementById('device-status').innerHTML =
+        'On <b>' + status.ssid + '</b> — <a href="http://' + status.ip + '/update" target="_blank" rel="noopener">' +
+        status.ip + '/update</a>';
+      document.getElementById('device-status-row').style.display = '';
+    } catch(err){
+      // status is a nice-to-have -- silently skip, readings still work
+    }
+  }
+
   // ---------- live fetch (initial load, manual refresh, auto-refresh) ----------
   async function fetchReadings(){
     const host = getHost();
     if (!host) return;
+
+    fetchStatus(); // rides along with every readings poll, doesn't block it
 
     try{
       const data = await fbGet(host, 'orderBy=%22$key%22&limitToLast=' + currentFetchLimit);
@@ -1208,6 +1253,7 @@
     document.getElementById('hum-value').innerHTML = '—<span class="unit">%RH</span>';
     document.getElementById('temp-age').textContent = 'no data yet';
     document.getElementById('hum-age').textContent = 'no data yet';
+    document.getElementById('device-status-row').style.display = 'none';
     showEmptyState();
     fetchReadings();
   });
