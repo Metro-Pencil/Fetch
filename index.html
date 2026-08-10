@@ -16,6 +16,28 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.10.0 — two readability changes to the charts themselves (not the
+  data pipeline). (1) Hover/tap detail used to render as a Chart.js
+  floating tooltip box that followed the cursor/touch point around the
+  plot, which routinely covered the very line segment you were looking
+  at. Tooltip rendering is now fully custom (`enabled:false` +
+  `external`, per Chart.js's documented pattern for this): the box is
+  gone, and the hovered timestamp/value now writes into a fixed readout
+  in that chart's own header (next to "Temperature"/"Humidity"),
+  reverting to the plain unit text on hover-out. The highlighted dot on
+  the line itself (pointHoverRadius) is untouched — it's driven by core
+  hover-interaction, not the tooltip plugin, so disabling the tooltip
+  doesn't remove it. (2) Added a thin shaded band under each chart's own
+  x-axis (new dayNightStripPlugin) marking local day (6am–6pm, amber) vs
+  night (indigo) for whatever the current view's time span is — a
+  single solid band at short zoom (still tells you day-or-night at a
+  glance), alternating bands once a view spans more than a day. Needed
+  ~19px of reserved bottom space per chart for this, added via
+  options.layout.padding.bottom (Chart.js draws nothing in padding by
+  default, so it was free real estate) — only when that chart shows
+  x-axis labels at all (both do currently). Chart-hint caption updated
+  to explain the band once rather than relying on it being self-evident.
+
   v2.9.0 — added a device-status line under the Firebase host field,
   showing which network the ESP32 is currently on and a direct link to its
   /update page. This reads status.json off the same RTDB host as the
@@ -191,6 +213,8 @@
     --ok:#4ADE80;
     --warn:#FBBF24;
     --err:#F87171;
+    --day:#FBBF24;
+    --night:#6366F1;
     --mono:'IBM Plex Mono', ui-monospace, monospace;
     --sans:'Inter', system-ui, sans-serif;
   }
@@ -332,11 +356,23 @@
   .chart-panel-label .dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
   .chart-panel-label.temp .dot{background:var(--temp);}
   .chart-panel-label.hum .dot{background:var(--hum);}
-  .chart-panel-label .unit{margin-left:auto;color:var(--muted-2);letter-spacing:0;text-transform:none;}
+  /* Doubles as the static unit label ("°C") and, on hover/tap, a fixed
+     readout for the hovered point's time + value — replaces the old
+     Chart.js floating tooltip box so hover detail never covers the line. */
+  .chart-panel-label .readout{
+    margin-left:auto;min-width:0;color:var(--muted-2);letter-spacing:0;text-transform:none;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:68%;
+    text-align:right;font-variant-numeric:tabular-nums;
+  }
   .chart-canvas-box{position:relative;height:420px;touch-action:none;}
   @media (min-width:600px){ .chart-canvas-box{height:540px;} }
   .chart-canvas-box canvas{touch-action:none;}
   .chart-hint{font-size:10px;color:var(--muted-2);font-family:var(--mono);margin-top:10px;text-align:center;}
+  .chart-hint .dn-swatch{
+    display:inline-block;width:7px;height:7px;border-radius:2px;margin:0 3px -1px 0;
+  }
+  .chart-hint .dn-swatch.day{background:var(--day);opacity:.85;}
+  .chart-hint .dn-swatch.night{background:var(--night);opacity:.85;}
   .empty-state{
     position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     color:var(--muted-2);font-family:var(--mono);font-size:12px;text-align:center;padding:20px;
@@ -378,7 +414,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.9.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.10.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -435,16 +471,17 @@
       </div>
       <div class="charts-stack">
         <div class="chart-box">
-          <div class="chart-panel-label temp"><span class="dot"></span>Temperature<span class="unit">°C</span></div>
+          <div class="chart-panel-label temp"><span class="dot"></span>Temperature<span class="readout" id="temp-readout">°C</span></div>
           <div class="chart-canvas-box"><canvas id="rt-chart-temp"></canvas></div>
         </div>
         <div class="chart-box">
-          <div class="chart-panel-label hum"><span class="dot"></span>Humidity<span class="unit">%RH</span></div>
+          <div class="chart-panel-label hum"><span class="dot"></span>Humidity<span class="readout" id="hum-readout">%RH</span></div>
           <div class="chart-canvas-box"><canvas id="rt-chart-hum"></canvas></div>
         </div>
         <div class="empty-state" id="chart-empty">No readings fetched yet. Tap "Refresh now".</div>
       </div>
       <div class="chart-hint">Drag to scroll through time · pinch or scroll to zoom · charts stay in sync</div>
+      <div class="chart-hint"><span class="dn-swatch day"></span>day (6am–6pm)<span class="dn-swatch night" style="margin-left:10px;"></span>night — shaded band under each chart's axis</div>
     </div>
 
     <div class="controls-row">
@@ -467,7 +504,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.9.0';
+  const APP_VERSION = '2.10.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
@@ -558,6 +595,46 @@
   function xTickLabel(ms, spanMs){
     if (spanMs <= DAY * 120) return [formatDateShort(ms), formatClock(ms)];
     return formatDateYear(ms);
+  }
+
+  // ---------- day/night segmentation (for the axis strip below) ----------
+  // Fixed local-time convention (6:00-18:00 = day) rather than real
+  // sunrise/sunset — this is a room logger, not an ephemeris, and a fixed
+  // split is enough to answer "was this stretch day or night" at a glance.
+  const DAY_START_HOUR = 6;
+  const DAY_END_HOUR = 18;
+  function isDaytime(ms){
+    const h = new Date(ms).getHours();
+    return h >= DAY_START_HOUR && h < DAY_END_HOUR;
+  }
+  // Next local-clock instant strictly after ms where day/night flips.
+  function nextDayNightBoundary(ms){
+    const d = new Date(ms);
+    const y = d.getFullYear(), mo = d.getMonth(), da = d.getDate();
+    const at6 = new Date(y, mo, da, DAY_START_HOUR, 0, 0, 0).getTime();
+    const at18 = new Date(y, mo, da, DAY_END_HOUR, 0, 0, 0).getTime();
+    if (ms < at6) return at6;
+    if (ms < at18) return at18;
+    return new Date(y, mo, da + 1, DAY_START_HOUR, 0, 0, 0).getTime();
+  }
+  // Splits [minMs, maxMs] into contiguous {start, end, isDay} runs. At
+  // short zoom this returns a single segment (still tells you day-vs-
+  // night for the whole visible window); at wide zoom it alternates once
+  // per 12h boundary. guard caps iterations against clock weirdness
+  // (DST etc.) rather than looping forever.
+  function dayNightSegments(minMs, maxMs){
+    const segs = [];
+    let cur = minMs, guard = 0;
+    while (cur < maxMs && guard < 4000){
+      guard++;
+      const isDay = isDaytime(cur);
+      let next = nextDayNightBoundary(cur);
+      if (next > maxMs) next = maxMs;
+      segs.push({ start: cur, end: next, isDay });
+      if (next <= cur) break;
+      cur = next;
+    }
+    return segs;
   }
 
   // ---------- connection status ----------
@@ -1044,13 +1121,74 @@
     }
   };
 
+  // Draws a thin day/night band in the reserved space below a chart's own
+  // x-axis (see the layout.padding.bottom this relies on, set per-chart in
+  // buildSeriesChart). Runs afterDraw since it only needs the x-scale's
+  // final pixel position, not anything drawn earlier. Only fires for
+  // charts whose x ticks are actually displayed — no axis, no strip.
+  const DAYNIGHT_STRIP_GAP = 4;     // px between the axis labels and the band
+  const DAYNIGHT_STRIP_HEIGHT = 11; // px height of the band itself
+  const DAYNIGHT_RESERVED_BOTTOM = DAYNIGHT_STRIP_GAP + DAYNIGHT_STRIP_HEIGHT + 4;
+  const dayNightStripPlugin = {
+    id: 'dayNightStrip',
+    afterDraw(chart){
+      const xScale = chart.scales.x;
+      if (!xScale || !xScale.options.ticks.display) return;
+      const min = xScale.min, max = xScale.max;
+      if (!(max > min)) return;
+      const { ctx, chartArea } = chart;
+      const top = xScale.bottom + DAYNIGHT_STRIP_GAP;
+      const segs = dayNightSegments(min, max);
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const seg of segs){
+        const x1 = Math.max(xScale.getPixelForValue(seg.start), chartArea.left);
+        const x2 = Math.min(xScale.getPixelForValue(seg.end), chartArea.right);
+        if (x2 <= x1) continue;
+        ctx.fillStyle = seg.isDay ? 'rgba(251,191,36,0.20)' : 'rgba(99,102,241,0.28)';
+        ctx.fillRect(x1, top, x2 - x1, DAYNIGHT_STRIP_HEIGHT);
+        if (x2 - x1 >= 60){ // only label a segment wide enough to hold it
+          ctx.fillStyle = seg.isDay ? 'rgba(40,30,5,0.75)' : 'rgba(230,232,255,0.85)';
+          ctx.font = "600 8px 'IBM Plex Mono', monospace";
+          ctx.fillText(seg.isDay ? 'day' : 'night', (x1 + x2) / 2, top + DAYNIGHT_STRIP_HEIGHT / 2 + 0.5);
+        }
+      }
+      ctx.restore();
+    }
+  };
+
+  // Builds the hover/tap handler passed as tooltip.external below. Instead
+  // of letting Chart.js draw its own floating tooltip box (which follows
+  // the cursor/touch point and ends up covering the very line segment
+  // you're looking at), this writes the hovered point's time + value into
+  // a fixed element in the chart's own header, and reverts to the plain
+  // unit text once nothing is hovered. `enabled:false` + `external` is
+  // Chart.js's documented pattern for fully custom tooltip rendering — it
+  // still computes tooltipModel/dataPoints each hover, it just skips its
+  // own canvas draw. The point itself keeps its hover highlight regardless
+  // (pointHoverRadius is driven by core interaction, not this plugin).
+  function chartReadoutHandler(readoutElId, unit){
+    return function(context){
+      const el = document.getElementById(readoutElId);
+      if (!el) return;
+      const tm = context.tooltip;
+      const dp = tm && tm.dataPoints && tm.dataPoints[0];
+      if (!tm || tm.opacity === 0 || !dp || dp.parsed.y === null || dp.parsed.y === undefined){
+        el.textContent = unit; // hover-out: revert to the plain unit label
+        return;
+      }
+      el.textContent = formatFull(dp.parsed.x, true) + ' \u00b7 ' + dp.parsed.y.toFixed(1) + unit;
+    };
+  }
+
   // ---------- chart ----------
   // Temperature and humidity render as two fully separate boxed charts,
   // each with its own axis, rather than a combined dual-axis chart or a
   // shared-axis pair. They still track the same time window together:
   // syncOtherChart()/onViewChanged() mirror pan/zoom from whichever chart
   // the user drags onto the other, so scrolling one scrolls both.
-  function buildSeriesChart(canvasId, color, bg, seriesLabel, unit, showXLabels){
+  function buildSeriesChart(canvasId, color, bg, seriesLabel, unit, showXLabels, readoutElId){
     const ctx = document.getElementById(canvasId).getContext('2d');
     return new Chart(ctx, {
       type: 'line',
@@ -1062,26 +1200,26 @@
           pointHoverBackgroundColor: color, borderWidth: 2, fill: false, parsing: false
         }]
       },
-      plugins: [gapShadingPlugin],
+      plugins: [gapShadingPlugin, dayNightStripPlugin],
       options: {
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
         interaction: { mode: 'index', intersect: false },
+        // Reserves blank space below the x-axis for the day/night strip.
+        // Chart.js never draws into layout padding itself, so this is
+        // otherwise-unused space the plugin's afterDraw can paint into.
+        layout: { padding: { bottom: showXLabels ? DAYNIGHT_RESERVED_BOTTOM : 0 } },
         plugins: {
           legend: { display: false },
           gapShading: { gaps: [] },
           tooltip: {
-            backgroundColor: '#151B23', borderColor: '#232C38', borderWidth: 1,
-            titleColor: '#E7EBF1', bodyColor: '#E7EBF1',
+            enabled: false,
+            external: chartReadoutHandler(readoutElId, unit),
             // The gap-break marker points (bucketize()'s null-y inserts) have
             // no real reading to show — filter them out rather than crash on
-            // item.parsed.y.toFixed(1) or show a blank "· °C" line.
-            filter: (item) => item.parsed.y !== null,
-            callbacks: {
-              title: (items) => items.length ? formatFull(items[0].parsed.x, true) : '',
-              label: (item) => seriesLabel + ': ' + item.parsed.y.toFixed(1) + unit
-            }
+            // item.parsed.y.toFixed(1) or show a blank readout.
+            filter: (item) => item.parsed.y !== null
           },
           zoom: {
             limits: { x: { min: 0, minRange: MIN_DOMAIN_MS } },
@@ -1114,8 +1252,8 @@
 
   function ensureChart(){
     if (chartTemp && chartHum) return;
-    chartTemp = buildSeriesChart('rt-chart-temp', '#FF8A5B', 'rgba(255,138,91,0.08)', 'Temperature', '°C', true);
-    chartHum = buildSeriesChart('rt-chart-hum', '#4FC3E8', 'rgba(79,195,232,0.06)', 'Humidity', '%RH', true);
+    chartTemp = buildSeriesChart('rt-chart-temp', '#FF8A5B', 'rgba(255,138,91,0.08)', 'Temperature', '°C', true, 'temp-readout');
+    chartHum = buildSeriesChart('rt-chart-hum', '#4FC3E8', 'rgba(79,195,232,0.06)', 'Humidity', '%RH', true, 'hum-readout');
   }
 
   // Keeps the chart NOT being dragged/zoomed visually in step with the one
