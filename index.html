@@ -16,6 +16,16 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.11.0 — device-status line now links to /sync-code (the ESP32's page
+  for changing the Ledger sync code without reflashing) alongside the
+  existing /update link. No new fetch needed -- both links are built from
+  the same status.ip that fetchStatus() already pulls from status.json, so
+  neither one depends on mDNS's roomlogger.local, which v2.9.0 already
+  moved away from for being unreliable on Android and (per user report)
+  doesn't resolve from a phone's own browser either. If the device switches
+  networks, both links pick up the new IP on the next status poll same as
+  before -- nothing here is a fixed hostname.
+
   v2.10.0 — two readability changes to the charts themselves (not the
   data pipeline). (1) Hover/tap detail used to render as a Chart.js
   floating tooltip box that followed the cursor/touch point around the
@@ -414,7 +424,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.10.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.11.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -504,7 +514,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.10.0';
+  const APP_VERSION = '2.11.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
@@ -746,6 +756,8 @@
   // host instead, which the firmware now writes on every (re)connect.
   // Fire-and-forget: a failed status fetch should never disturb the main
   // readings/chart UI, so errors are swallowed rather than surfaced.
+  // One status.ip now backs two links (/update, /sync-code) -- add more
+  // device routes here the same way if the firmware grows any.
   async function fetchStatus(){
     const host = getHost();
     if (!host) return;
@@ -755,8 +767,9 @@
       const status = await res.json();
       if (!status || !status.ip) return;
       document.getElementById('device-status').innerHTML =
-        'On <b>' + status.ssid + '</b> — <a href="http://' + status.ip + '/update" target="_blank" rel="noopener">' +
-        status.ip + '/update</a>';
+        'On <b>' + status.ssid + '</b> — ' +
+        '<a href="http://' + status.ip + '/update" target="_blank" rel="noopener">' + status.ip + '/update</a>' +
+        ' · <a href="http://' + status.ip + '/sync-code" target="_blank" rel="noopener">sync code</a>';
       document.getElementById('device-status-row').style.display = '';
     } catch(err){
       // status is a nice-to-have -- silently skip, readings still work
