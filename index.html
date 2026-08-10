@@ -4,6 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Room Logger — Dashboard</title>
+
+<!-- PWA: manifest + icons + iOS's separate (non-manifest-based) install tags -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="icons/favicon-48.png" sizes="48x48" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Room Logger">
+<meta name="mobile-web-app-capable" content="yes">
 <!--
   VERSIONING — read before editing this file.
   Bump the version number below on every edit, big or small — a copy fix
@@ -15,6 +25,29 @@
   Update BOTH of these in the same edit:
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
+
+  v2.12.0 — the dashboard is now installable as a PWA. Added manifest.json
+  (name, icons, standalone display, theme colors matching --bg/--temp/--hum
+  below) and a scoped service worker (sw.js) that precaches manifest.json +
+  the new icons/ set at install time, plus this page and the pinned-version
+  CDN libraries (Chart.js, Hammer.js, the zoom plugin, Google Fonts) as
+  they're fetched -- so the dashboard still opens with no signal, using
+  whatever it last saw.
+  The service worker is deliberately narrow, on purpose: every request to
+  *.firebaseio.com, and every request to the ESP32 device itself
+  (/update, /sync-code, /status.json, /readings.json), is passed straight
+  to the network untouched and never cached. Sensor-data staleness is
+  already the app's own concern (see the "stale" connection state further
+  down) -- a cache getting in the way of that would defeat the point, not
+  help it.
+  New icons/ directory (generated to match the existing accent colors, not
+  hand-drawn) and a handful of new <head> tags (manifest link, theme-color,
+  apple-touch-icon + apple-mobile-web-app-* for iOS's non-standard install
+  path) round it out. sw.js and manifest.json must be deployed in the same
+  directory as this file -- both are referenced by relative path so this
+  still works regardless of what subpath it's hosted under, but service
+  worker registration itself requires HTTPS (or localhost); it will
+  silently no-op over plain HTTP or file://.
 
   v2.11.0 — device-status line now links to /sync-code (the ESP32's page
   for changing the Ledger sync code without reflashing) alongside the
@@ -424,7 +457,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.11.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.12.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -514,7 +547,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.11.0';
+  const APP_VERSION = '2.12.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
@@ -1411,6 +1444,22 @@
 
   // initial load
   fetchReadings();
+</script>
+
+<!-- Kept separate from the app script above on purpose -- this is PWA
+     plumbing, not app logic, and has nothing to do with anything above it. -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch((err) => {
+        // Most likely cause: served over plain HTTP (or file://), where
+        // service workers are refused outright. Non-fatal either way --
+        // the dashboard works the same without one, just without the
+        // installable/offline-shell extras.
+        console.warn('Service worker registration failed:', err);
+      });
+    });
+  }
 </script>
 </body>
 </html>
