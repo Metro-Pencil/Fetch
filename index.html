@@ -8,8 +8,8 @@
 <!-- PWA: manifest + icons + iOS's separate (non-manifest-based) install tags -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0B0F14">
-<link rel="icon" href="icons/favicon-48.png" sizes="48x48" type="image/png">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="favicon-48.png" sizes="48x48" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Room Logger">
@@ -26,10 +26,96 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.16.0 — fixed the PWA not being installable: every icon reference
+  (manifest.json's three icons, index.html's favicon + apple-touch-icon
+  links, sw.js's precache list) pointed at "icons/icon-192.png" etc., but
+  the icon files actually sit flat at the same level as this page, no
+  icons/ subfolder. Every one of those URLs 404'd. Chrome (and other
+  browsers) require at least one fetchable, decodable icon in the
+  manifest before they'll consider a site installable at all -- with
+  every icon reference broken, that check silently failed, so the
+  "Install app" prompt/menu entry never appeared and it just behaved like
+  a normal tab. Dropped the icons/ prefix everywhere to match the actual
+  flat layout. (The v2.12.0 note below describing a "new icons/
+  directory" was wrong from the start -- that's corrected here too.)
+
+  v2.15.0 — the firmware now has an RTC. Readings logged since it went in
+  carry a real Unix-seconds timestamp as their key (confirmed against a
+  real export: matching "t" field, key == t, values in the 1.78-billion
+  range = Aug 2026 — a relative boot counter could only reach that range
+  after 30+ years of continuous uptime). Two separate fixes:
+  
+  1. The live poll (orderBy="$key"&limitToLast=200) could return ZERO RTC
+  readings, full stop, no matter how much time passed. Confirmed against
+  the real dataset: Firebase compares $key as a STRING, and a legacy
+  relative key with a leading digit '2'-'9' (e.g. "99086") always
+  string-sorts above every absolute key (10 digits, currently all
+  starting with '1', e.g. "1786693985") — first-character comparison
+  settles it regardless of actual numeric size. limitToLast=200 by $key
+  came back as 200 legacy readings and 0 RTC ones. Switched both the live
+  poll and backward paging to orderBy="t" instead — a real JSON number on
+  RTC-era readings (and present as key+1 on most pre-RTC ones too),
+  ordered correctly by Firebase regardless of digit count. (Add
+  `.indexOn: ["t"]` under /readings in your Firebase rules if you haven't
+  — works without it, just logs an unindexed-query warning as the
+  dataset grows.)
+  
+  2. Separately, all of v2.14.0's anchoring/restart-detection machinery
+  is now scoped to ONLY relative (pre-RTC) keys, via
+  ABSOLUTE_EPOCH_THRESHOLD_S. A key at or above that threshold is real
+  wall-clock time and gets epochMs = key * 1000 directly in
+  parseEntries(), full stop — no anchoring, no scale detection, no
+  restart heuristics, because none of that is needed or correct for a
+  value that's already a true timestamp. Without this, the moment an RTC
+  reading landed in the same batch as old relative data, its ~1.78-billion
+  key would've been treated as "the newest boot-relative counter value
+  ever seen," anchoring every relative reading against a number ~56
+  years too big. latestEntry() already picks by epochMs (v2.14.0), so
+  once an RTC reading exists it's correctly recognized as the true latest
+  without any further change there.
+
+  v2.14.0 — fixed the "impossible" timestamp bug: a reading taken BEFORE
+  an outage (WiFi drop, brownout, watchdog reset -- anything that restarts
+  the ESP32) could render as if it were seconds old. Root cause: a restart
+  resets millis() to ~0, so the new session's keys stay smaller than the
+  old session's peak for a while after reconnecting. The live-poll
+  re-anchor condition only fired on a BIGGER key than before, so
+  anchorNewestKey/anchorNowMs stayed pinned to their pre-outage values
+  through the whole outage, and every post-restart reading (small key,
+  still <= that frozen anchor) got anchored as if the same continuous
+  counter had just kept ticking -- silently erasing the outage from the
+  math and letting a stale reading masquerade as current. Added a second,
+  live-poll-only counter (sessionPeakKey) whose only job is detecting that
+  regression (a live poll's newest key coming in LOWER than a previously
+  confirmed live key, which can only happen via a restart) and forcing an
+  immediate re-anchor onto the new session when it happens, instead of
+  waiting for its keys to numerically climb back past the old session's
+  peak. Also: latestEntry() picked the reading with the biggest raw key,
+  which is the same bug in miniature (a cached pre-restart reading's key
+  can outrank the new session's for a while) -- it now picks by
+  reconstructed epochMs instead. Separately, the connection LED could sit
+  on green ("firebase reachable") through an entire sensor-side outage,
+  because lastFetchOk refreshed on every successful Firebase round-trip
+  regardless of whether the round-trip contained anything new -- Firebase
+  itself stays reachable independent of whether the ESP32 is. The
+  staleness sweep now checks lastNewDataMs (last genuinely new reading)
+  instead, so "no recent readings" fires when the sensor actually goes
+  quiet.
+
+  v2.13.0 — device-status line now also links to /wifi, /credentials
+  ("login"), and /firebase, alongside the existing /update and /sync-code
+  links -- every GET-able admin page the firmware serves, not just the two
+  it happened to grow first. Same pattern as v2.11.0: all five are built
+  from status.ip, so none of them depend on mDNS and all five pick up a
+  new IP on the next status poll if the device switches networks. The
+  firmware's two POST-only action routes (/wifi/remove,
+  /filesystem/format) are deliberately not linked here -- they're not
+  pages, just endpoints those pages' own forms submit to.
+
   v2.12.0 — the dashboard is now installable as a PWA. Added manifest.json
   (name, icons, standalone display, theme colors matching --bg/--temp/--hum
   below) and a scoped service worker (sw.js) that precaches manifest.json +
-  the new icons/ set at install time, plus this page and the pinned-version
+  the icon set at install time, plus this page and the pinned-version
   CDN libraries (Chart.js, Hammer.js, the zoom plugin, Google Fonts) as
   they're fetched -- so the dashboard still opens with no signal, using
   whatever it last saw.
@@ -40,7 +126,7 @@
   already the app's own concern (see the "stale" connection state further
   down) -- a cache getting in the way of that would defeat the point, not
   help it.
-  New icons/ directory (generated to match the existing accent colors, not
+  Icon files (generated to match the existing accent colors, not
   hand-drawn) and a handful of new <head> tags (manifest link, theme-color,
   apple-touch-icon + apple-mobile-web-app-* for iOS's non-standard install
   path) round it out. sw.js and manifest.json must be deployed in the same
@@ -457,7 +543,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.12.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.16.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -547,7 +633,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.12.0';
+  const APP_VERSION = '2.16.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
@@ -585,6 +671,11 @@
   let userHasInteracted = false;
   let latestReadingEpoch = null;
   let lastFetchOk = null;
+  // sessionPeakKey / lastNewDataMs (v2.14.0) -- see the "restart detection"
+  // block near fetchReadings() for why these are tracked separately from
+  // anchorNewestKey/lastFetchOk.
+  let sessionPeakKey = null;   // highest raw key seen in any LIVE poll so far
+  let lastNewDataMs = null;    // wall-clock time we last saw a genuinely new reading
   let chartTemp = null;
   let chartHum = null;
   let autoTimer = null;
@@ -600,9 +691,18 @@
   }
   function invalidateSorted(){ sortedCache = null; }
 
+  // "Latest" means most recent in REAL time (epochMs), not the reading
+  // with the biggest raw counter value. Those two usually agree, but not
+  // right after a restart: getValidSorted() is sorted by raw key, and a
+  // still-cached pre-restart reading can carry a bigger key than anything
+  // the new (post-restart) session has produced yet, even though it's
+  // chronologically older. Picking sorted[last] would silently show that
+  // stale reading as "current." Picking the max epochMs instead is correct
+  // regardless of which session happens to have bigger raw keys.
   function latestEntry(){
     const sorted = getValidSorted();
-    return sorted.length ? sorted[sorted.length - 1] : null;
+    if (!sorted.length) return null;
+    return sorted.reduce((latest, e) => (e.epochMs > latest.epochMs ? e : latest), sorted[0]);
   }
 
   // ---------- time formatting (all 12-hour, explicit AM/PM) ----------
@@ -721,6 +821,18 @@
   // rather than guess, anchorEpoch() excludes (null) any reading whose
   // key exceeds the current session's newest key.
   //
+  // That handles an OLD session's leftover big keys once the anchor has
+  // already moved on to a new session. It does not, by itself, get the
+  // anchor to actually move on promptly: right after a restart, the new
+  // session's keys start small and stay smaller than the old
+  // anchorNewestKey for a while, so nothing here would trigger a
+  // re-anchor on its own -- the anchor would stay pinned to the dead
+  // session, and the live new readings would get anchored AS IF they
+  // were still part of the old session's continuous count (see
+  // sessionPeakKey / the "restart detection" block in fetchReadings(),
+  // added in v2.14.0, for the piece that actually detects the reboot and
+  // forces the anchor to move).
+  //
   // A real fix for all of this means adding NTP sync in the firmware so
   // each reading carries its own true timestamp; everything here is a
   // best-effort mitigation on the data we're actually given.
@@ -749,15 +861,29 @@
   }
 
   function anchorEpoch(key){
-    if (key > anchorNewestKey) return null;
+    // RTC-stamped reading: real Unix seconds, not a boot-relative counter.
+    // parseEntries() already sets these entries' epochMs directly and this
+    // function normally never gets called on them, but every call site is
+    // guarded here too so this stays correct even if that ever changes.
+    if (isAbsoluteKey(key)) return key * 1000;
+    if (anchorNewestKey === null || key > anchorNewestKey) return null;
     return anchorNowMs - (anchorNewestKey - key) * keyScaleToMs;
   }
   function setAnchor(newestKey){
+    // newestKey is always a relative (boot-counter) key — see
+    // fetchReadings(), which computes it only from the non-absolute subset
+    // of each poll. Absolute (RTC) entries already carry a real epochMs
+    // from parseEntries() and must never be recomputed here, since running
+    // them through the relative-counter formula below (which assumes every
+    // key shares one continuous boot-relative counter) would compare a
+    // real Unix timestamp against a small boot-relative number and produce
+    // a nonsense date decades in the past.
     anchorNewestKey = newestKey;
     anchorNowMs = Date.now();
-    keyScaleToMs = detectKeyScale(getSorted());
+    keyScaleToMs = detectKeyScale(getSorted().filter(e => !isAbsoluteKey(e.key)));
     staleFromPriorBoot = 0;
     getSorted().forEach(e => {
+      if (isAbsoluteKey(e.key)) return;
       e.epochMs = anchorEpoch(e.key);
       if (e.epochMs === null) staleFromPriorBoot++;
     });
@@ -776,10 +902,33 @@
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }
+  // v2.15.0 — the firmware got a real RTC. Readings logged since then carry
+  // an actual Unix-seconds timestamp as their key (and a matching "t"
+  // field) instead of "seconds since this boot". A real timestamp is
+  // unmistakably NOT a boot-relative counter: continuous uptime would need
+  // to run for 30+ years to reach a value in this range, so any key at or
+  // above ABSOLUTE_EPOCH_THRESHOLD_S is real wall-clock time, full stop —
+  // no anchoring, no guessing, no restart-detection heuristics apply to it.
+  // Older, still-cached readings from before the RTC went in keep using
+  // the relative-counter reconstruction below; the two are never mixed
+  // into the same math. Threshold is Unix seconds for 2001-09-09, comfortably
+  // below any realistic RTC-stamped reading and comfortably above any
+  // realistic relative counter.
+  const ABSOLUTE_EPOCH_THRESHOLD_S = 1e9;
+  function isAbsoluteKey(key){
+    return key >= ABSOLUTE_EPOCH_THRESHOLD_S;
+  }
   function parseEntries(data){
     if (!data) return [];
     return Object.entries(data)
-      .map(([key, v]) => ({ key: Number(key), temp: Number(v.temp), hum: Number(v.hum) }))
+      .map(([key, v]) => {
+        const k = Number(key);
+        const e = { key: k, temp: Number(v.temp), hum: Number(v.hum) };
+        // RTC-stamped reading: epochMs is a known fact, not an estimate.
+        // Set it now so it's never touched by the anchoring code below.
+        if (isAbsoluteKey(k)) e.epochMs = k * 1000;
+        return e;
+      })
       .filter(e => !isNaN(e.key) && !isNaN(e.temp) && !isNaN(e.hum));
   }
 
@@ -789,8 +938,12 @@
   // host instead, which the firmware now writes on every (re)connect.
   // Fire-and-forget: a failed status fetch should never disturb the main
   // readings/chart UI, so errors are swallowed rather than surfaced.
-  // One status.ip now backs two links (/update, /sync-code) -- add more
-  // device routes here the same way if the firmware grows any.
+  // status.ip now backs five links (/update, /sync-code, /wifi, /credentials,
+  // /firebase) -- every GET-able admin page the firmware serves. The two
+  // POST-only action routes (/wifi/remove, /filesystem/format) are
+  // deliberately left off, same as the firmware's own "/" index doesn't
+  // link them either -- they're not pages, just endpoints those pages' own
+  // forms submit to.
   async function fetchStatus(){
     const host = getHost();
     if (!host) return;
@@ -802,7 +955,10 @@
       document.getElementById('device-status').innerHTML =
         'On <b>' + status.ssid + '</b> — ' +
         '<a href="http://' + status.ip + '/update" target="_blank" rel="noopener">' + status.ip + '/update</a>' +
-        ' · <a href="http://' + status.ip + '/sync-code" target="_blank" rel="noopener">sync code</a>';
+        ' · <a href="http://' + status.ip + '/sync-code" target="_blank" rel="noopener">sync code</a>' +
+        ' · <a href="http://' + status.ip + '/wifi" target="_blank" rel="noopener">wifi</a>' +
+        ' · <a href="http://' + status.ip + '/credentials" target="_blank" rel="noopener">login</a>' +
+        ' · <a href="http://' + status.ip + '/firebase" target="_blank" rel="noopener">firebase</a>';
       document.getElementById('device-status-row').style.display = '';
     } catch(err){
       // status is a nice-to-have -- silently skip, readings still work
@@ -817,37 +973,110 @@
     fetchStatus(); // rides along with every readings poll, doesn't block it
 
     try{
-      const data = await fbGet(host, 'orderBy=%22$key%22&limitToLast=' + currentFetchLimit);
+      // v2.15.0: order by "t" (a real JSON number on every RTC-era reading,
+      // and still present as key+1 on most pre-RTC ones), not "$key". This
+      // isn't a style choice -- with $key, limitToLast=200 can return ZERO
+      // RTC readings, ever, no matter how much time passes. Firebase
+      // compares $key lexicographically (confirmed against a real export
+      // of this project's data): any legacy relative key with a leading
+      // digit '2'-'9' (e.g. "99086") STRING-sorts above EVERY absolute
+      // Unix-second key (10 digits, currently all starting with '1', e.g.
+      // "1786693985") — '9' > '1' settles it on the first character,
+      // regardless of the actual numeric values. That's not a rare edge
+      // case here: on the real dataset, orderBy="$key"&limitToLast=200
+      // returned 200 legacy readings and 0 RTC ones. "t" doesn't have this
+      // problem because Firebase orders child-VALUE queries by actual
+      // type/number, not string. (If you haven't already, add an
+      // `.indexOn: ["t"]` rule under /readings in your Firebase security
+      // rules -- this still works without one, just with a console warning
+      // about an unindexed query as the dataset grows.)
+      const data = await fbGet(host, 'orderBy=%22t%22&limitToLast=' + currentFetchLimit);
       const fetched = parseEntries(data);
       if (!fetched.length){
         setConnState('stale');
         return;
       }
+      // "New data" = a key we've never fetched before, whether it's an
+      // RTC-stamped absolute reading or a legacy relative one. Checked
+      // before inserting, since entriesByKey.set() below would otherwise
+      // make every key look "already known" by the time we check.
+      const isNewData = fetched.some(e => !entriesByKey.has(e.key));
       fetched.forEach(e => entriesByKey.set(e.key, e));
       invalidateSorted();
 
-      const newestKey = fetched.reduce((m, e) => Math.max(m, e.key), fetched[0].key);
-      // Only re-anchor when a genuinely new reading has arrived. Anchoring
-      // on every poll (even when the newest key hasn't moved) was the bug:
-      // it re-derived every entry's epochMs against a fresh Date.now() each
-      // time, which — during any stretch with no new sensor data — dragged
-      // ALL previously-anchored readings' apparent times forward by ~one
-      // poll interval each cycle. Over several idle polls that compounds
-      // into old readings appearing to bunch up near "now", which is what
-      // was collapsing an hour of data into a handful of chart buckets.
-      if (anchorNewestKey === null || newestKey > anchorNewestKey){
-        setAnchor(newestKey);
-      } else {
-        getSorted().forEach(e => {
-          if (e.epochMs === undefined){
-            e.epochMs = anchorEpoch(e.key);
-            if (e.epochMs === null) staleFromPriorBoot++;
-          }
-        });
-      }
+      // Restart-detection / anchoring only ever applies to relative
+      // (boot-counter) keys — see parseEntries()/ABSOLUTE_EPOCH_THRESHOLD_S.
+      // RTC-stamped readings already have a real epochMs and must be kept
+      // out of this entirely, or a single RTC reading (key ~1.7 billion)
+      // would get treated as "the newest boot-relative key ever seen" and
+      // poison every relative reading's reconstructed time.
+      const relativeFetched = fetched.filter(e => !isAbsoluteKey(e.key));
+      const newestKey = relativeFetched.length
+        ? relativeFetched.reduce((m, e) => Math.max(m, e.key), relativeFetched[0].key)
+        : null;
 
+      // Restart detection (v2.14.0): a genuine device restart resets
+      // millis() to ~0, so the NEXT live poll's newestKey can be smaller
+      // than the peak key we've already confirmed live. That's the one
+      // situation where "smaller key" doesn't mean "already seen, ignore
+      // it" — it means a brand-new session just started, and the anchor
+      // needs to move to it immediately rather than staying pinned to the
+      // old (now-dead) session.
+      //
+      // Without this, here's the failure mode this fixes: device runs for
+      // hours, drops offline (WiFi loss, brownout, watchdog reset -- any
+      // of these can restart it), comes back after an outage of ANY
+      // length, and starts logging again from a small key. That small key
+      // never exceeds the old anchorNewestKey, so the old branch below
+      // never re-anchors -- anchorNewestKey/anchorNowMs stay frozen at
+      // their PRE-outage values, and every entry with key <=
+      // anchorNewestKey (which now includes the entire new session, since
+      // its keys are still small) gets anchored as if it belongs to the
+      // SAME continuous run as the old session. That silently erases the
+      // outage from the math: a reading taken the moment the device came
+      // back online gets timestamped using a key-gap that has nothing to
+      // do with how much real time actually passed, and can land right
+      // next to "now" even though the device was offline for an hour.
+      // sessionPeakKey (tracked only from live polls, unlike
+      // anchorNewestKey which can lag behind on purpose) is what makes the
+      // regression itself detectable: it only ever moves forward within a
+      // session, so any drop is unambiguous.
+      //
+      // newestKey is null whenever this poll returned only RTC-stamped
+      // (absolute) readings and no relative ones — increasingly the norm
+      // as legacy pre-RTC data ages out of the fetch window. There's
+      // nothing to anchor or detect a restart against in that case; the
+      // absolute readings already carry their own real epochMs.
+      if (newestKey !== null){
+        const priorPeak = sessionPeakKey;
+        const restarted = priorPeak !== null && newestKey < priorPeak;
+        sessionPeakKey = restarted ? newestKey : Math.max(priorPeak ?? newestKey, newestKey);
+        if (restarted || anchorNewestKey === null || newestKey > anchorNewestKey){
+          setAnchor(newestKey);
+        }
+      }
+      // Single fill-in pass: covers relative entries that didn't get a
+      // fresh setAnchor() call above (existing anchor still covers them)
+      // and is a no-op for absolute entries, which already have epochMs
+      // set from parseEntries() and so never hit the undefined check.
+      getSorted().forEach(e => {
+        if (e.epochMs === undefined){
+          e.epochMs = anchorEpoch(e.key);
+          if (e.epochMs === null) staleFromPriorBoot++;
+        }
+      });
+
+      // Firebase being reachable and the SENSOR actively reporting are two
+      // different facts -- fetchReadings() can succeed every poll (Firebase
+      // is a separate cloud service, up regardless of whether the ESP32
+      // itself is connected to anything) while the device has been quiet
+      // for an hour. lastFetchOk only ever answered the first question;
+      // lastNewDataMs (used by the staleness sweep below) answers the
+      // second, so "no recent readings" actually fires when the ESP32 goes
+      // quiet instead of only when Firebase itself is unreachable.
       setConnState('online');
       lastFetchOk = Date.now();
+      if (isNewData) lastNewDataMs = Date.now();
 
       const latest = latestEntry();
       renderCurrent(latest);
@@ -865,15 +1094,24 @@
   }
 
   // ---------- backward history loading ----------
-  // Firebase's `$key` ordering compares keys as STRINGS, not numbers. Since
-  // the firmware writes raw millis() as the key (no zero-padding), a bound
-  // like endAt(oldestKey - 1) can't be trusted once key lengths differ
-  // (e.g. "999999" vs "1000000") or after a reboot resets millis() back to
-  // a small number. So instead of paging with startAt/endAt, we just widen
-  // limitToLast and re-fetch — slower for very deep history, but it doesn't
-  // depend on key ordering being numerically correct. A firmware-side fix
-  // (zero-padded keys, or better, NTP-synced epoch timestamps) would let
-  // this page properly instead of re-fetching a growing window.
+  // Firebase's `$key` ordering compares keys as STRINGS, not numbers, which
+  // used to mean a bound like endAt(oldestKey - 1) couldn't be trusted once
+  // key lengths differed (e.g. "999999" vs "1000000") or after a reboot
+  // reset millis() back to a small number. This file used to just widen
+  // limitToLast and re-fetch instead of paging with startAt/endAt, to avoid
+  // depending on key ordering being numerically correct.
+  //
+  // v2.15.0: readings now carry "t", a real Unix-seconds timestamp on RTC
+  // -era data (see the anchoring block above and ABSOLUTE_EPOCH_THRESHOLD_S)
+  // — this is the "firmware-side fix... NTP-synced epoch timestamps" this
+  // comment used to ask for. Ordering by "t" instead of "$key" sidesteps
+  // the string-comparison problem entirely (Firebase orders child-VALUE
+  // queries by actual number, not string), so this now correctly finds the
+  // true newest readings either way. Still widening limitToLast and
+  // re-fetching rather than switching to a real startAt/endAt cursor on
+  // "t" for now — that's a legitimate follow-up optimization once "t" is
+  // universal across the dataset, but re-fetching a growing window is the
+  // lower-risk change today.
   async function fetchOlderPage(){
     if (noMoreHistory || isFetchingOlder) return false;
     const host = getHost();
@@ -886,20 +1124,23 @@
     setLoadingOlder(true);
     try{
       const prevCount = entriesByKey.size;
-      const data = await fbGet(host, 'orderBy=%22$key%22&limitToLast=' + nextLimit);
+      const data = await fbGet(host, 'orderBy=%22t%22&limitToLast=' + nextLimit);
       const fetched = parseEntries(data);
       fetched.forEach(e => { if (!entriesByKey.has(e.key)) entriesByKey.set(e.key, e); });
       invalidateSorted();
       currentFetchLimit = nextLimit;
 
-      if (anchorNewestKey !== null){
-        getSorted().forEach(e => {
-          if (e.epochMs === undefined){
-            e.epochMs = anchorEpoch(e.key);
-            if (e.epochMs === null) staleFromPriorBoot++;
-          }
-        });
-      }
+      // anchorEpoch() handles both cases on its own: absolute (RTC) keys
+      // always resolve to a real epochMs regardless of anchor state, and
+      // relative keys correctly resolve to null (unrecoverable) if no
+      // relative anchor has been set yet — no need to gate this on
+      // anchorNewestKey anymore.
+      getSorted().forEach(e => {
+        if (e.epochMs === undefined){
+          e.epochMs = anchorEpoch(e.key);
+          if (e.epochMs === null) staleFromPriorBoot++;
+        }
+      });
       const gained = entriesByKey.size - prevCount;
       if (gained === 0) noMoreHistory = true;
       return gained > 0;
@@ -1331,7 +1572,7 @@
     let note = extraNote;
     if (staleFromPriorBoot > 0){
       const staleNote = staleFromPriorBoot + ' reading' + (staleFromPriorBoot === 1 ? '' : 's') +
-        " from before the sensor's last restart excluded (no real clock onboard)";
+        " from before the sensor had a synced clock excluded (can't be placed in real time)";
       note = note ? (note + ' · ' + staleNote) : staleNote;
     }
     if (gaps.length){
@@ -1393,9 +1634,13 @@
   }
   setInterval(updateAgeText, 5000);
 
-  // staleness sweep
+  // staleness sweep -- gated on lastNewDataMs (last genuinely new reading),
+  // not lastFetchOk (last successful Firebase round-trip). Those diverge
+  // exactly when the ESP32 has gone quiet but Firebase itself is still up:
+  // lastFetchOk keeps refreshing every poll either way, which used to keep
+  // the LED green/"reachable" straight through an hour-long sensor outage.
   setInterval(() => {
-    if (lastFetchOk && Date.now() - lastFetchOk > 90000) setConnState('stale');
+    if (lastNewDataMs && Date.now() - lastNewDataMs > 90000) setConnState('stale');
   }, 10000);
 
   // ---------- auto-refresh ----------
@@ -1431,6 +1676,7 @@
     entriesByKey.clear();
     invalidateSorted();
     anchorNewestKey = null; anchorNowMs = null; keyScaleToMs = 1;
+    sessionPeakKey = null; lastNewDataMs = null;
     noMoreHistory = false; currentFetchLimit = PAGE_SIZE;
     userHasInteracted = false; latestReadingEpoch = null;
     document.getElementById('temp-value').innerHTML = '—<span class="unit">°C</span>';

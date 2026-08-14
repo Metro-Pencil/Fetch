@@ -26,11 +26,11 @@ const RUNTIME_CACHE = 'room-logger-runtime-v1';
 // below) rather than guessed at install.
 const PRECACHE_ASSETS = [
   'manifest.json',
-  'icons/icon-192.png',
-  'icons/icon-512.png',
-  'icons/icon-maskable-512.png',
-  'icons/apple-touch-icon.png',
-  'icons/favicon-48.png',
+  'icon-192.png',
+  'icon-512.png',
+  'icon-maskable-512.png',
+  'apple-touch-icon.png',
+  'favicon-48.png',
 ];
 
 // Third-party hosts this page loads scripts/fonts from, by exact version --
