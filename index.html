@@ -26,6 +26,22 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.17.0 — v2.15.0's switch to orderBy="t" needs an ".indexOn": ["t"]
+  rule under /readings in Firebase's security rules to run efficiently,
+  and without that rule Firebase can reject the query outright (HTTP
+  400) instead of just running it slow/unindexed -- confirmed live: the
+  dashboard went from "wrong timestamps" to "fetch failed: HTTP 400, no
+  data at all," a strictly worse failure mode than what v2.15.0 was
+  fixing. Added fetchReadingsPage(): tries the "t"-ordered query first,
+  and transparently falls back to the old $key-ordered query (widened
+  past FALLBACK_KEY_LIMIT to outrun the string-ordering problem
+  described near ABSOLUTE_EPOCH_THRESHOLD_S) if that fails for any
+  reason, so the dashboard works either way -- it's just more efficient
+  once the index rule is added. Both fetchReadings() and
+  fetchOlderPage() now go through it instead of calling fbGet()
+  directly. The earlier v2.15.0 note claiming a missing index "still
+  works, just with a console warning" was wrong -- corrected here.
+
   v2.16.0 — fixed the PWA not being installable: every icon reference
   (manifest.json's three icons, index.html's favicon + apple-touch-icon
   links, sw.js's precache list) pointed at "icons/icon-192.png" etc., but
@@ -543,7 +559,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.16.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.17.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -633,12 +649,17 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.16.0';
+  const APP_VERSION = '2.17.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
   const PAGE_SIZE = 200;          // initial fetch size
   const MAX_FETCH_LIMIT = 50000;  // hard ceiling on how much history one session will pull in
+  // Floor for the $key-ordered fallback query (see fetchReadingsPage()) --
+  // wide enough to outrun every pre-RTC legacy reading's raw key even
+  // though $key string-ordering ranks them above RTC-era keys, without
+  // guessing at exactly how many legacy readings exist.
+  const FALLBACK_KEY_LIMIT = 1500;
   const TARGET_POINTS = 400;      // rendered points per view before bucket-averaging kicks in.
                                    // ESP reads once every 60s, so this stays raw (1 pt/reading)
                                    // up to ~6-7h spans, and averages progressively harder beyond
@@ -902,6 +923,30 @@
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }
+
+  // v2.17.0 — orderBy="t" (see the ABSOLUTE_EPOCH_THRESHOLD_S comment
+  // below for why it replaced orderBy="$key") needs an ".indexOn": ["t"]
+  // rule under /readings in Firebase's security rules. Without that rule,
+  // Firebase doesn't just run the query unindexed and slow — it can flat
+  // out reject it with HTTP 400, which is a much worse failure than the
+  // bug this was fixing: an outright "fetch failed", not just wrong
+  // timestamps. So this always tries the indexed-preferred "t" query
+  // first, and transparently falls back to the old $key-ordered query
+  // (widened past FALLBACK_KEY_LIMIT to outrun the string-ordering
+  // problem — see the fetchOlderPage() comment) if that fails for any
+  // reason. The app works either way; it's just more efficient once the
+  // index rule is added. To add it, in the Firebase console under
+  // Realtime Database -> Rules, merge in:
+  //   { "rules": { "readings": { ".indexOn": ["t"] } } }
+  async function fetchReadingsPage(host, limit){
+    try {
+      return await fbGet(host, 'orderBy=%22t%22&limitToLast=' + limit);
+    } catch (err) {
+      console.warn('orderBy="t" query failed (' + err.message + '), falling back to $key ordering. ' +
+        'Add {"rules":{"readings":{".indexOn":["t"]}}} to your Firebase rules to fix this properly.');
+      return await fbGet(host, 'orderBy=%22$key%22&limitToLast=' + Math.max(limit, FALLBACK_KEY_LIMIT));
+    }
+  }
   // v2.15.0 — the firmware got a real RTC. Readings logged since then carry
   // an actual Unix-seconds timestamp as their key (and a matching "t"
   // field) instead of "seconds since this boot". A real timestamp is
@@ -986,11 +1031,12 @@
       // case here: on the real dataset, orderBy="$key"&limitToLast=200
       // returned 200 legacy readings and 0 RTC ones. "t" doesn't have this
       // problem because Firebase orders child-VALUE queries by actual
-      // type/number, not string. (If you haven't already, add an
-      // `.indexOn: ["t"]` rule under /readings in your Firebase security
-      // rules -- this still works without one, just with a console warning
-      // about an unindexed query as the dataset grows.)
-      const data = await fbGet(host, 'orderBy=%22t%22&limitToLast=' + currentFetchLimit);
+      // type/number, not string. This DOES need an ".indexOn": ["t"] rule
+      // under /readings in Firebase's security rules to run efficiently --
+      // and can return HTTP 400 without one rather than just running slow
+      // (see fetchReadingsPage(), v2.17.0, for the fallback that handles
+      // that either way).
+      const data = await fetchReadingsPage(host, currentFetchLimit);
       const fetched = parseEntries(data);
       if (!fetched.length){
         setConnState('stale');
@@ -1124,7 +1170,7 @@
     setLoadingOlder(true);
     try{
       const prevCount = entriesByKey.size;
-      const data = await fbGet(host, 'orderBy=%22t%22&limitToLast=' + nextLimit);
+      const data = await fetchReadingsPage(host, nextLimit);
       const fetched = parseEntries(data);
       fetched.forEach(e => { if (!entriesByKey.has(e.key)) entriesByKey.set(e.key, e); });
       invalidateSorted();
