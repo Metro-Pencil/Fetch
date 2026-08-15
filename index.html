@@ -26,6 +26,25 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.18.0 — fixed backward/pan-to-load-older history silently refusing to
+  load more, sometimes on the very first attempt. Root cause: the
+  v2.17.0 fallback bumps its OWN fetch size up to FALLBACK_KEY_LIMIT
+  whenever it engages, which can be bigger than whatever limit the
+  caller nominally asked for — but fetchReadingsPage() only ever
+  returned the data, not what limit actually got used, so
+  currentFetchLimit kept tracking the small nominal number while
+  entriesByKey silently held far more. Reproduced end to end: with no
+  ".indexOn" rule set (so every poll's "t" query 400s and falls back),
+  a 9000-reading dataset loaded 1500 readings on the very first live
+  poll, currentFetchLimit stayed at 200, and the first fetchOlderPage()
+  call asked for 400 -- fewer than what was already cached -- got 0
+  new readings back, and permanently set noMoreHistory = true with
+  7500 readings still sitting in Firebase, unreachable for the rest of
+  the session. fetchReadingsPage() now returns { data, limitUsed }, and
+  both fetchReadings() and fetchOlderPage() set currentFetchLimit from
+  limitUsed (never smaller than what was requested), so it can never
+  under-report how much has actually been fetched.
+
   v2.17.0 — v2.15.0's switch to orderBy="t" needs an ".indexOn": ["t"]
   rule under /readings in Firebase's security rules to run efficiently,
   and without that rule Firebase can reject the query outright (HTTP
@@ -559,7 +578,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.17.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.18.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -649,7 +668,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.17.0';
+  const APP_VERSION = '2.18.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
@@ -938,13 +957,29 @@
   // index rule is added. To add it, in the Firebase console under
   // Realtime Database -> Rules, merge in:
   //   { "rules": { "readings": { ".indexOn": ["t"] } } }
+  //
+  // Returns { data, limitUsed } rather than just data — limitUsed can be
+  // BIGGER than the requested limit whenever the fallback engages (it's
+  // widened to at least FALLBACK_KEY_LIMIT regardless of what was asked
+  // for). Callers MUST use limitUsed, not the limit they passed in, to
+  // update currentFetchLimit. Without that (this was a real bug, found
+  // v2.18.0): every poll silently over-fetches while the index is
+  // missing, but currentFetchLimit keeps tracking the small nominal
+  // number -- so the first-ever "load older" call doubles from that
+  // stale small number, asks for FEWER entries than are already cached,
+  // gets zero new ones back, and permanently sets noMoreHistory = true
+  // on the very first pan-to-the-edge, even with thousands of readings
+  // still unloaded.
   async function fetchReadingsPage(host, limit){
     try {
-      return await fbGet(host, 'orderBy=%22t%22&limitToLast=' + limit);
+      const data = await fbGet(host, 'orderBy=%22t%22&limitToLast=' + limit);
+      return { data, limitUsed: limit };
     } catch (err) {
       console.warn('orderBy="t" query failed (' + err.message + '), falling back to $key ordering. ' +
         'Add {"rules":{"readings":{".indexOn":["t"]}}} to your Firebase rules to fix this properly.');
-      return await fbGet(host, 'orderBy=%22$key%22&limitToLast=' + Math.max(limit, FALLBACK_KEY_LIMIT));
+      const fallbackLimit = Math.max(limit, FALLBACK_KEY_LIMIT);
+      const data = await fbGet(host, 'orderBy=%22$key%22&limitToLast=' + fallbackLimit);
+      return { data, limitUsed: fallbackLimit };
     }
   }
   // v2.15.0 — the firmware got a real RTC. Readings logged since then carry
@@ -1036,7 +1071,8 @@
       // and can return HTTP 400 without one rather than just running slow
       // (see fetchReadingsPage(), v2.17.0, for the fallback that handles
       // that either way).
-      const data = await fetchReadingsPage(host, currentFetchLimit);
+      const { data, limitUsed } = await fetchReadingsPage(host, currentFetchLimit);
+      currentFetchLimit = Math.max(currentFetchLimit, limitUsed);
       const fetched = parseEntries(data);
       if (!fetched.length){
         setConnState('stale');
@@ -1170,11 +1206,11 @@
     setLoadingOlder(true);
     try{
       const prevCount = entriesByKey.size;
-      const data = await fetchReadingsPage(host, nextLimit);
+      const { data, limitUsed } = await fetchReadingsPage(host, nextLimit);
       const fetched = parseEntries(data);
       fetched.forEach(e => { if (!entriesByKey.has(e.key)) entriesByKey.set(e.key, e); });
       invalidateSorted();
-      currentFetchLimit = nextLimit;
+      currentFetchLimit = Math.max(nextLimit, limitUsed);
 
       // anchorEpoch() handles both cases on its own: absolute (RTC) keys
       // always resolve to a real epochMs regardless of anchor state, and
