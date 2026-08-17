@@ -26,6 +26,55 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.19.1 — two correctness fixes to v2.19.0's weather overlay, both found
+  by re-deriving the /forecast and /archive URLs against Open-Meteo's real
+  docs and exercising fetchAndMergeWeather() with a mocked fetch instead of
+  just reading the code back: (1) the "how many days of history to
+  request" math had Math.min/Math.max backwards -- forecastStart used
+  Math.min(startMs, recentCutoff), which for any span under 90 days always
+  evaluated to recentCutoff regardless of what was actually visible, so
+  every ordinary view (24h, 3d, 2w, 3mo) was silently requesting a full 90
+  days of hourly data from Open-Meteo on every fetch instead of just the
+  span on screen. Fixed to Math.max, which correctly clamps to whichever
+  is more recent. (2) fetchAndMergeWeather() used Promise.all() across the
+  /forecast and /archive calls, so a transient failure of either endpoint
+  discarded whatever the OTHER one successfully returned; switched to
+  Promise.allSettled(), and weatherCache's minMs/maxMs are now derived
+  from the actual first/last timestamps of the merged data rather than
+  the requested startMs/endMs -- otherwise a failed leg with no prior
+  cache for that location would fall back to claiming the full requested
+  span was covered even though it wasn't, and weatherCovers() would never
+  retry the missing portion.
+
+  v2.19.0 — added a faint outdoor reference line to both charts, pulled
+  from Open-Meteo (free, keyless, CORS-friendly — good fit for a static
+  page with no backend of its own). Off by default behind a new "Compare
+  with outdoor weather" switch, since turning it on asks the browser for
+  the device's location; an optional "lat,lon" field overrides that if
+  geolocation is denied or the phone isn't physically at the room being
+  logged. Each of the two charts gained a second Chart.js dataset (styled
+  thin/dashed/grey to read as background context, never competing with
+  the real sensor line) rather than a third chart, so pan/zoom/sync
+  behavior didn't need touching. That did require switching both charts'
+  tooltip interaction from mode:'index' to mode:'x' — 'index' matches
+  datasets by raw array position, which silently breaks the moment two
+  datasets have different point counts (sensor: per-minute; outdoor:
+  hourly); 'x' matches by actual pixel position along the time axis
+  instead, so each dataset resolves its own nearest point independently.
+  Data comes from Open-Meteo's /forecast endpoint (past_days, covers the
+  last 90 days plus the current hour) for anything the visible range
+  reaches within the last 90 days, falling back to /archive (full
+  history, but a few days of lag) for the older portion of the '1y'/
+  'all' ranges — the only two RANGE_DEFS entries that reach past 90 days.
+  Fetched hourly points are cached client-side (weatherCache, keyed by
+  lat/lon) and merged across calls rather than replaced, since weather
+  history doesn't change once recorded; only the current-hour edge
+  re-fetches periodically (WEATHER_REFRESH_MS) while the visible window
+  still reaches "now". Kept out of sw.js's precache and IndexedDB
+  entirely — this is a nice-to-have overlay, not core logged data, so a
+  failed/offline weather fetch degrades to just not showing the line
+  rather than blocking or corrupting anything else.
+
   v2.18.0 — fixed backward/pan-to-load-older history silently refusing to
   load more, sometimes on the very first attempt. Root cause: the
   v2.17.0 fallback bumps its OWN fetch size up to FALLBACK_KEY_LIMIT
@@ -564,6 +613,10 @@
   .switch.on{background:rgba(74,222,128,0.15);border-color:var(--ok);}
   .switch.on .knob{transform:translateX(15px);background:var(--ok);}
 
+  .weather-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--muted);font-family:var(--mono);}
+  .weather-row input[type=text]{flex:1 1 200px;width:auto;}
+  .weather-status{margin-top:6px;}
+
   @media (max-width:380px){
     body{padding:18px 12px 40px;}
     .card{padding:14px;}
@@ -578,7 +631,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.18.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.19.1</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -628,6 +681,13 @@
       </select>
     </div>
 
+    <div class="field-row weather-row">
+      <div class="switch" id="weather-switch" onclick="toggleWeather()"><div class="knob"></div></div>
+      <span>Compare with outdoor weather</span>
+      <input type="text" id="weather-loc" placeholder="auto (device location) — or lat,lon" autocomplete="off">
+    </div>
+    <div class="chart-hint weather-status" id="weather-status" style="display:none;"></div>
+
     <div class="chart-wrap">
       <div class="chart-head">
         <span class="chart-caption" id="chart-caption">—</span>
@@ -646,6 +706,7 @@
       </div>
       <div class="chart-hint">Drag to scroll through time · pinch or scroll to zoom · charts stay in sync</div>
       <div class="chart-hint"><span class="dn-swatch day"></span>day (6am–6pm)<span class="dn-swatch night" style="margin-left:10px;"></span>night — shaded band under each chart's axis</div>
+      <div class="chart-hint"><span class="dn-swatch" style="background:rgba(148,163,184,0.65);"></span>faint dashed line — outdoor reading via Open-Meteo, nearest hour (enable above)</div>
     </div>
 
     <div class="controls-row">
@@ -668,7 +729,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.18.0';
+  const APP_VERSION = '2.19.1';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- constants ----------
@@ -720,6 +781,19 @@
   let chartHum = null;
   let autoTimer = null;
   let viewChangeTimer = null;
+
+  // weather overlay (v2.19.0) -- see the "weather overlay" section below
+  // for the functions that use these.
+  const WEATHER_RECENT_LIMIT_DAYS = 90; // stay under /forecast's 92-day past_days ceiling
+  const WEATHER_MAX_POINTS = 400;       // matches TARGET_POINTS -- no need to out-render the sensor charts
+  const WEATHER_REFRESH_MS = 10 * 60 * 1000; // don't re-hit the API more than once per 10min for "now"
+  const WEATHER_COLOR = 'rgba(148,163,184,0.65)';
+  const WEATHER_BG = 'rgba(148,163,184,0.06)';
+  let weatherEnabled = false;
+  let weatherLoc = null;          // { lat, lon } once resolved
+  let weatherLocPromise = null;   // in-flight geolocation lookup, shared across callers
+  let weatherCache = null;        // { lat, lon, fetchedAt, minMs, maxMs, temp:[{x,y}], hum:[{x,y}] }
+  let weatherFetchPromise = null; // in-flight cache-extend fetch, so concurrent redraws don't double-fetch
 
   function getHost(){ return document.getElementById('fb-host').value.trim(); }
 
@@ -1542,12 +1616,24 @@
       const el = document.getElementById(readoutElId);
       if (!el) return;
       const tm = context.tooltip;
-      const dp = tm && tm.dataPoints && tm.dataPoints[0];
-      if (!tm || tm.opacity === 0 || !dp || dp.parsed.y === null || dp.parsed.y === undefined){
+      const pts = tm && tm.dataPoints;
+      // datasetIndex 0 is always the real sensor reading; 1 (added v2.19.0)
+      // is the outdoor overlay, present only when the weather switch is on
+      // and a point happens to fall near the hovered time. Found separately
+      // rather than assuming pts[0]/pts[1] line up, since mode:'x' only
+      // includes a dataset's point when one actually exists near the cursor
+      // -- the outdoor series can easily be the one missing.
+      const sensor = pts && pts.find(p => p.datasetIndex === 0);
+      const outdoor = pts && pts.find(p => p.datasetIndex === 1);
+      if (!tm || tm.opacity === 0 || !sensor || sensor.parsed.y === null || sensor.parsed.y === undefined){
         el.textContent = unit; // hover-out: revert to the plain unit label
         return;
       }
-      el.textContent = formatFull(dp.parsed.x, true) + ' \u00b7 ' + dp.parsed.y.toFixed(1) + unit;
+      let text = formatFull(sensor.parsed.x, true) + ' \u00b7 ' + sensor.parsed.y.toFixed(1) + unit;
+      if (outdoor && outdoor.parsed.y !== null && outdoor.parsed.y !== undefined){
+        text += ' (outdoor ' + outdoor.parsed.y.toFixed(1) + unit + ')';
+      }
+      el.textContent = text;
     };
   }
 
@@ -1567,6 +1653,17 @@
           borderColor: color, backgroundColor: bg,
           tension: 0.25, pointRadius: 0, pointHoverRadius: 4,
           pointHoverBackgroundColor: color, borderWidth: 2, fill: false, parsing: false
+        }, {
+          // Outdoor reference line (v2.19.0) -- always present as dataset
+          // index 1 so redrawChart()/updateWeatherOverlay() can address it
+          // directly; sits empty ([]) whenever the weather switch is off or
+          // no location/data is available yet. Styled thin/dashed/faint on
+          // purpose so it reads as background context, never competing
+          // visually with the real sensor line.
+          label: 'Outdoor', data: [],
+          borderColor: WEATHER_COLOR, backgroundColor: WEATHER_BG, borderDash: [5, 3],
+          tension: 0.25, pointRadius: 0, pointHoverRadius: 3,
+          pointHoverBackgroundColor: WEATHER_COLOR, borderWidth: 1.25, fill: false, parsing: false
         }]
       },
       plugins: [gapShadingPlugin, dayNightStripPlugin],
@@ -1574,7 +1671,16 @@
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
-        interaction: { mode: 'index', intersect: false },
+        // mode:'x' (not 'index'): 'index' resolves by matching raw ARRAY
+        // POSITION across datasets, which only works when every dataset is
+        // the same length -- true here until the outdoor dataset above
+        // (hourly, far sparser than the per-minute sensor data) got added.
+        // 'x' instead finds each dataset's own nearest point to the hovered
+        // time pixel independently, so the two series stay correctly
+        // aligned regardless of point-count mismatch. Behaves identically
+        // to the old 'index' for a single dataset, so this is a no-op for
+        // everything that isn't the new overlay.
+        interaction: { mode: 'x', intersect: false },
         // Reserves blank space below the x-axis for the day/night strip.
         // Chart.js never draws into layout padding itself, so this is
         // otherwise-unused space the plugin's afterDraw can paint into.
@@ -1647,10 +1753,20 @@
     const { tempPoints, humPoints, avgPerPoint, gaps, pointCount } = bucketize(sorted, rangeStart, rangeEnd);
     chartTemp.data.datasets[0].data = tempPoints;
     chartHum.data.datasets[0].data = humPoints;
+    const weather = weatherOverlayPoints(rangeStart, rangeEnd);
+    chartTemp.data.datasets[1].data = weather.tempPoints;
+    chartHum.data.datasets[1].data = weather.humPoints;
     chartTemp.options.plugins.gapShading.gaps = gaps;
     chartHum.options.plugins.gapShading.gaps = gaps;
     chartTemp.update('none');
     chartHum.update('none');
+    // Fire-and-forget: makes sure the cache actually covers what was just
+    // drawn, fetching/extending it if not. Never awaited here -- redrawChart
+    // must stay synchronous (called from live polls, pan/zoom, range
+    // switches) and a missing/stale weather cache should never block or
+    // delay the real sensor chart. It redraws just the overlay itself
+    // (redrawWeatherOnly()) once new data actually lands.
+    updateWeatherOverlay(rangeStart, rangeEnd);
     let note = extraNote;
     if (staleFromPriorBoot > 0){
       const staleNote = staleFromPriorBoot + ' reading' + (staleFromPriorBoot === 1 ? '' : 's') +
@@ -1691,6 +1807,247 @@
       }
       redrawChart(chart.scales.x.min, chart.scales.x.max);
     }, 400);
+  }
+
+  // ---------- weather overlay (Open-Meteo) ----------
+  // Faint outdoor reference line (v2.19.0) so the two sensor charts can be
+  // checked against a real weather station -- "is my room actually 4
+  // degrees warmer than outside, or did the DHT22 drift?" Open-Meteo was
+  // picked because it's free, needs no API key, and is CORS-friendly for a
+  // static page with no backend of its own to proxy through.
+  function setWeatherStatus(text){
+    const el = document.getElementById('weather-status');
+    el.textContent = text || '';
+    el.style.display = text ? '' : 'none';
+  }
+
+  // Accepts "lat,lon" typed into the override field. Takes priority over
+  // geolocation whenever non-empty -- lets the field double as "my room
+  // isn't wherever my phone happens to be right now" without needing a
+  // separate on/off control of its own.
+  function manualWeatherLoc(){
+    const raw = document.getElementById('weather-loc').value.trim();
+    if (!raw) return null;
+    const m = raw.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+    return m ? { lat: Number(m[1]), lon: Number(m[2]) } : null;
+  }
+
+  // Cached in weatherLocPromise so a second caller mid-lookup (e.g. both
+  // charts' redraw firing in the same tick) shares the one browser prompt
+  // instead of triggering it twice.
+  function resolveWeatherLoc(){
+    const manual = manualWeatherLoc();
+    if (manual) return Promise.resolve(manual);
+    if (weatherLocPromise) return weatherLocPromise;
+    if (!('geolocation' in navigator)){
+      setWeatherStatus('No device location available — enter "lat,lon" above to enable the outdoor line.');
+      return Promise.resolve(null);
+    }
+    setWeatherStatus('Locating device for outdoor weather…');
+    weatherLocPromise = new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        () => resolve(null),
+        { timeout: 10000, maximumAge: 30 * 60 * 1000 }
+      );
+    });
+    return weatherLocPromise;
+  }
+
+  function dateStr(ms){ return new Date(ms).toISOString().slice(0, 10); }
+
+  async function fetchWeatherJson(url){
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }
+
+  // Both Open-Meteo endpoints are called with timezone=UTC, so hourly.time
+  // strings ("2026-08-17T00:00") are plain UTC clock times with no offset
+  // to resolve -- appending "Z" and parsing is all that's needed to line
+  // them up with the sensor chart's epochMs, no local-timezone guessing.
+  function hourlyToPoints(hourly){
+    const temp = [], hum = [];
+    if (!hourly || !hourly.time) return { temp, hum };
+    for (let i = 0; i < hourly.time.length; i++){
+      const x = Date.parse(hourly.time[i] + 'Z');
+      if (isNaN(x)) continue;
+      const t = hourly.temperature_2m ? hourly.temperature_2m[i] : null;
+      const h = hourly.relative_humidity_2m ? hourly.relative_humidity_2m[i] : null;
+      if (t !== null && t !== undefined) temp.push({ x, y: t });
+      if (h !== null && h !== undefined) hum.push({ x, y: h });
+    }
+    return { temp, hum };
+  }
+
+  // Pulls whatever hourly outdoor data covers [startMs, endMs] and merges
+  // it into weatherCache (deduped by timestamp, kept sorted, never just
+  // replaced -- weather history doesn't change once recorded, so there's
+  // no reason to re-fetch a span already cached). A span within the last
+  // WEATHER_RECENT_LIMIT_DAYS is covered by /forecast alone (fresher, and
+  // the only one of the two with the current hour); anything reaching
+  // further back also pulls /archive for the older portion, since
+  // /forecast's past_days tops out at 92.
+  async function fetchAndMergeWeather(lat, lon, startMs, endMs){
+    const now = Date.now();
+    const recentCutoff = now - WEATHER_RECENT_LIMIT_DAYS * DAY;
+    const sameLoc = weatherCache && weatherCache.lat === lat && weatherCache.lon === lon;
+    const tempMap = new Map(sameLoc ? weatherCache.temp.map(p => [p.x, p.y]) : []);
+    const humMap = new Map(sameLoc ? weatherCache.hum.map(p => [p.x, p.y]) : []);
+
+    const legs = [];
+    if (endMs >= recentCutoff){
+      // How far back the /forecast call needs to reach: never further than
+      // the actual requested startMs (a 24h view should only ask for ~1
+      // day, not 90), and never further than recentCutoff either (anything
+      // older than that is /archive's job, pulled separately below). That's
+      // the LARGER (more recent) of the two -- Math.max, not Math.min.
+      const forecastStart = Math.max(startMs, recentCutoff);
+      const pastDays = Math.min(92, Math.max(1, Math.ceil((now - forecastStart) / DAY)));
+      legs.push({ name: 'forecast', url:
+        'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
+        '&hourly=temperature_2m,relative_humidity_2m&past_days=' + pastDays +
+        '&forecast_days=1&timezone=UTC' });
+    }
+    if (startMs < recentCutoff){
+      legs.push({ name: 'archive', url:
+        'https://archive-api.open-meteo.com/v1/archive?latitude=' + lat + '&longitude=' + lon +
+        '&start_date=' + dateStr(startMs) + '&end_date=' + dateStr(recentCutoff) +
+        '&hourly=temperature_2m,relative_humidity_2m&timezone=UTC' });
+    }
+
+    // allSettled, not all: /forecast and /archive are independent services,
+    // and a transient failure of one shouldn't throw away data the other
+    // one successfully returned (Promise.all would reject the whole thing
+    // on either failing, discarding both).
+    const settled = await Promise.allSettled(legs.map(l => fetchWeatherJson(l.url)));
+    let anyOk = false;
+    settled.forEach((res, i) => {
+      if (res.status === 'fulfilled'){
+        anyOk = true;
+        const pts = hourlyToPoints(res.value.hourly);
+        for (const p of pts.temp) tempMap.set(p.x, p.y);
+        for (const p of pts.hum) humMap.set(p.x, p.y);
+      } else {
+        console.warn('Weather ' + legs[i].name + ' fetch failed:', res.reason && res.reason.message);
+      }
+    });
+    if (!anyOk) throw new Error('all weather requests failed');
+
+    const temp = [...tempMap.entries()].sort((a, b) => a[0] - b[0]).map(([x, y]) => ({ x, y }));
+    const hum = [...humMap.entries()].sort((a, b) => a[0] - b[0]).map(([x, y]) => ({ x, y }));
+    // minMs/maxMs come from what's ACTUALLY in the merged data (its first
+    // and last timestamps -- already sorted, so no need to scan), not from
+    // the requested startMs/endMs. That matters when one leg fails: if
+    // /archive is down while /forecast succeeds, the merged set genuinely
+    // doesn't reach as far back as startMs, and weatherCovers() needs to
+    // see that honestly so it retries the missing portion next time
+    // instead of believing a gap is already covered.
+    const edges = [];
+    if (temp.length) edges.push(temp[0].x, temp[temp.length - 1].x);
+    if (hum.length) edges.push(hum[0].x, hum[hum.length - 1].x);
+    weatherCache = {
+      lat, lon, fetchedAt: now,
+      minMs: edges.length ? Math.min(...edges) : startMs,
+      maxMs: edges.length ? Math.max(...edges) : endMs,
+      temp, hum
+    };
+  }
+
+
+  // True when weatherCache already has what [rangeStart, rangeEnd] needs.
+  // The "still reaches now" freshness check only applies while the visible
+  // window's right edge is recent -- a view parked entirely in the past
+  // never goes stale, since historical weather doesn't change.
+  function weatherCovers(rangeStart, rangeEnd){
+    if (!weatherCache) return false;
+    if (weatherCache.minMs > rangeStart + DAY) return false;
+    if (weatherCache.maxMs < rangeEnd - 2 * 60 * 60 * 1000) return false;
+    if (rangeEnd >= Date.now() - DAY && (Date.now() - weatherCache.fetchedAt) > WEATHER_REFRESH_MS) return false;
+    return true;
+  }
+
+  function downsample(points, maxPoints){
+    if (points.length <= maxPoints) return points;
+    const stride = Math.ceil(points.length / maxPoints);
+    const out = [];
+    for (let i = 0; i < points.length; i += stride) out.push(points[i]);
+    return out;
+  }
+
+  // Reads straight from whatever's already cached -- never triggers a
+  // fetch itself (see updateWeatherOverlay for that), so it's always safe
+  // to call synchronously from redrawChart().
+  function weatherOverlayPoints(rangeStart, rangeEnd){
+    if (!weatherEnabled || !weatherCache) return { tempPoints: [], humPoints: [] };
+    const temp = weatherCache.temp.filter(p => p.x >= rangeStart && p.x <= rangeEnd);
+    const hum = weatherCache.hum.filter(p => p.x >= rangeStart && p.x <= rangeEnd);
+    return { tempPoints: downsample(temp, WEATHER_MAX_POINTS), humPoints: downsample(hum, WEATHER_MAX_POINTS) };
+  }
+
+  // Re-pulls just the overlay datasets from the current cache and repaints
+  // -- used once an async fetch lands, instead of re-running redrawChart()'s
+  // full bucketize() pass (and risking looping back into another fetch).
+  function redrawWeatherOnly(){
+    if (!chartTemp || !chartHum) return;
+    const min = chartTemp.options.scales.x.min, max = chartTemp.options.scales.x.max;
+    const { tempPoints, humPoints } = weatherOverlayPoints(min, max);
+    chartTemp.data.datasets[1].data = tempPoints;
+    chartHum.data.datasets[1].data = humPoints;
+    chartTemp.update('none');
+    chartHum.update('none');
+  }
+
+  // The one entry point redrawChart() calls. Resolves location if needed,
+  // checks whether the cache already covers what's visible, and if not,
+  // fetches -- all without ever blocking the caller (nothing here is
+  // awaited from redrawChart). A failed fetch or denied location just
+  // leaves the overlay empty; it never disturbs the real sensor chart.
+  async function updateWeatherOverlay(rangeStart, rangeEnd){
+    if (!weatherEnabled) return;
+    if (!weatherLoc){
+      const loc = await resolveWeatherLoc();
+      if (!loc){
+        setWeatherStatus('Outdoor line unavailable — location access was denied. Enter "lat,lon" above to set it manually.');
+        return;
+      }
+      weatherLoc = loc;
+      setWeatherStatus('');
+    }
+    if (weatherCovers(rangeStart, rangeEnd)) return;
+    if (weatherFetchPromise){
+      await weatherFetchPromise;
+      redrawWeatherOnly();
+      return;
+    }
+    setWeatherStatus('Loading outdoor weather…');
+    weatherFetchPromise = fetchAndMergeWeather(weatherLoc.lat, weatherLoc.lon, rangeStart, rangeEnd)
+      .catch((err) => {
+        console.warn('Weather fetch failed:', err.message);
+        setWeatherStatus('Outdoor weather unavailable right now.');
+      })
+      .finally(() => { weatherFetchPromise = null; });
+    await weatherFetchPromise;
+    if (weatherCache) setWeatherStatus('');
+    redrawWeatherOnly();
+  }
+
+  function toggleWeather(){
+    const sw = document.getElementById('weather-switch');
+    weatherEnabled = sw.classList.toggle('on');
+    if (!weatherEnabled){
+      setWeatherStatus('');
+      if (chartTemp && chartHum){
+        chartTemp.data.datasets[1].data = [];
+        chartHum.data.datasets[1].data = [];
+        chartTemp.update('none');
+        chartHum.update('none');
+      }
+      return;
+    }
+    if (chartTemp){
+      updateWeatherOverlay(chartTemp.options.scales.x.min, chartTemp.options.scales.x.max);
+    }
   }
 
   // ---------- stat cards ----------
@@ -1753,6 +2110,16 @@
   });
 
   document.getElementById('range-select').addEventListener('change', () => { applyRangeSelection(); });
+
+  // Typing a manual override invalidates whatever location/data is cached
+  // under the old one -- resolveWeatherLoc() picks the new value straight
+  // back up on the next redraw since manualWeatherLoc() is checked first.
+  document.getElementById('weather-loc').addEventListener('change', () => {
+    weatherLoc = null; weatherLocPromise = null; weatherCache = null;
+    if (weatherEnabled && chartTemp){
+      updateWeatherOverlay(chartTemp.options.scales.x.min, chartTemp.options.scales.x.max);
+    }
+  });
 
   document.getElementById('fb-host').addEventListener('change', () => {
     entriesByKey.clear();
