@@ -26,6 +26,68 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.20.0 — restructured into three tabs (Dashboard, Graphs, Terminal)
+  under a new tab bar below the header, and every user-editable field on
+  every tab now survives a reload (localStorage) -- previously only the
+  weather/refresh-interval fields had any memory in the loose sense that a
+  browser's own form-autofill could paper over it, and fb-host in
+  particular (the one field everything else on the page depends on) reset
+  to its hardcoded default on every single visit.
+
+  Dashboard is the new landing tab. Device status (IP, SSID) moved out of
+  its old spot inside the Live Readings card into its own space, and its
+  link list grew from 5 to 10 -- every GET-able page the firmware now
+  serves, not just the ones it happened to have when v2.13.0 last touched
+  this. Added /power-saving, /power-presets, /terminal, /health, and the
+  root index; each is its own labeled tile (name + one-line description)
+  instead of a single dot-separated string, since it's no longer squeezed
+  under a temp/humidity card. A failed status.json fetch used to fail
+  silently (reasonable when it was just a bonus line under the readings) --
+  now surfaced as an actual message on this tab, since here it's the whole
+  point, not a bonus.
+
+  Graphs is everything that used to be the entire page -- readings, both
+  charts, the weather-compare overlay, all of it -- completely unchanged,
+  just moved under a tab. Nothing about v2.14.0 through v2.19.1's fixes
+  (anchoring, RTC/orderBy="t", the pagination fallback, the weather overlay
+  itself) was touched.
+
+  Terminal is an entirely new tab: reads terminal-log lines back from the
+  Cloudflare Worker -- the same one the Ledger app already uses (see
+  worker.js) -- under a separate Worker URL + sync code, since the
+  firmware's own /terminal page deliberately uploads there under its own
+  code rather than through Firebase or the Ledger's code. Worker URL is
+  pre-filled with the known deployed URL; the sync code is left blank,
+  since that's specific to whatever was set on the device's own /terminal
+  page. This tab only ever does GET /sync?code=... -- it has no reason to
+  write, and doesn't: uploading is still entirely the device's own
+  /terminal page's job, from a phone's browser tab, same as before. Lines
+  are sorted by index client-side before rendering rather than trusted as
+  pre-sorted, since the Worker's merge just appends each incoming batch
+  (mergeAdditive() in worker.js) and doesn't guarantee global order if a
+  batch ever lands out of sequence. Auto-refresh mirrors the Graphs tab's
+  existing switch + editable-seconds pattern rather than inventing a new
+  control style.
+
+  Persistence covers every field that wasn't already effectively pinned by
+  a hardcoded default a user would never think to change: fb-host,
+  range-select, weather-loc, both auto-refresh switches and their second
+  counts, and the two new terminal fields. Restoring a switch back to "on"
+  re-arms whatever it actually controls (starts the relevant setInterval,
+  or -- for weather -- just sets weatherEnabled so the normal redraw path
+  picks the overlay up on its own) rather than only restoring its visual
+  state, so a reload genuinely resumes where you left off instead of
+  looking right but doing nothing until re-clicked. Switching to Dashboard
+  or Terminal (or loading the page fresh) also triggers an immediate fetch
+  for that tab, so neither ever opens looking stale on first click.
+
+  sw.js and manifest.json needed no code changes for any of this: the
+  service worker's existing hostname/path rules already send every Worker
+  request straight to the network untouched (falls through its "anything
+  else, leave it alone" branch), and no new same-origin assets were added
+  that would need precaching. manifest.json's description was updated to
+  mention it's no longer just a temp/humidity view.
+
   v2.19.1 — two correctness fixes to v2.19.0's weather overlay, both found
   by re-deriving the /forecast and /archive URLs against Open-Meteo's real
   docs and exercising fetchAndMergeWeather() with a mocked fetch instead of
@@ -617,6 +679,46 @@
   .weather-row input[type=text]{flex:1 1 200px;width:auto;}
   .weather-status{margin-top:6px;}
 
+  /* tab bar */
+  .tabbar{
+    display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border);
+  }
+  .tab-btn{
+    flex:1;background:transparent;border:none;border-bottom:2px solid transparent;
+    border-radius:0;color:var(--muted);font-family:var(--mono);font-weight:600;
+    font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+    padding:0 0 10px;cursor:pointer;transition:color .15s ease, border-color .15s ease;
+  }
+  .tab-btn:active{transform:none;}
+  .tab-btn:hover{color:var(--text);}
+  .tab-btn.active{color:var(--text);border-bottom-color:var(--temp);}
+
+  /* dashboard link tiles */
+  .dash-links{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;}
+  @media (max-width:420px){ .dash-links{grid-template-columns:1fr;} }
+  .link-tile{
+    display:block;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:9px;padding:12px 14px;text-decoration:none;
+    transition:border-color .15s ease;
+  }
+  .link-tile:hover{border-color:var(--muted);}
+  .link-tile-name{font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--text);}
+  .link-tile-desc{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4;}
+  .dash-msg{font-size:12px;color:var(--muted);font-family:var(--mono);margin-top:10px;line-height:1.5;}
+
+  /* terminal */
+  .term-status{font-size:11px;color:var(--muted);font-family:var(--mono);margin-bottom:10px;}
+  .term-status.ok{color:var(--ok);}
+  .term-status.fail{color:var(--err);}
+  .term-status.busy{color:var(--warn);}
+  .term-log{
+    background:var(--panel-2);border:1px solid var(--border);border-radius:9px;
+    padding:12px;height:420px;overflow-y:auto;font-family:var(--mono);
+    font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-all;
+    line-height:1.5;
+  }
+  @media (min-width:600px){ .term-log{height:540px;} }
+
   @media (max-width:380px){
     body{padding:18px 12px 40px;}
     .card{padding:14px;}
@@ -631,24 +733,44 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.19.1</span></h1>
-        <div class="sub">esp32 · dht22 · firebase rtdb</div>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.20.0</span></h1>
+        <div class="sub">esp32 · dht22 · firebase rtdb · terminal</div>
       </div>
     </div>
     <div class="conn-label" id="conn-label">not connected</div>
   </header>
 
+  <div class="tabbar" role="tablist">
+    <button class="tab-btn active" role="tab" aria-selected="true" data-view="dashboard" onclick="showView('dashboard')">Dashboard</button>
+    <button class="tab-btn" role="tab" aria-selected="false" data-view="graphs" onclick="showView('graphs')">Graphs</button>
+    <button class="tab-btn" role="tab" aria-selected="false" data-view="terminal" onclick="showView('terminal')">Terminal</button>
+  </div>
+
+  <div id="view-dashboard" class="tab-view">
+    <div class="card">
+      <h2>Device</h2>
+
+      <div class="field-row" id="device-status-row" style="display:none;">
+        <label>Status</label>
+        <div class="device-status" id="device-status"></div>
+      </div>
+
+      <div class="dash-links" id="dash-links"></div>
+      <div class="dash-msg" id="dash-msg">Loading device status…</div>
+
+      <div class="controls-row">
+        <button class="btn-ghost" onclick="fetchStatus()">Refresh</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="view-graphs" class="tab-view" style="display:none;">
   <div class="card">
     <h2>Live Readings</h2>
 
     <div class="field-row">
       <label for="fb-host">Firebase RTDB host</label>
       <input type="text" id="fb-host" value="esp32-19dd8-default-rtdb.firebaseio.com" autocomplete="off">
-    </div>
-
-    <div class="field-row" id="device-status-row" style="display:none;">
-      <label>Device</label>
-      <div class="device-status" id="device-status"></div>
     </div>
 
     <div class="readings-top">
@@ -721,6 +843,38 @@
       <span>sec</span>
     </div>
   </div>
+  </div>
+
+  <div id="view-terminal" class="tab-view" style="display:none;">
+  <div class="card">
+    <h2>Terminal</h2>
+
+    <div class="field-row">
+      <label for="term-worker">Worker URL</label>
+      <input type="text" id="term-worker" value="https://ledger-sync.metropencil01.workers.dev" autocomplete="off">
+    </div>
+
+    <div class="field-row">
+      <label for="term-code">Terminal sync code</label>
+      <input type="text" id="term-code" placeholder="set on the device's /terminal page" autocomplete="off" autocapitalize="off">
+    </div>
+
+    <div class="term-status" id="term-status">Enter a sync code above to load terminal lines.</div>
+
+    <div class="term-log" id="term-log">—</div>
+
+    <div class="controls-row">
+      <button class="btn-ghost" onclick="fetchTerminal()">Refresh now</button>
+    </div>
+
+    <div class="refresh-row">
+      <div class="switch" id="term-auto-switch" onclick="toggleTermAuto()"><div class="knob"></div></div>
+      <span>Auto-refresh every</span>
+      <input type="number" id="term-refresh-secs" value="15" min="5" step="1" inputmode="numeric">
+      <span>sec</span>
+    </div>
+  </div>
+  </div>
 
 </div>
 
@@ -729,8 +883,27 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.19.1';
+  const APP_VERSION = '2.20.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
+
+  // ---------- tabs ----------
+  // Three views, one visible at a time; switching away and back just
+  // toggles display, so Graphs' loaded chart data/zoom state is untouched
+  // by visiting the other two tabs. Switching TO dashboard/terminal fires
+  // an immediate fetch for that tab so it never opens looking stale on
+  // first click; Graphs keeps its own existing fetch/auto-refresh timing.
+  function showView(name){
+    ['dashboard', 'graphs', 'terminal'].forEach(function(v){
+      document.getElementById('view-' + v).style.display = (v === name) ? '' : 'none';
+    });
+    document.querySelectorAll('.tab-btn').forEach(function(btn){
+      const isActive = btn.getAttribute('data-view') === name;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    if (name === 'dashboard') fetchStatus();
+    if (name === 'terminal') fetchTerminal();
+  }
 
   // ---------- constants ----------
   const PAGE_SIZE = 200;          // initial fetch size
@@ -1089,33 +1262,66 @@
   // ---------- device status (current IP/SSID, reported by the firmware) ----------
   // Added because mDNS's roomlogger.local turned out to be unreliable
   // across Android versions -- this reads status.json off the same RTDB
-  // host instead, which the firmware now writes on every (re)connect.
-  // Fire-and-forget: a failed status fetch should never disturb the main
-  // readings/chart UI, so errors are swallowed rather than surfaced.
-  // status.ip now backs five links (/update, /sync-code, /wifi, /credentials,
-  // /firebase) -- every GET-able admin page the firmware serves. The two
-  // POST-only action routes (/wifi/remove, /filesystem/format) are
-  // deliberately left off, same as the firmware's own "/" index doesn't
-  // link them either -- they're not pages, just endpoints those pages' own
-  // forms submit to.
+  // host instead, which the firmware writes on every (re)connect.
+  //
+  // Fire-and-forget from fetchReadings()'s perspective -- a failed status
+  // fetch must never disturb the Graphs tab. On the Dashboard tab, though,
+  // this IS the whole point, so (v2.20.0) failures are surfaced there via
+  // dash-msg instead of swallowed silently the way this used to be.
+  // status.ip now backs ten links -- every GET-able page the firmware
+  // serves. v2.20.0 added /power-saving, /power-presets, /terminal,
+  // /health, and the root index alongside the original five (/update,
+  // /sync-code, /wifi, /credentials, /firebase). The two POST-only action
+  // routes (/wifi/remove, /filesystem/format) are deliberately left off,
+  // same as the firmware's own "/" index doesn't link them either --
+  // they're not pages, just endpoints those pages' own forms submit to.
+  const DEVICE_PAGES = [
+    ['', 'Home', 'Index of every page this device serves'],
+    ['wifi', 'WiFi Networks', 'Saved networks, static IP, open-network fallback'],
+    ['sync-code', 'Ledger Sync Code', "Change the study-tracker's sync code"],
+    ['firebase', 'Firebase', 'Realtime Database host and auth token'],
+    ['credentials', 'Dashboard Login', 'Username/password for these admin pages'],
+    ['power-saving', 'Power Saving', 'Turn power saving on/off, session toggles'],
+    ['power-presets', 'Power Presets', 'Saved read/wifi-check/upload interval presets'],
+    ['terminal', 'Terminal', 'Live serial log, on/off switch, cloud sync code'],
+    ['health', 'Device Health', 'Firebase, Ledger, RTC, DHT22 and terminal status'],
+    ['update', 'Firmware Update', 'Flash new firmware over WiFi'],
+  ];
+
+  function renderDeviceLinks(ip){
+    document.getElementById('dash-links').innerHTML = DEVICE_PAGES.map(function(p){
+      return '<a class="link-tile" href="http://' + ip + '/' + p[0] + '" target="_blank" rel="noopener">' +
+        '<div class="link-tile-name">' + p[1] + '</div>' +
+        '<div class="link-tile-desc">' + p[2] + '</div>' +
+        '</a>';
+    }).join('');
+  }
+
   async function fetchStatus(){
     const host = getHost();
-    if (!host) return;
+    const dashMsg = document.getElementById('dash-msg');
+    if (!host){
+      dashMsg.textContent = 'Enter a Firebase RTDB host on the Graphs tab first.';
+      return;
+    }
     try{
       const res = await fetch('https://' + host + '/status.json');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const status = await res.json();
-      if (!status || !status.ip) return;
+      if (!status || !status.ip){
+        dashMsg.textContent = 'No status published yet -- the device publishes this on every (re)connect, so it should appear shortly after it\'s next online.';
+        return;
+      }
       document.getElementById('device-status').innerHTML =
-        'On <b>' + status.ssid + '</b> — ' +
-        '<a href="http://' + status.ip + '/update" target="_blank" rel="noopener">' + status.ip + '/update</a>' +
-        ' · <a href="http://' + status.ip + '/sync-code" target="_blank" rel="noopener">sync code</a>' +
-        ' · <a href="http://' + status.ip + '/wifi" target="_blank" rel="noopener">wifi</a>' +
-        ' · <a href="http://' + status.ip + '/credentials" target="_blank" rel="noopener">login</a>' +
-        ' · <a href="http://' + status.ip + '/firebase" target="_blank" rel="noopener">firebase</a>';
+        'On <b>' + status.ssid + '</b>, at <b>' + status.ip + '</b> · checked ' +
+        new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
       document.getElementById('device-status-row').style.display = '';
+      renderDeviceLinks(status.ip);
+      dashMsg.textContent = '';
     } catch(err){
-      // status is a nice-to-have -- silently skip, readings still work
+      // Graphs tab: readings still work fine without this, so this must
+      // never throw. Dashboard tab: this IS the content, so say why.
+      dashMsg.textContent = 'Could not reach status.json (' + err.message + '). Check the Firebase host on the Graphs tab, and that the device has published at least once.';
     }
   }
 
@@ -2035,6 +2241,7 @@
   function toggleWeather(){
     const sw = document.getElementById('weather-switch');
     weatherEnabled = sw.classList.toggle('on');
+    saveSetting('weather_on', weatherEnabled ? '1' : '0');
     if (!weatherEnabled){
       setWeatherStatus('');
       if (chartTemp && chartHum){
@@ -2093,6 +2300,7 @@
   function toggleAuto(){
     const sw = document.getElementById('auto-switch');
     const isOn = sw.classList.toggle('on');
+    saveSetting('auto_on', isOn ? '1' : '0');
     if (isOn){
       fetchReadings();
       autoTimer = setInterval(fetchReadings, getRefreshSeconds() * 1000);
@@ -2137,8 +2345,157 @@
     fetchReadings();
   });
 
+  // ---------- terminal (reads from the Cloudflare Worker, not the device) ----------
+  // Entirely separate data path from everything above -- this tab never
+  // touches Firebase, and the device never touches this tab. The device's
+  // own /terminal page uploads batches to this same Worker (from a phone's
+  // browser tab, only while that page is open) under a sync code set
+  // there; this tab just reads back whatever has accumulated under that
+  // code. See the v2.20.0 changelog entry above and worker.js for the full
+  // picture -- notably, this only ever does GET /sync?code=..., never
+  // POST/PUT, since reading is all this tab needs to do.
+  const TERM_MAX_DISPLAY = 500; // render cap only -- the full fetched array is still sorted first
+  let termAutoTimer = null;
+
+  function setTermStatus(cls, text){
+    const el = document.getElementById('term-status');
+    el.className = 'term-status' + (cls ? ' ' + cls : '');
+    el.textContent = text;
+  }
+
+  async function fetchTerminal(){
+    const workerUrl = document.getElementById('term-worker').value.trim().replace(/\/+$/, '');
+    const code = document.getElementById('term-code').value.trim();
+    const logEl = document.getElementById('term-log');
+
+    if (!code){
+      setTermStatus('', 'Enter a sync code above to load terminal lines.');
+      return;
+    }
+    if (!workerUrl){
+      setTermStatus('fail', 'Enter a Worker URL above.');
+      return;
+    }
+
+    setTermStatus('busy', 'Loading…');
+    try{
+      const res = await fetch(workerUrl + '/sync?code=' + encodeURIComponent(code));
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const lines = Array.isArray(data.terminalLog) ? data.terminalLog.slice() : [];
+      // The Worker's merge just appends each incoming batch in whatever
+      // order requests happened to arrive (mergeAdditive() in worker.js) --
+      // it doesn't guarantee the stored array is globally ordered, so this
+      // sorts by index rather than trusting fetch order.
+      lines.sort(function(a, b){
+        return (typeof a.i === 'number' ? a.i : 0) - (typeof b.i === 'number' ? b.i : 0);
+      });
+
+      const nowStr = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+      if (!lines.length){
+        logEl.textContent = "No terminal lines synced yet under this code. Open the device's /terminal page (with this same sync code set there) to start syncing -- it only uploads while that page is open in a browser tab.";
+        setTermStatus('ok', '0 lines · checked ' + nowStr);
+        return;
+      }
+
+      const wasAtBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
+      const toShow = lines.slice(-TERM_MAX_DISPLAY);
+      logEl.textContent = toShow.map(function(l){
+        const ts = l.t ? new Date(l.t * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true }) : '--:--:--';
+        return '[' + ts + '] ' + (l.text || '');
+      }).join('\n');
+      if (wasAtBottom) logEl.scrollTop = logEl.scrollHeight;
+
+      const shownNote = lines.length > TERM_MAX_DISPLAY ? (' (showing last ' + TERM_MAX_DISPLAY + ')') : '';
+      setTermStatus('ok', lines.length + ' line(s)' + shownNote + ' · checked ' + nowStr);
+    } catch(err){
+      setTermStatus('fail', 'Could not reach the Worker (' + err.message + ').');
+    }
+  }
+
+  function getTermRefreshSeconds(){
+    const input = document.getElementById('term-refresh-secs');
+    let v = parseInt(input.value, 10);
+    if (isNaN(v) || v < 5) v = 15;
+    input.value = v;
+    return v;
+  }
+  function toggleTermAuto(){
+    const sw = document.getElementById('term-auto-switch');
+    const isOn = sw.classList.toggle('on');
+    saveSetting('term_auto_on', isOn ? '1' : '0');
+    if (isOn){
+      fetchTerminal();
+      termAutoTimer = setInterval(fetchTerminal, getTermRefreshSeconds() * 1000);
+    } else {
+      clearInterval(termAutoTimer);
+      termAutoTimer = null;
+    }
+  }
+
+  // ---------- settings persistence (localStorage) ----------
+  // Every user-editable field on every tab is restored here on load and
+  // re-saved on change, so nothing needs re-entering on a repeat visit --
+  // added in v2.20.0. Before this, fb-host in particular (the one field
+  // everything else on the page depends on) reset to its hardcoded default
+  // every single time despite everything downstream of it looking "sticky"
+  // in spirit.
+  const SETTINGS_PREFIX = 'roomlogger_';
+  function loadSetting(key){
+    try { return localStorage.getItem(SETTINGS_PREFIX + key); }
+    catch(e){ return null; } // storage unavailable (private browsing etc.) -- just don't restore
+  }
+  function saveSetting(key, value){
+    try { localStorage.setItem(SETTINGS_PREFIX + key, value); }
+    catch(e){ /* storage unavailable/full -- app still works, just won't remember this time */ }
+  }
+  // Text/number/select fields: plain restore-then-persist-on-change. Does
+  // NOT dispatch a 'change' event on restore -- every one of these fields'
+  // existing 'change' handlers either does nothing useful yet this early
+  // (e.g. fb-host's handler resets chart state that doesn't exist on a
+  // fresh load) or is redundant with what the initial fetchReadings()/
+  // fetchTerminal() calls below already do once every field is restored.
+  function restoreField(id){
+    const saved = loadSetting(id);
+    if (saved !== null) document.getElementById(id).value = saved;
+  }
+  function wirePersistence(id){
+    document.getElementById(id).addEventListener('change', function(){
+      saveSetting(id, this.value);
+    });
+  }
+  ['fb-host', 'range-select', 'weather-loc', 'refresh-secs',
+   'term-worker', 'term-code', 'term-refresh-secs'].forEach(function(id){
+    restoreField(id);
+    wirePersistence(id);
+  });
+
+  // The three on/off switches persist from inside their own toggle
+  // functions (toggleWeather()/toggleAuto()/toggleTermAuto() above) since a
+  // click is the only thing that ever changes them -- there's no separate
+  // 'change' event to hook the way text/number/select fields have. Restored
+  // here by setting the class (and, for weather, the JS flag it actually
+  // reads) directly rather than simulating a click: a simulated click on
+  // auto-switch/term-auto-switch would call fetchReadings()/fetchTerminal()
+  // immediately, duplicating the initial fetches just below, and on
+  // weather-switch would hit an early chartTemp-is-null check this early on
+  // a fresh load and silently do nothing. Restoring the underlying state
+  // directly and letting the normal flow below pick it up avoids both.
+  const restoredWeatherOn = loadSetting('weather_on') === '1';
+  if (restoredWeatherOn){
+    document.getElementById('weather-switch').classList.add('on');
+    weatherEnabled = true; // picked up automatically inside fetchReadings()'s own redraw, below
+  }
+  const restoredAutoOn = loadSetting('auto_on') === '1';
+  if (restoredAutoOn) document.getElementById('auto-switch').classList.add('on');
+  const restoredTermAutoOn = loadSetting('term_auto_on') === '1';
+  if (restoredTermAutoOn) document.getElementById('term-auto-switch').classList.add('on');
+
   // initial load
-  fetchReadings();
+  fetchReadings(); // also covers weather (weatherEnabled already restored above) via its normal redraw path
+  if (restoredAutoOn) autoTimer = setInterval(fetchReadings, getRefreshSeconds() * 1000); // no extra fetchReadings() call -- the line above just did one
+  fetchTerminal();
+  if (restoredTermAutoOn) termAutoTimer = setInterval(fetchTerminal, getTermRefreshSeconds() * 1000); // same reasoning
 </script>
 
 <!-- Kept separate from the app script above on purpose -- this is PWA

@@ -1,7 +1,7 @@
 {
   "name": "Room Logger",
   "short_name": "RoomLogger",
-  "description": "Live temperature & humidity dashboard for the ESP32 room logger.",
+  "description": "Live dashboard, temp/humidity graphs, and terminal log for the ESP32 room logger.",
   "start_url": "./",
   "scope": "./",
   "id": "./",
