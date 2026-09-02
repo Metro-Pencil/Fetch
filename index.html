@@ -26,6 +26,27 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v2.20.1 — fixed the Dashboard tab showing a stale SSID/IP (and, more
+  generally, any tab showing stale data) after the device actually switched
+  networks or the underlying data actually changed. Checked the firmware
+  first rather than assuming: onNetworkConnected() in room_logger.ino
+  already republishes status.json on every SSID change, not just first
+  boot, so the device wasn't the problem. Two real causes on this side
+  instead, both fixed: (1) every fetch() in this file (status.json,
+  readings.json, the weather API, the Worker) ran with default browser
+  caching -- added cache:'no-store' to all four so a GET to the same URL
+  can never be quietly served from the browser's HTTP cache instead of
+  actually hitting the network. (2) mobile PWAs/tabs commonly get fully
+  suspended in the background (JS, including setInterval, just stops) and
+  can also be restored straight from the browser's back/forward cache with
+  no script re-running at all -- either way, reopening one showed whatever
+  was on screen before it was backgrounded, however old, since nothing
+  told it to refetch. Added a visibilitychange handler (covers the "was
+  backgrounded, now foregrounded" case) and a pageshow/persisted handler
+  (covers the bfcache-restore case specifically, which visibilitychange
+  alone doesn't) that both refetch all three tabs' data the moment the
+  page is actually visible and running again.
+
   v2.20.0 — restructured into three tabs (Dashboard, Graphs, Terminal)
   under a new tab bar below the header, and every user-editable field on
   every tab now survives a reload (localStorage) -- previously only the
@@ -733,7 +754,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.20.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.20.1</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb · terminal</div>
       </div>
     </div>
@@ -883,7 +904,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.20.0';
+  const APP_VERSION = '2.20.1';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- tabs ----------
@@ -1185,7 +1206,7 @@
 
   async function fbGet(host, query){
     const url = 'https://' + host + '/readings.json?' + query;
-    const res = await fetch(url);
+    const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }
@@ -1305,7 +1326,13 @@
       return;
     }
     try{
-      const res = await fetch('https://' + host + '/status.json');
+      // no-store: confirmed against the firmware (onNetworkConnected() in
+      // room_logger.ino) that it correctly republishes status.json on every
+      // SSID change, not just first boot -- so a stale SSID/IP showing here
+      // was this fetch (or the page itself) serving an old cached copy, not
+      // the device failing to update Firebase. Same reasoning below for
+      // readings/weather/terminal.
+      const res = await fetch('https://' + host + '/status.json', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const status = await res.json();
       if (!status || !status.ip){
@@ -2063,7 +2090,7 @@
   function dateStr(ms){ return new Date(ms).toISOString().slice(0, 10); }
 
   async function fetchWeatherJson(url){
-    const res = await fetch(url);
+    const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }
@@ -2379,7 +2406,7 @@
 
     setTermStatus('busy', 'Loading…');
     try{
-      const res = await fetch(workerUrl + '/sync?code=' + encodeURIComponent(code));
+      const res = await fetch(workerUrl + '/sync?code=' + encodeURIComponent(code), { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const lines = Array.isArray(data.terminalLog) ? data.terminalLog.slice() : [];
@@ -2496,6 +2523,30 @@
   if (restoredAutoOn) autoTimer = setInterval(fetchReadings, getRefreshSeconds() * 1000); // no extra fetchReadings() call -- the line above just did one
   fetchTerminal();
   if (restoredTermAutoOn) termAutoTimer = setInterval(fetchTerminal, getTermRefreshSeconds() * 1000); // same reasoning
+
+  // ---------- refresh on resume ----------
+  // Mobile PWAs/tabs commonly get fully suspended in the background --
+  // JS stops running (setInterval included) and the DOM just sits frozen
+  // showing whatever it last showed, however stale, until something
+  // actually re-runs. Reopening one after a while can also restore it
+  // straight from the browser's back/forward cache (bfcache) -- a
+  // snapshot from before the page was ever backgrounded, with NO script
+  // re-executing at all, not even this file's own initial-load section
+  // above. Both look identical to the fetches above having failed, even
+  // though they ran fine at the time -- the fix is the same for both:
+  // explicitly refetch the moment the page is actually visible/interactive
+  // again, rather than trusting whatever's already on screen.
+  function refreshAllTabs(){
+    fetchStatus();
+    fetchReadings();
+    fetchTerminal();
+  }
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState === 'visible') refreshAllTabs();
+  });
+  window.addEventListener('pageshow', function(e){
+    if (e.persisted) refreshAllTabs(); // specifically the bfcache-restore case above
+  });
 </script>
 
 <!-- Kept separate from the app script above on purpose -- this is PWA
