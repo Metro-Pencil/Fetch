@@ -32,7 +32,7 @@ jobs:
 
       - name: Install ESP32 core & DHT libraries
         run: |
-          arduino-cli config init --overwrite --additional-urls https://espressif.github.io/arduino-esp32/package_index.json
+          arduino-cli config init --overwrite --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli core update-index
           arduino-cli core install esp32:esp32
           arduino-cli lib install "DHT sensor library"
