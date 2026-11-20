@@ -7,7 +7,8 @@
 
 <!-- PWA: manifest + icons + iOS's separate (non-manifest-based) install tags -->
 <link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#0B0F14">
+<meta name="theme-color" id="meta-theme-color" content="#0B0F14">
+<script>(function(){try{var t=localStorage.getItem("rl_theme");if(t==="atelier"){document.documentElement.setAttribute("data-theme","atelier");var m=document.getElementById("meta-theme-color");if(m)m.setAttribute("content","#F3EFE9");}}catch(e){}})();</script>
 <link rel="icon" href="favicon-48.png" sizes="48x48" type="image/png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -536,7 +537,7 @@
   for a real caveat in how deep history can be loaded with this schema.
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.2.0/chartjs-plugin-zoom.min.js"></script>
@@ -705,9 +706,15 @@
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:68%;
     text-align:right;font-variant-numeric:tabular-nums;
   }
-  .chart-canvas-box{position:relative;height:420px;touch-action:none;}
+  .chart-canvas-box{position:relative;height:420px;touch-action:pan-y;}
   @media (min-width:600px){ .chart-canvas-box{height:540px;} }
-  .chart-canvas-box canvas{touch-action:none;}
+  .chart-canvas-box canvas{touch-action:pan-y;}
+  .chart-stats-bar{
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    margin:-2px 0 8px;font-family:var(--mono);font-size:10.5px;
+    color:var(--muted-2);font-variant-numeric:tabular-nums;
+  }
+  .chart-stats-bar span b{color:var(--text);font-weight:600;}
   .chart-hint{font-size:10px;color:var(--muted-2);font-family:var(--mono);margin-top:10px;text-align:center;}
   .chart-hint .dn-swatch{
     display:inline-block;width:7px;height:7px;border-radius:2px;margin:0 3px -1px 0;
@@ -811,6 +818,460 @@
     .card{padding:14px;}
     .stat .value{font-size:26px;}
   }
+
+  /* ---------- CSS Pro Max accessibility, touch targets & motion hygiene ---------- */
+  button, select, input[type=text], input[type=password], .tab-btn, .link-tile, .theme-option {
+    touch-action: manipulation;
+  }
+  button, .tab-btn { min-height: 44px; }
+  input[type=text], input[type=password], select { min-height: 44px; }
+  .stat .value, .readout, .conn-label { font-variant-numeric: tabular-nums; }
+  button:disabled, .btn-primary:disabled, .btn-ghost:disabled {
+    opacity: 0.45; cursor: not-allowed; pointer-events: none;
+  }
+  a:focus-visible, summary:focus-visible, .switch:focus-visible, .theme-option:focus-visible {
+    outline: 2px solid var(--temp); outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* ---------- Header theme toggle pill & App Settings theme selector ---------- */
+  .header-right {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end;
+  }
+  .theme-pill-btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    min-height: 36px; padding: 6px 12px; border-radius: 9999px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.03em; cursor: pointer;
+    transition: transform 100ms ease-out, border-color 150ms ease, background-color 150ms ease;
+  }
+  .theme-pill-btn:hover { border-color: var(--muted); }
+  .theme-pill-btn:active { transform: scale(0.97); }
+  .theme-pill-dot {
+    width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--temp) 0%, var(--hum) 100%);
+    border: 1px solid rgba(255,255,255,0.2);
+  }
+
+  .theme-picker {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 10px; margin: 12px 0 14px;
+  }
+  .theme-option {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    min-height: 58px; padding: 12px 14px; border-radius: 12px; text-align: left;
+    background: var(--panel-2); border: 1.5px solid var(--border);
+    color: var(--text); cursor: pointer; width: 100%;
+    transition: transform 100ms ease-out, border-color 150ms ease, background-color 150ms ease;
+  }
+  .theme-option:hover { border-color: var(--muted); }
+  .theme-option:active { transform: scale(0.98); }
+  .theme-option[aria-pressed="true"] {
+    border-color: var(--temp);
+    box-shadow: 0 0 0 1px var(--temp);
+  }
+  .theme-option-title {
+    font-family: var(--sans); font-size: 13px; font-weight: 600; color: var(--text);
+    display: block;
+  }
+  .theme-option-sub {
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+    display: block; margin-top: 2px;
+  }
+  .theme-swatches { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  .theme-swatch {
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 1px solid rgba(128,128,128,0.28);
+  }
+
+  /* ==========================================================================
+     ATELIER THEME — Warm Alabaster Ivory, Deep Espresso & Brushed Bronze
+     Inspired by editorial luxury mobile design; WCAG AA contrast verified
+     ========================================================================== */
+  [data-theme="atelier"] {
+    --bg: #F3EFE9;
+    --panel: #FBF9F6;
+    --panel-2: #EFEAE2;
+    --border: rgba(36, 29, 24, 0.11);
+    --text: #1E1814;
+    --muted: #665B51;
+    --muted-2: #73685E;
+    --temp: #9E6B43;
+    --hum: #4A6B68;
+    --ok: #2D6A4F;
+    --warn: #9A5B13;
+    --err: #A63A32;
+    --day: #C69265;
+    --night: #4B4139;
+    --espresso: #231D18;
+    --espresso-2: #2F2721;
+    --espresso-border: rgba(247, 243, 236, 0.14);
+    --espresso-text: #F7F3EC;
+    --espresso-muted: #C2B6AA;
+    --bronze-grad: linear-gradient(135deg, #B58157 0%, #8A5935 100%);
+    --shadow-card: 0 2px 14px rgba(35, 29, 24, 0.045);
+    --display: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+  }
+
+  [data-theme="atelier"] body {
+    background:
+      radial-gradient(ellipse 860px 460px at 18% -8%, #FCF9F4 0%, transparent 62%),
+      radial-gradient(ellipse 640px 420px at 92% 6%, rgba(198, 146, 101, 0.10) 0%, transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--display);
+    line-height: 1.5;
+  }
+
+  [data-theme="atelier"] header {
+    margin-bottom: 20px;
+  }
+  [data-theme="atelier"] .brand h1 {
+    font-family: var(--display);
+    font-size: clamp(1.125rem, 2.5vw, 1.35rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    text-transform: none;
+    color: var(--text);
+  }
+  [data-theme="atelier"] #version-badge {
+    font-family: var(--mono);
+    font-size: 10.5px !important;
+    color: var(--muted) !important;
+    background: var(--panel-2) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 9999px !important;
+    padding: 3px 9px !important;
+  }
+  [data-theme="atelier"] .brand .sub {
+    font-family: var(--display);
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.01em;
+    margin-top: 2px;
+  }
+  [data-theme="atelier"] .brand .led.online {
+    box-shadow: 0 0 0 4px rgba(45, 106, 79, 0.16);
+  }
+  [data-theme="atelier"] .brand .led.stale {
+    box-shadow: 0 0 0 4px rgba(154, 91, 19, 0.16);
+  }
+  [data-theme="atelier"] .brand .led.offline {
+    box-shadow: 0 0 0 4px rgba(166, 58, 50, 0.16);
+  }
+  [data-theme="atelier"] .conn-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  [data-theme="atelier"] .theme-pill-btn {
+    background: var(--panel);
+    border-color: var(--border);
+    color: var(--text);
+    box-shadow: 0 1px 4px rgba(35, 29, 24, 0.05);
+  }
+  [data-theme="atelier"] .theme-pill-dot {
+    background: var(--bronze-grad);
+    border-color: rgba(35, 29, 24, 0.15);
+  }
+
+  /* Pill segmented tab bar (inspired by ALL / BODY AND FACE selector) */
+  [data-theme="atelier"] .tabbar {
+    background: #E8E1D7;
+    border: 1px solid var(--border);
+    border-radius: 9999px;
+    padding: 4px;
+    gap: 4px;
+    margin-bottom: 18px;
+  }
+  [data-theme="atelier"] .tab-btn {
+    font-family: var(--display);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    text-transform: none;
+    border-bottom: none;
+    border-radius: 9999px;
+    padding: 10px 16px;
+    color: var(--muted);
+    transition: background-color 180ms ease-out, color 180ms ease-out, transform 100ms ease-out;
+  }
+  [data-theme="atelier"] .tab-btn:hover { color: var(--text); }
+  [data-theme="atelier"] .tab-btn.active {
+    background: var(--espresso);
+    color: var(--espresso-text);
+    box-shadow: 0 2px 8px rgba(35, 29, 24, 0.18);
+  }
+
+  /* Editorial ivory cards */
+  [data-theme="atelier"] .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    padding: 20px;
+    box-shadow: var(--shadow-card);
+  }
+  [data-theme="atelier"] .card h2 {
+    font-family: var(--display);
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    text-transform: none;
+    color: var(--text);
+    margin: 0 0 16px;
+  }
+  [data-theme="atelier"] .card h2::before {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--bronze-grad);
+  }
+
+  /* Signature deep espresso contrast card for Firmware / OTA (like Aestheris dark block) */
+  [data-theme="atelier"] #card-ota {
+    background: var(--espresso);
+    border: 1px solid rgba(198, 146, 101, 0.22);
+    color: var(--espresso-text);
+    box-shadow: 0 10px 28px rgba(35, 29, 24, 0.16);
+  }
+  [data-theme="atelier"] #card-ota h2 { color: var(--espresso-text); }
+  [data-theme="atelier"] #card-ota .ota-meta,
+  [data-theme="atelier"] #card-ota .dash-msg,
+  [data-theme="atelier"] #card-ota label,
+  [data-theme="atelier"] #card-ota .ota-details summary {
+    color: var(--espresso-muted);
+  }
+  [data-theme="atelier"] #card-ota .ota-meta b,
+  [data-theme="atelier"] #card-ota .ota-details summary:hover {
+    color: var(--espresso-text);
+  }
+  [data-theme="atelier"] #card-ota code {
+    background: var(--espresso-2);
+    color: #E2B892;
+    padding: 2px 6px;
+    border-radius: 6px;
+  }
+  [data-theme="atelier"] #card-ota .ota-details {
+    border-top-color: var(--espresso-border);
+  }
+  [data-theme="atelier"] #card-ota input[type=text],
+  [data-theme="atelier"] #card-ota input[type=password],
+  [data-theme="atelier"] #card-ota input[type=file] {
+    background: var(--espresso-2);
+    border-color: var(--espresso-border);
+    color: var(--espresso-text);
+    border-radius: 12px;
+  }
+  [data-theme="atelier"] #card-ota .btn-primary {
+    background: var(--espresso-text);
+    color: var(--espresso);
+  }
+  [data-theme="atelier"] #card-ota .btn-primary:hover {
+    background: #EAE2D7;
+    opacity: 1;
+  }
+  [data-theme="atelier"] #card-ota .btn-ghost {
+    background: var(--espresso-2);
+    border-color: var(--espresso-border);
+    color: var(--espresso-text);
+  }
+  [data-theme="atelier"] #card-ota .btn-ghost:hover {
+    border-color: rgba(247, 243, 236, 0.38);
+  }
+
+  /* Pill buttons & inputs */
+  [data-theme="atelier"] button {
+    font-family: var(--display);
+    font-weight: 600;
+    border-radius: 9999px;
+    padding: 10px 18px;
+    transition: transform 100ms ease-out, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
+  }
+  [data-theme="atelier"] button:active { transform: scale(0.97); }
+  [data-theme="atelier"] .btn-primary {
+    background: var(--espresso);
+    color: var(--espresso-text);
+  }
+  [data-theme="atelier"] .btn-primary:hover {
+    background: #332B24;
+    opacity: 1;
+  }
+  [data-theme="atelier"] .btn-ghost {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  [data-theme="atelier"] .btn-ghost:hover {
+    background: #E6DFD5;
+    border-color: rgba(36, 29, 24, 0.24);
+  }
+  [data-theme="atelier"] input[type=text],
+  [data-theme="atelier"] input[type=password],
+  [data-theme="atelier"] input[type=number],
+  [data-theme="atelier"] input[type=file],
+  [data-theme="atelier"] select {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 12px;
+  }
+  [data-theme="atelier"] select {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%23665B51'/></svg>");
+  }
+
+  /* Linen link tiles with circular arrow affordance */
+  [data-theme="atelier"] .link-tile {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 14px 44px 14px 16px;
+    position: relative;
+    transition: transform 120ms ease-out, border-color 150ms ease, background-color 150ms ease;
+  }
+  [data-theme="atelier"] .link-tile::after {
+    content: "\2192";
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--espresso);
+    color: var(--espresso-text);
+    display: grid;
+    place-items: center;
+    font-size: 13px;
+    font-weight: 600;
+    transition: transform 150ms ease-out, background-color 150ms ease;
+  }
+  [data-theme="atelier"] .link-tile:hover {
+    background: #EAE3D9;
+    border-color: rgba(158, 107, 67, 0.35);
+  }
+  [data-theme="atelier"] .link-tile:hover::after {
+    background: var(--temp);
+    transform: translateY(-50%) translateX(2px);
+  }
+  [data-theme="atelier"] .link-tile-name {
+    font-family: var(--display);
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  [data-theme="atelier"] .link-tile-desc {
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+
+  /* Status pills */
+  [data-theme="atelier"] .status-pill {
+    font-family: var(--mono);
+    background: var(--panel-2);
+    border-color: var(--border);
+    padding: 3px 10px;
+  }
+  [data-theme="atelier"] .status-pill.ok {
+    background: rgba(45, 106, 79, 0.10);
+    border-color: rgba(45, 106, 79, 0.32);
+    color: var(--ok);
+  }
+  [data-theme="atelier"] .status-pill.warn {
+    background: rgba(154, 91, 19, 0.10);
+    border-color: rgba(154, 91, 19, 0.32);
+    color: var(--warn);
+  }
+  [data-theme="atelier"] .status-pill.err {
+    background: rgba(166, 58, 50, 0.10);
+    border-color: rgba(166, 58, 50, 0.32);
+    color: var(--err);
+  }
+
+  /* Stat hero cards & charts */
+  [data-theme="atelier"] .stat {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 16px 18px;
+  }
+  [data-theme="atelier"] .stat .bar { width: 4px; }
+  [data-theme="atelier"] .stat.temp .bar { background: var(--bronze-grad); }
+  [data-theme="atelier"] .stat .label {
+    font-family: var(--display);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+  }
+  [data-theme="atelier"] .stat .value {
+    font-family: var(--display);
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    color: var(--text);
+  }
+  [data-theme="atelier"] .chart-box {
+    background: #F6F2EC;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 14px 14px 10px;
+  }
+  [data-theme="atelier"] .chart-panel-label {
+    font-family: var(--display);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    color: var(--text);
+  }
+  [data-theme="atelier"] .chart-panel-label .readout {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  [data-theme="atelier"] .switch {
+    background: #DDD5CA;
+    border-color: var(--border);
+  }
+  [data-theme="atelier"] .switch .knob { background: var(--panel); }
+  [data-theme="atelier"] .switch.on {
+    background: var(--espresso);
+    border-color: var(--espresso);
+  }
+  [data-theme="atelier"] .switch.on .knob { background: #E2B892; }
+
+  /* Floating update toast */
+  [data-theme="atelier"] .update-popup {
+    background: var(--espresso);
+    border: 1px solid rgba(198, 146, 101, 0.45);
+    border-radius: 18px;
+    box-shadow: 0 14px 36px rgba(35, 29, 24, 0.28);
+  }
+  [data-theme="atelier"] .update-popup-text { color: var(--espresso-text); }
+  [data-theme="atelier"] .update-popup .btn-primary {
+    background: var(--espresso-text);
+    color: var(--espresso);
+  }
+  [data-theme="atelier"] .update-popup .btn-ghost {
+    background: var(--espresso-2);
+    border-color: var(--espresso-border);
+    color: var(--espresso-text);
+  }
+  [data-theme="atelier"] .theme-option {
+    background: var(--panel-2);
+    border-radius: 16px;
+  }
+  [data-theme="atelier"] .theme-option[aria-pressed="true"] {
+    background: var(--panel);
+    border-color: var(--espresso);
+    box-shadow: 0 0 0 1px var(--espresso);
+  }
+
 </style>
 </head>
 <body>
@@ -827,11 +1288,17 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.2.1</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.3.2</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
-    <div class="conn-label" id="conn-label">not connected</div>
+    <div class="header-right">
+      <button type="button" class="theme-pill-btn" id="theme-toggle-btn" onclick="toggleTheme()" aria-label="Switch color theme">
+        <span class="theme-pill-dot" aria-hidden="true"></span>
+        <span id="theme-toggle-label">Atelier</span>
+      </button>
+      <div class="conn-label" id="conn-label">not connected</div>
+    </div>
   </header>
 
   <div class="tabbar" role="tablist">
@@ -856,7 +1323,7 @@
       </div>
     </div>
 
-    <div class="card ota-card">
+    <div class="card ota-card" id="card-ota">
       <h2>Firmware / OTA</h2>
       <div class="ota-meta" id="ota-meta">Checking latest build from <code>firmware/version.json</code>…</div>
       <div class="controls-row">
@@ -894,7 +1361,32 @@
 
     <div class="card ota-card">
       <h2>App Settings</h2>
-      <div class="ota-meta" id="app-ver-meta">Running <b>v3.2.1</b> · checking GitHub for updates…</div>
+      <label>Appearance</label>
+      <div class="theme-picker" role="group" aria-label="App theme">
+        <button type="button" class="theme-option" data-theme-choice="obsidian" aria-pressed="true" onclick="applyTheme('obsidian')">
+          <span>
+            <span class="theme-option-title">Obsidian</span>
+            <span class="theme-option-sub">Midnight · Coral · Cyan</span>
+          </span>
+          <span class="theme-swatches" aria-hidden="true">
+            <span class="theme-swatch" style="background:#0B0F14"></span>
+            <span class="theme-swatch" style="background:#FF8A5B"></span>
+            <span class="theme-swatch" style="background:#4FC3E8"></span>
+          </span>
+        </button>
+        <button type="button" class="theme-option" data-theme-choice="atelier" aria-pressed="false" onclick="applyTheme('atelier')">
+          <span>
+            <span class="theme-option-title">Atelier</span>
+            <span class="theme-option-sub">Ivory · Espresso · Bronze</span>
+          </span>
+          <span class="theme-swatches" aria-hidden="true">
+            <span class="theme-swatch" style="background:#F3EFE9"></span>
+            <span class="theme-swatch" style="background:#231D18"></span>
+            <span class="theme-swatch" style="background:#9E6B43"></span>
+          </span>
+        </button>
+      </div>
+      <div class="ota-meta" id="app-ver-meta">Running <b>v3.3.2</b> · checking GitHub for updates…</div>
       <div class="controls-row">
         <button class="btn-ghost" onclick="checkAppUpdate(true)">Check for App Update</button>
         <button class="btn-ghost" onclick="forceUpdateApp()">Force Refresh App</button>
@@ -956,10 +1448,12 @@
       <div class="charts-stack">
         <div class="chart-box">
           <div class="chart-panel-label temp"><span class="dot"></span>Temperature<span class="readout" id="temp-readout">°C</span></div>
+          <div class="chart-stats-bar" id="temp-stats"><span>Min <b>—</b></span><span>Avg <b>—</b></span><span>Max <b>—</b></span></div>
           <div class="chart-canvas-box"><canvas id="rt-chart-temp"></canvas></div>
         </div>
         <div class="chart-box">
           <div class="chart-panel-label hum"><span class="dot"></span>Humidity<span class="readout" id="hum-readout">%RH</span></div>
+          <div class="chart-stats-bar" id="hum-stats"><span>Min <b>—</b></span><span>Avg <b>—</b></span><span>Max <b>—</b></span></div>
           <div class="chart-canvas-box"><canvas id="rt-chart-hum"></canvas></div>
         </div>
         <div class="empty-state" id="chart-empty">No readings fetched yet. Tap "Refresh now".</div>
@@ -990,7 +1484,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '3.2.1';
+  const APP_VERSION = '3.3.2';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- tabs ----------
@@ -1963,8 +2457,9 @@
       const { ctx, chartArea, scales } = chart;
       const xScale = scales.x;
       ctx.save();
-      ctx.fillStyle = 'rgba(120,132,148,0.10)';
-      ctx.strokeStyle = 'rgba(120,132,148,0.35)';
+      const pal = getChartThemePalette();
+      ctx.fillStyle = pal.gapFill;
+      ctx.strokeStyle = pal.gapStroke;
       ctx.setLineDash([3, 3]);
       for (const g of gaps){
         const x1 = Math.max(xScale.getPixelForValue(g.start), chartArea.left);
@@ -2003,10 +2498,11 @@
         const x1 = Math.max(xScale.getPixelForValue(seg.start), chartArea.left);
         const x2 = Math.min(xScale.getPixelForValue(seg.end), chartArea.right);
         if (x2 <= x1) continue;
-        ctx.fillStyle = seg.isDay ? 'rgba(251,191,36,0.20)' : 'rgba(99,102,241,0.28)';
+        const dnPal = getChartThemePalette();
+        ctx.fillStyle = seg.isDay ? dnPal.dayFill : dnPal.nightFill;
         ctx.fillRect(x1, top, x2 - x1, DAYNIGHT_STRIP_HEIGHT);
         if (x2 - x1 >= 60){ // only label a segment wide enough to hold it
-          ctx.fillStyle = seg.isDay ? 'rgba(40,30,5,0.75)' : 'rgba(230,232,255,0.85)';
+          ctx.fillStyle = seg.isDay ? dnPal.dayText : dnPal.nightText;
           ctx.font = "600 8px 'IBM Plex Mono', monospace";
           ctx.fillText(seg.isDay ? 'day' : 'night', (x1 + x2) / 2, top + DAYNIGHT_STRIP_HEIGHT / 2 + 0.5);
         }
@@ -2064,9 +2560,10 @@
       data: {
         datasets: [{
           label: seriesLabel, data: [],
-          borderColor: color, backgroundColor: bg,
+          borderColor: color,
+          backgroundColor: (context) => makeAreaGradient(context, color),
           tension: 0.25, pointRadius: 0, pointHoverRadius: 4,
-          pointHoverBackgroundColor: color, borderWidth: 2, fill: false, parsing: false
+          pointHoverBackgroundColor: color, borderWidth: 2, fill: 'start', parsing: false
         }, {
           // Outdoor reference line (v2.19.0) -- always present as dataset
           // index 1 so redrawChart()/updateWeatherOverlay() can address it
@@ -2112,10 +2609,10 @@
           },
           zoom: {
             limits: { x: { min: 0, minRange: MIN_DOMAIN_MS } },
-            pan: { enabled: true, mode: 'xy', onPan: syncOtherChart, onPanComplete: onViewChanged },
+            pan: { enabled: true, mode: 'x', onPan: syncOtherChart, onPanComplete: onViewChanged },
             zoom: {
               wheel: { enabled: true }, pinch: { enabled: true }, drag: { enabled: false },
-              mode: 'xy', onZoom: syncOtherChart, onZoomComplete: onViewChanged
+              mode: 'x', onZoom: syncOtherChart, onZoomComplete: onViewChanged
             }
           }
         },
@@ -2139,11 +2636,92 @@
     });
   }
 
+  const THEME_CHART_PALETTES = {
+    obsidian: {
+      themeColor: '#0B0F14',
+      temp: '#FF8A5B', tempBg: 'rgba(255,138,91,0.08)',
+      hum: '#4FC3E8', humBg: 'rgba(79,195,232,0.06)',
+      outdoor: 'rgba(148,163,184,0.65)', outdoorBg: 'rgba(148,163,184,0.06)',
+      grid: '#1A222C', xTicks: '#525C6B',
+      gapFill: 'rgba(120,132,148,0.10)', gapStroke: 'rgba(120,132,148,0.35)',
+      dayFill: 'rgba(251,191,36,0.20)', nightFill: 'rgba(99,102,241,0.28)',
+      dayText: 'rgba(40,30,5,0.75)', nightText: 'rgba(230,232,255,0.85)'
+    },
+    atelier: {
+      themeColor: '#F3EFE9',
+      temp: '#9E6B43', tempBg: 'rgba(158,107,67,0.10)',
+      hum: '#4A6B68', humBg: 'rgba(74,107,104,0.10)',
+      outdoor: 'rgba(115,104,94,0.55)', outdoorBg: 'rgba(115,104,94,0.06)',
+      grid: 'rgba(36,29,24,0.08)', xTicks: '#73685E',
+      gapFill: 'rgba(115,104,94,0.10)', gapStroke: 'rgba(115,104,94,0.32)',
+      dayFill: 'rgba(198,146,101,0.26)', nightFill: 'rgba(35,29,24,0.16)',
+      dayText: 'rgba(30,24,20,0.85)', nightText: 'rgba(30,24,20,0.82)'
+    }
+  };
+
+  function getActiveTheme(){
+    return document.documentElement.getAttribute('data-theme') === 'atelier' ? 'atelier' : 'obsidian';
+  }
+  function getChartThemePalette(){
+    return THEME_CHART_PALETTES[getActiveTheme()] || THEME_CHART_PALETTES.obsidian;
+  }
+
+  function updateChartsTheme(){
+    const pal = getChartThemePalette();
+    const pairs = [
+      [chartTemp, pal.temp, pal.tempBg],
+      [chartHum,  pal.hum,  pal.humBg]
+    ];
+    for (const [ch, col, bg] of pairs){
+      if (!ch) continue;
+      ch.data.datasets[0].borderColor = col;
+      ch.data.datasets[0].backgroundColor = (context) => makeAreaGradient(context, col);
+      ch.data.datasets[0].pointHoverBackgroundColor = col;
+      if (ch.data.datasets[1]){
+        ch.data.datasets[1].borderColor = pal.outdoor;
+        ch.data.datasets[1].backgroundColor = pal.outdoorBg;
+        ch.data.datasets[1].pointHoverBackgroundColor = pal.outdoor;
+      }
+      ch.options.scales.x.ticks.color = pal.xTicks;
+      ch.options.scales.x.grid.color = pal.grid;
+      ch.options.scales.y.ticks.color = col;
+      ch.options.scales.y.grid.color = pal.grid;
+      ch.update('none');
+    }
+  }
+
+  function applyTheme(theme){
+    const next = (theme === 'atelier') ? 'atelier' : 'obsidian';
+    if (next === 'atelier'){
+      document.documentElement.setAttribute('data-theme', 'atelier');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    try { localStorage.setItem('rl_theme', next); } catch(e) {}
+    const meta = document.getElementById('meta-theme-color');
+    if (meta) meta.setAttribute('content', THEME_CHART_PALETTES[next].themeColor);
+    document.querySelectorAll('.theme-option').forEach(btn => {
+      btn.setAttribute('aria-pressed', btn.dataset.themeChoice === next ? 'true' : 'false');
+    });
+    const lbl = document.getElementById('theme-toggle-label');
+    if (lbl) lbl.textContent = (next === 'atelier') ? 'Obsidian' : 'Atelier';
+    updateChartsTheme();
+  }
+
+  function toggleTheme(){
+    applyTheme(getActiveTheme() === 'atelier' ? 'obsidian' : 'atelier');
+  }
+
   function ensureChart(){
     if (chartTemp && chartHum) return;
-    chartTemp = buildSeriesChart('rt-chart-temp', '#FF8A5B', 'rgba(255,138,91,0.08)', 'Temperature', '°C', true, 'temp-readout');
-    chartHum = buildSeriesChart('rt-chart-hum', '#4FC3E8', 'rgba(79,195,232,0.06)', 'Humidity', '%RH', true, 'hum-readout');
+    const pal = getChartThemePalette();
+    chartTemp = buildSeriesChart('rt-chart-temp', pal.temp, pal.tempBg, 'Temperature', '°C', true, 'temp-readout');
+    chartHum = buildSeriesChart('rt-chart-hum', pal.hum, pal.humBg, 'Humidity', '%RH', true, 'hum-readout');
+    updateChartsTheme();
   }
+
+  // Sync toggle button & picker state on load
+  applyTheme(getActiveTheme());
 
   // Keeps the chart NOT being dragged/zoomed visually in step with the one
   // that is, during the gesture itself (not just once it completes). Only
@@ -2162,6 +2740,83 @@
     redrawChart(min, max, extraNote);
   }
 
+  function hexToRgba(hex, alpha){
+    const h = hex.replace('#', '');
+    if (h.length !== 6) return 'rgba(158,107,67,' + alpha + ')';
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+  }
+
+  function makeAreaGradient(context, hexColor){
+    const { ctx, chartArea } = context.chart;
+    if (!chartArea) return hexToRgba(hexColor, 0.08);
+    const grad = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+    const topAlpha = getActiveTheme() === 'atelier' ? 0.20 : 0.18;
+    grad.addColorStop(0, hexToRgba(hexColor, topAlpha));
+    grad.addColorStop(1, hexToRgba(hexColor, 0.0));
+    return grad;
+  }
+
+  function applyYAxisBounds(chart, pts, outdoorPts, minSpan, clampLo, clampHi){
+    let lo = Infinity, hi = -Infinity;
+    const scan = (arr) => {
+      if (!arr) return;
+      for (const p of arr){
+        if (p && p.y !== null && p.y !== undefined && Number.isFinite(p.y)){
+          if (p.y < lo) lo = p.y;
+          if (p.y > hi) hi = p.y;
+        }
+      }
+    };
+    scan(pts);
+    scan(outdoorPts);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)){
+      delete chart.options.scales.y.min;
+      delete chart.options.scales.y.max;
+      return;
+    }
+    const span = hi - lo;
+    let yMin, yMax;
+    if (span < minSpan){
+      const mid = (lo + hi) / 2;
+      yMin = mid - minSpan / 2;
+      yMax = mid + minSpan / 2;
+    } else {
+      const pad = span * 0.12;
+      yMin = lo - pad;
+      yMax = hi + pad;
+    }
+    if (clampLo !== null && yMin < clampLo) yMin = clampLo;
+    if (clampHi !== null && yMax > clampHi) yMax = clampHi;
+    chart.options.scales.y.min = Math.floor(yMin * 10) / 10;
+    chart.options.scales.y.max = Math.ceil(yMax * 10) / 10;
+  }
+
+  function updateSeriesStats(elId, pts, unit){
+    const el = document.getElementById(elId);
+    if (!el) return;
+    let lo = Infinity, hi = -Infinity, sum = 0, n = 0;
+    for (const p of pts){
+      if (p && p.y !== null && p.y !== undefined && Number.isFinite(p.y)){
+        if (p.y < lo) lo = p.y;
+        if (p.y > hi) hi = p.y;
+        sum += p.y;
+        n++;
+      }
+    }
+    if (!n){
+      el.innerHTML = '<span>Min <b>—</b></span><span>Avg <b>—</b></span><span>Max <b>—</b></span>';
+      return;
+    }
+    const avg = sum / n;
+    el.innerHTML =
+      '<span>Min <b>' + lo.toFixed(1) + unit + '</b></span>' +
+      '<span>Avg <b>' + avg.toFixed(1) + unit + '</b></span>' +
+      '<span>Max <b>' + hi.toFixed(1) + unit + '</b></span>';
+  }
+
   function redrawChart(rangeStart, rangeEnd, extraNote){
     const sorted = getValidSorted();
     const { tempPoints, humPoints, avgPerPoint, gaps, pointCount } = bucketize(sorted, rangeStart, rangeEnd);
@@ -2172,6 +2827,10 @@
     chartHum.data.datasets[1].data = weather.humPoints;
     chartTemp.options.plugins.gapShading.gaps = gaps;
     chartHum.options.plugins.gapShading.gaps = gaps;
+    applyYAxisBounds(chartTemp, tempPoints, weather.tempPoints, 2.0, null, null);
+    applyYAxisBounds(chartHum, humPoints, weather.humPoints, 6.0, 0, 100);
+    updateSeriesStats('temp-stats', tempPoints, '°C');
+    updateSeriesStats('hum-stats', humPoints, '%');
     chartTemp.update('none');
     chartHum.update('none');
     // Fire-and-forget: makes sure the cache actually covers what was just
