@@ -1374,6 +1374,8 @@ bool connectToAnyOpenNetwork() {
 }
 
 void connectWiFi() {
+  WiFi.persistent(false);      // prevent stale BSSID/channel caching across hotspot restarts
+  WiFi.setAutoReconnect(true);
   WiFi.mode(WIFI_STA);
   for (size_t i = 0; i < wifiNetworks.size(); i++) {
     wifiMulti.addAP(wifiNetworks[i].ssid.c_str(), wifiNetworks[i].password.c_str());
@@ -3048,6 +3050,7 @@ void wifiMaintenanceTask(void* param) {
   unsigned long lastZombieReconnectMs = 0;
   unsigned long lastPreferredScanMs = 0;
   int consecutiveNetFailures = 0;
+  int consecutiveDisconnectTries = 0;
 
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -3082,7 +3085,10 @@ void wifiMaintenanceTask(void* param) {
         continue;
       }
     }
-    if (now - lastCheckLocal < effectiveWifiCheckIntervalMs()) continue;
+    unsigned long checkInterval = (WiFi.status() == WL_CONNECTED)
+      ? effectiveWifiCheckIntervalMs()
+      : 4000UL; // retry quickly (every 4s) while disconnected
+    if (now - lastCheckLocal < checkInterval) continue;
     lastCheckLocal = now;
 
     if (xSemaphoreTake(wifiMutex, pdMS_TO_TICKS(1000)) != pdTRUE) continue;
@@ -3147,10 +3153,31 @@ void wifiMaintenanceTask(void* param) {
         lastConnectedSSID = "";  // force onNetworkConnected() to redo setup + republish once reconnected
       }
 
-      wifiMulti.run();
-      if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("WiFi not connected -- retrying against configured networks...");
-        connectToAnyOpenNetwork();
+      if (WiFi.status() == WL_CONNECTED) {
+        consecutiveDisconnectTries = 0;
+      } else {
+        // Every 3rd failed attempt, reset the STA driver to clear wedged
+        // Android-hotspot / 4-way handshake states on ESP32.
+        if (consecutiveDisconnectTries > 0 && (consecutiveDisconnectTries % 3) == 0) {
+          Serial.println("Resetting WiFi STA state to clear stale association...");
+          WiFi.disconnect(false, false);
+          delay(150);
+          WiFi.mode(WIFI_STA);
+          applyWifiRadioProfileLocked(powerMode);
+        }
+        wifiMulti.run(6000);
+        if (WiFi.status() == WL_CONNECTED) {
+          consecutiveDisconnectTries = 0;
+        } else {
+          consecutiveDisconnectTries++;
+          Serial.println("WiFi not connected (attempt " + String(consecutiveDisconnectTries) + ")...");
+          // Give saved networks 2 clean tries before falling back to open WiFi
+          if (consecutiveDisconnectTries >= 2) {
+            if (connectToAnyOpenNetwork()) {
+              consecutiveDisconnectTries = 0;
+            }
+          }
+        }
       }
 
       // Preferred WiFi check: if connected to a different SSID, periodically scan
@@ -3372,14 +3399,15 @@ void setup() {
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
 
   if (timeSynced) {
-    wifiMulti.run();
+    wifiMulti.run(5000);
     Serial.println("RTC already provided the time -- connecting to WiFi in the background.");
   } else {
-    int attempts = 0;
-    while (wifiMulti.run() != WL_CONNECTED && attempts < 40) {
-      delay(500);
+    // Each wifiMulti.run(6000) already scans and waits up to 6s; 2 tries (~12-15s)
+    // is plenty at boot before handing off to wifiMaintenanceTask in the background.
+    for (int attempt = 0; attempt < 2 && WiFi.status() != WL_CONNECTED; attempt++) {
+      if (wifiMulti.run(6000) == WL_CONNECTED) break;
+      delay(300);
       Serial.print(".");
-      attempts++;
     }
     if (WiFi.status() != WL_CONNECTED) {
       connectToAnyOpenNetwork();
