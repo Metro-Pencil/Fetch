@@ -187,7 +187,7 @@ const unsigned long HIGH_POWER_SLEEP_MS       = 1800000UL;    // 30 min WiFi-off
 const unsigned long HIGH_POWER_WAKE_WINDOW_MS = 60000UL;      // 60 s WiFi-on sync & web-UI window in High Power Saving
 const int           DRAIN_BATCH_SIZE        = 5;            // upload at most this many queued readings per attempt
 const unsigned long MIN_VALID_EPOCH         = 1600000000UL; // sanity floor for "is the system clock actually set" (RTC or NTP)
-const size_t        MAX_QUEUE_BYTES         = 200000;       // ~200 KB safety cap on the offline backlog
+const size_t        MAX_QUEUE_BYTES         = 120000;       // ~120 KB safety cap (fits comfortably in 190 KB min_spiffs LittleFS)
 // ---------------- Button timing (ms) ----------------
 const unsigned long DEBOUNCE_MS            = 50;
 const unsigned long DOUBLE_CLICK_WINDOW_MS = 300;
@@ -974,6 +974,7 @@ const char* updatePage = R"rawliteral(
   <a href='/health'>Device health</a>
 </nav>
 <h2>OTA Firmware Update</h2>
+<p><small>Available OTA slot: <b>%OTA_SLOT_KB% KB</b> (use Minimal SPIFFS 1.9 MB partition for plenty of headroom)</small></p>
 
 <h3>1. Pull from GitHub Pages / HTTPS URL</h3>
 <form id='urlForm'>
@@ -1838,8 +1839,9 @@ uint8_t decToBcd(uint8_t dec) { return ((dec / 10) << 4) | (dec % 10); }
 bool rtcBegin() {
   if (i2cMutex != NULL && xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
   Wire.begin(RTC_SDA_PIN, RTC_SCL_PIN);
+  Wire.setClock(100000); // DS1307 datasheet max is 100 kHz
   Wire.beginTransmission(DS1307_I2C_ADDR);
-  bool ok = (Wire.endTransmission() == 0);
+  bool ok = (Wire.endTransmission(true) == 0);
   if (i2cMutex != NULL) xSemaphoreGive(i2cMutex);
   return ok;
 }
@@ -1849,9 +1851,21 @@ bool rtcHasValidTime() {
   bool valid = false;
   Wire.beginTransmission(DS1307_I2C_ADDR);
   Wire.write((uint8_t)0x00);
-  if (Wire.endTransmission(false) == 0 && Wire.requestFrom((int)DS1307_I2C_ADDR, 1) == 1) {
-    uint8_t seconds = Wire.read();
-    valid = (seconds & 0x80) == 0;
+  // Use STOP (true) instead of repeated-start (false): ESP32 Core 3.x / IDF 5.5
+  // I2C driver frequently fails repeated-start reads on DS1307 modules.
+  if (Wire.endTransmission(true) == 0 && Wire.requestFrom((uint8_t)DS1307_I2C_ADDR, (uint8_t)7) == 7) {
+    uint8_t rawSec   = Wire.read();
+    Wire.read(); // min
+    Wire.read(); // hour
+    Wire.read(); // dow
+    uint8_t rawDate  = Wire.read();
+    uint8_t rawMonth = Wire.read();
+    uint8_t rawYear  = Wire.read();
+    bool oscRunning  = (rawSec & 0x80) == 0;
+    int year2000     = 2000 + bcdToDec(rawYear);
+    int month        = bcdToDec(rawMonth);
+    int day          = bcdToDec(rawDate);
+    valid = oscRunning && (year2000 >= 2021) && (month >= 1 && month <= 12) && (day >= 1 && day <= 31);
   }
   if (i2cMutex != NULL) xSemaphoreGive(i2cMutex);
   return valid;
@@ -1862,21 +1876,21 @@ time_t rtcGetEpoch() {
   time_t result = 0;
   Wire.beginTransmission(DS1307_I2C_ADDR);
   Wire.write((uint8_t)0x00);
-  if (Wire.endTransmission(false) == 0 && Wire.requestFrom((int)DS1307_I2C_ADDR, 7) == 7) {
+  if (Wire.endTransmission(true) == 0 && Wire.requestFrom((uint8_t)DS1307_I2C_ADDR, (uint8_t)7) == 7) {
     uint8_t rawSec   = Wire.read();
     uint8_t rawMin   = Wire.read();
     uint8_t rawHour  = Wire.read();
-    Wire.read(); // day-of-week register -- not needed to compute an epoch
+    Wire.read(); // day-of-week register
     uint8_t rawDate  = Wire.read();
     uint8_t rawMonth = Wire.read();
     uint8_t rawYear  = Wire.read();
 
     struct tm t = {};
     t.tm_sec  = bcdToDec(rawSec & 0x7F);
-    t.tm_min  = bcdToDec(rawMin);
+    t.tm_min  = bcdToDec(rawMin & 0x7F);
     t.tm_hour = bcdToDec(rawHour & 0x3F);
-    t.tm_mday = bcdToDec(rawDate);
-    t.tm_mon  = bcdToDec(rawMonth) - 1;
+    t.tm_mday = bcdToDec(rawDate & 0x3F);
+    t.tm_mon  = bcdToDec(rawMonth & 0x1F) - 1;
     t.tm_year = bcdToDec(rawYear) + 100;
     t.tm_isdst = 0;
     result = mktime(&t);
@@ -1892,14 +1906,14 @@ bool rtcSetEpoch(time_t epoch) {
   if (i2cMutex != NULL && xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
   Wire.beginTransmission(DS1307_I2C_ADDR);
   Wire.write((uint8_t)0x00);
-  Wire.write(decToBcd(t.tm_sec));
+  Wire.write((uint8_t)(decToBcd(t.tm_sec) & 0x7F));  // clear CH bit so oscillator runs
   Wire.write(decToBcd(t.tm_min));
-  Wire.write(decToBcd(t.tm_hour));
-  Wire.write(decToBcd(t.tm_wday == 0 ? 7 : t.tm_wday)); // DS1307 wants 1-7; struct tm gives 0-6 (Sun=0)
+  Wire.write((uint8_t)(decToBcd(t.tm_hour) & 0x3F)); // 24-hour mode
+  Wire.write(decToBcd(t.tm_wday == 0 ? 7 : t.tm_wday));
   Wire.write(decToBcd(t.tm_mday));
   Wire.write(decToBcd(t.tm_mon + 1));
   Wire.write(decToBcd(t.tm_year - 100));
-  bool ok = (Wire.endTransmission() == 0);
+  bool ok = (Wire.endTransmission(true) == 0);
   if (i2cMutex != NULL) xSemaphoreGive(i2cMutex);
   return ok;
 }
@@ -1974,25 +1988,30 @@ void syncTimeSources() {
 
   if (!rtcPresent) return;
 
-  // Still check right away on the first pass this boot (lastRtcCalibrationMillis
-  // starts at 0), rather than waiting a full interval -- otherwise a brand-new
-  // or long-unpowered RTC wouldn't get set until hours after this boot.
+  // If RTC is currently valid, only re-check every 6 hours. If it is still
+  // unset/invalid, retry every cycle (30s) until calibration actually succeeds.
   bool firstCheckThisBoot = (lastRtcCalibrationMillis == 0);
-  if (!firstCheckThisBoot && millis() - lastRtcCalibrationMillis < RTC_RECALIBRATE_INTERVAL_MS) return;
-  lastRtcCalibrationMillis = millis();
+  unsigned long interval = rtcTimeValid ? RTC_RECALIBRATE_INTERVAL_MS : 30000UL;
+  if (!firstCheckThisBoot && millis() - lastRtcCalibrationMillis < interval) return;
 
-  // A never-set RTC (rtcHasValidTime() false) reads as 0 here, which will
-  // always be far enough from `now` to trigger the write below -- so this
-  // same drift check also covers setting the RTC for the very first time.
   bool rtcWasValid = rtcHasValidTime();
-  rtcTimeValid = rtcWasValid; // cache this reading for /health -- see its declaration
+  rtcTimeValid = rtcWasValid;
   time_t rtcNow = rtcWasValid ? rtcGetEpoch() : 0;
   long driftSec = (long)now - (long)rtcNow;
-  if (driftSec < -RTC_DRIFT_TOLERANCE_SEC || driftSec > RTC_DRIFT_TOLERANCE_SEC) {
+  if (!rtcWasValid || driftSec < -RTC_DRIFT_TOLERANCE_SEC || driftSec > RTC_DRIFT_TOLERANCE_SEC) {
     if (rtcSetEpoch(now)) {
-      Serial.println("RTC calibrated from NTP (was off by " + String(driftSec) + "s).");
-      rtcTimeValid = true; // just wrote it a good value, whether or not it had one before
+      // Read back to verify the write actually stuck (catches 3.3V-powered DS1307 lockouts).
+      rtcTimeValid = rtcHasValidTime();
+      lastRtcCalibrationMillis = millis();
+      Serial.println(rtcTimeValid
+        ? ("RTC calibrated from NTP (was off by " + String(driftSec) + "s).")
+        : "RTC write ACKed but read-back still invalid -- check VCC is 5V (not 3.3V) on DS1307.");
+    } else {
+      lastRtcCalibrationMillis = millis(); // retry in 30s since rtcTimeValid is false
+      Serial.println("RTC calibration write failed -- will retry in 30s.");
     }
+  } else {
+    lastRtcCalibrationMillis = millis();
   }
 }
 
@@ -3657,6 +3676,7 @@ void setup() {
     if (!requireAdminAuth()) return;
     String page = String(updatePage);
     page.replace("%OTA_BIN_URL%", htmlEscape(currentOtaBinUrl));
+    page.replace("%OTA_SLOT_KB%", String((unsigned long)(ESP.getFreeSketchSpace() / 1024)));
     server.sendHeader("Cache-Control", "no-store, must-revalidate");
     server.send(200, "text/html", page);
   });
