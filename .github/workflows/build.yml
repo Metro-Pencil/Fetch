@@ -1,1 +1,94 @@
+# Single-repo setup: place this at .github/workflows/build.yml in your Room Logger app repo
+# alongside index.html, manifest.json, sw.js, and room_logger/room_logger.ino.
+#
+# ONLY ONE GitHub Secret required (Settings -> Secrets and variables -> Actions):
+#   SECRETS_H : Full contents of your secrets.h file (never commit secrets.h to a public repo!)
+#
+# No PAT or second repo needed -- GitHub Actions uses its built-in GITHUB_TOKEN to commit
+# firmware/latest.bin and firmware/version.json straight back into this same repo.
 
+name: Build ESP32 firmware
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'room_logger/room_logger.ino'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core & DHT libraries
+        run: |
+          arduino-cli config init --overwrite --additional-urls https://espressif.github.io/arduino-esp32/package_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+          arduino-cli lib install "DHT sensor library"
+          arduino-cli lib install "Adafruit Unified Sensor"
+
+      - name: Inject secrets.h from GitHub Secret
+        env:
+          SECRETS_H: ${{ secrets.SECRETS_H }}
+        run: |
+          if [ -z "$SECRETS_H" ]; then
+            echo "::error::Missing SECRETS_H repository secret (Settings -> Secrets and variables -> Actions)."
+            exit 1
+          fi
+          printf '%s\n' "$SECRETS_H" > ./room_logger/secrets.h
+
+      - name: Compile ESP32 binary (Minimal SPIFFS / 1.9 MB OTA slots)
+        run: |
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs \
+            --output-dir build \
+            ./room_logger
+          ls -lh build/room_logger.ino.bin
+
+      - name: Upload .bin workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: build/*.bin
+
+      - name: Publish firmware/latest.bin & firmware/version.json
+        run: |
+          mkdir -p firmware
+          cp build/room_logger.ino.bin firmware/latest.bin
+
+          BIN_SIZE=$(stat -c%s firmware/latest.bin)
+          BUILT_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          cat <<EOF > firmware/version.json
+          {
+            "commit": "${SHORT_SHA}",
+            "builtAt": "${BUILT_AT}",
+            "sizeBytes": ${BIN_SIZE},
+            "file": "firmware/latest.bin"
+          }
+          EOF
+
+          # Remove injected secrets.h before committing so it is never pushed!
+          rm -f ./room_logger/secrets.h
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add firmware/latest.bin firmware/version.json
+          if git diff --cached --quiet; then
+            echo "No firmware changes to commit."
+          else
+            git commit -m "OTA firmware build ${SHORT_SHA}"
+            git push
+          fi
