@@ -16,7 +16,7 @@
 // index.html); a service worker getting in the way of that would be
 // actively harmful, not helpful.
 
-const SHELL_CACHE = 'room-logger-shell-v3';
+const SHELL_CACHE = 'room-logger-shell-v4';
 const RUNTIME_CACHE = 'room-logger-runtime-v1';
 
 // Known-path assets precached at install time. The HTML page itself is
@@ -44,7 +44,7 @@ const RUNTIME_HOSTS = new Set([
 
 // Anything to these hosts, or these exact ESP32 device paths, is live data
 // or a device control action -- never intercepted, never cached.
-const NEVER_CACHE_PATHS = new Set(['/wifi', '/firebase', '/credentials', '/power-saving', '/health', '/status.json', '/readings.json']);
+const NEVER_CACHE_PATHS = new Set(['/wifi', '/firebase', '/credentials', '/power-saving', '/health', '/update', '/update-url', '/status.json', '/readings.json']);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -75,6 +75,7 @@ self.addEventListener('fetch', (event) => {
 
   if (url.hostname.endsWith('firebaseio.com')) return;         // live readings/status -- always network
   if (NEVER_CACHE_PATHS.has(url.pathname)) return;              // ESP32 device pages -- always network
+  if (url.pathname.includes('/firmware/')) return;              // OTA .bin & version.json -- always network
 
   if (url.origin === self.location.origin) {
     // App shell: respond from cache immediately if present (works offline,

@@ -26,6 +26,15 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v3.1.0 — added 2-repo GitHub Actions OTA workflow integration on Dashboard:
+  - Added /update ("OTA Update") device link tile and a new Firmware / OTA card
+    that reads ./firmware/version.json from this GitHub Pages repo.
+  - Added one-tap "Flash Latest on ESP32" (opens http://<ip>/update?url=... so
+    the ESP32 pre-fills latest.bin automatically) plus "Copy .bin URL".
+  - Added an optional "Push .ino to Firmware Repo" uploader (uses a GitHub PAT
+    stored locally in localStorage on your device) to push room_logger.ino and
+    kick off build.yml straight from the app.
+
   v3.0.0 — aligned dashboard with the streamlined ESP32 firmware:
   - Removed the Terminal tab and Cloudflare Worker polling (firmware /terminal
     and study-tracker /sync-code were removed).
@@ -749,6 +758,21 @@
   .status-pill.ok{border-color:rgba(74,222,128,0.4);color:var(--ok);}
   .status-pill.warn{border-color:rgba(251,191,36,0.4);color:var(--warn);}
   .status-pill.err{border-color:rgba(248,113,113,0.4);color:var(--err);}
+  .ota-card{margin-top:16px;}
+  .ota-meta{font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.6;}
+  .ota-meta b{color:var(--text);}
+  .ota-details{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);}
+  .ota-details summary{cursor:pointer;font-family:var(--mono);font-size:11.5px;color:var(--muted);user-select:none;}
+  .ota-details summary:hover{color:var(--text);}
+  .ota-form{margin-top:12px;}
+  input[type=password], input[type=file]{
+    width:100%;background:var(--panel-2);border:1px solid var(--border);
+    color:var(--text);font-family:var(--mono);font-size:12.5px;
+    padding:8px 10px;border-radius:7px;
+  }
+  .btn-primary{background:var(--temp);color:#0B0F14;}
+  .btn-primary:hover{opacity:0.92;}
+  .btn-primary:disabled,.btn-ghost:disabled{opacity:0.45;cursor:default;}
 
   @media (max-width:380px){
     body{padding:18px 12px 40px;}
@@ -764,7 +788,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.0.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.1.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -791,6 +815,42 @@
       <div class="controls-row">
         <button class="btn-ghost" onclick="fetchStatus()">Refresh</button>
       </div>
+    </div>
+
+    <div class="card ota-card">
+      <h2>Firmware / OTA</h2>
+      <div class="ota-meta" id="ota-meta">Checking latest build from <code>firmware/version.json</code>…</div>
+      <div class="controls-row">
+        <button class="btn-primary" id="btn-flash-esp" onclick="openEspOta()" disabled>Flash Latest on ESP32</button>
+        <button class="btn-ghost" id="btn-copy-bin" onclick="copyBinUrl()" disabled>Copy .bin URL</button>
+        <button class="btn-ghost" onclick="fetchFirmwareInfo()">Check build</button>
+      </div>
+
+      <details class="ota-details">
+        <summary>Push new room_logger.ino to Firmware Repo (triggers build.yml)</summary>
+        <div class="ota-form">
+          <div class="field-row">
+            <label for="gh-fw-repo">Firmware repo (owner/repo)</label>
+            <input type="text" id="gh-fw-repo" placeholder="e.g. yourname/room-logger-firmware" autocomplete="off">
+          </div>
+          <div class="field-row">
+            <label for="gh-fw-path">Path in repo</label>
+            <input type="text" id="gh-fw-path" value="room_logger/room_logger.ino" autocomplete="off">
+          </div>
+          <div class="field-row">
+            <label for="gh-fw-token">GitHub PAT (Contents: Read &amp; Write on firmware repo — saved only on this device)</label>
+            <input type="password" id="gh-fw-token" placeholder="github_pat_..." autocomplete="off">
+          </div>
+          <div class="field-row">
+            <label for="gh-ino-file">Select room_logger.ino</label>
+            <input type="file" id="gh-ino-file" accept=".ino,.txt,.cpp">
+          </div>
+          <div class="controls-row">
+            <button class="btn-ghost" id="btn-push-ino" onclick="pushInoToGithub()">Push &amp; Compile on GitHub</button>
+          </div>
+          <div class="dash-msg" id="ota-push-msg"></div>
+        </div>
+      </details>
     </div>
   </div>
 
@@ -882,7 +942,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '3.0.0';
+  const APP_VERSION = '3.1.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- tabs ----------
@@ -900,7 +960,7 @@
       btn.classList.toggle('active', isActive);
       btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
     });
-    if (name === 'dashboard') fetchStatus();
+    if (name === 'dashboard'){ fetchStatus(); fetchFirmwareInfo(); }
     if (name === 'graphs'){
       // Charts initialized while hidden can have 0x0 size; resize cleanly on reveal.
       if (chartTemp){ chartTemp.resize(); chartTemp.update('none'); }
@@ -954,6 +1014,8 @@
   let sessionPeakKey = null;   // highest raw key seen in any LIVE poll so far
   let lastNewDataMs = null;    // wall-clock time we last saw a genuinely new reading
   let lastKnownPowerMode = 'normal'; // tracks status.json powerMode for smart staleness thresholds
+  let lastKnownDeviceIp = '';
+  let latestBinUrl = '';
 
   function escapeHtml(str){
     return String(str == null ? '' : str)
@@ -1300,6 +1362,7 @@
     ['firebase', 'Firebase', 'Realtime Database host and auth token'],
     ['credentials', 'Dashboard Login', 'Username/password for these admin pages'],
     ['power-saving', 'Power Saving', 'Switch between Normal, Low, Medium, and High power modes'],
+    ['update', 'OTA Update', 'Flash compiled .bin from URL or manual upload'],
     ['health', 'Device Health', 'Firebase, RTC, DHT22, and active power mode status'],
   ];
 
@@ -1353,7 +1416,9 @@
         ' · checked ' +
         new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
       document.getElementById('device-status-row').style.display = '';
+      lastKnownDeviceIp = isSafeHostOrIp(status.ip) ? status.ip : '';
       renderDeviceLinks(status.ip);
+      updateOtaButtons();
       dashMsg.textContent = '';
     } catch(err){
       dashMsg.textContent = 'Could not reach status.json (' + err.message + '). Check the Firebase host on the Graphs tab, and that the device has published at least once.';
@@ -2382,6 +2447,114 @@
     fetchReadings();
   });
 
+  // ---------- Firmware / OTA (2-repo GitHub Actions integration) ----------
+  function updateOtaButtons(){
+    const flashBtn = document.getElementById('btn-flash-esp');
+    const copyBtn = document.getElementById('btn-copy-bin');
+    if (copyBtn) copyBtn.disabled = !latestBinUrl;
+    if (flashBtn) flashBtn.disabled = !(latestBinUrl && lastKnownDeviceIp);
+  }
+
+  async function fetchFirmwareInfo(){
+    const metaEl = document.getElementById('ota-meta');
+    try{
+      const verUrl = new URL('firmware/version.json', window.location.href).href;
+      const res = await fetch(verUrl, { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const info = await res.json();
+      latestBinUrl = new URL(info.file || 'firmware/latest.bin', window.location.href).href;
+      const kb = info.sizeBytes ? (info.sizeBytes / 1024).toFixed(1) + ' KB' : 'unknown size';
+      const when = info.builtAt ? formatFull(Date.parse(info.builtAt)) : 'unknown time';
+      metaEl.innerHTML =
+        'Latest build <b>' + escapeHtml(info.commit || 'unknown') + '</b> · ' +
+        escapeHtml(kb) + ' · built ' + escapeHtml(when);
+    } catch(err){
+      latestBinUrl = '';
+      metaEl.textContent = 'No published build found yet at firmware/version.json (' + err.message + '). Push room_logger.ino to trigger build.yml.';
+    }
+    updateOtaButtons();
+  }
+
+  function openEspOta(){
+    if (!lastKnownDeviceIp || !latestBinUrl) return;
+    const target = 'http://' + encodeURI(lastKnownDeviceIp) + '/update?url=' + encodeURIComponent(latestBinUrl);
+    window.open(target, '_blank', 'noopener');
+  }
+
+  function copyBinUrl(){
+    if (!latestBinUrl) return;
+    const msgEl = document.getElementById('ota-push-msg');
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(latestBinUrl)
+        .then(() => { msgEl.textContent = 'Copied .bin URL to clipboard.'; })
+        .catch(() => { msgEl.textContent = latestBinUrl; });
+    } else {
+      msgEl.textContent = latestBinUrl;
+    }
+  }
+
+  function textToBase64Utf8(str){
+    const bytes = new TextEncoder().encode(str);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+
+  async function pushInoToGithub(){
+    const repo = document.getElementById('gh-fw-repo').value.trim();
+    const path = document.getElementById('gh-fw-path').value.trim() || 'room_logger/room_logger.ino';
+    const token = document.getElementById('gh-fw-token').value.trim();
+    const fileInput = document.getElementById('gh-ino-file');
+    const msgEl = document.getElementById('ota-push-msg');
+    const btn = document.getElementById('btn-push-ino');
+
+    if (!/^[^/\s]+\/[^/\s]+$/.test(repo)){
+      msgEl.textContent = 'Enter firmware repo in owner/repo format.';
+      return;
+    }
+    if (!token){
+      msgEl.textContent = 'Enter a GitHub PAT with Contents: Read & Write permission.';
+      return;
+    }
+    if (!fileInput.files || !fileInput.files.length){
+      msgEl.textContent = 'Select a room_logger.ino file first.';
+      return;
+    }
+
+    btn.disabled = true;
+    msgEl.textContent = 'Uploading to GitHub…';
+    try{
+      const content = await fileInput.files[0].text();
+      const apiUrl = 'https://api.github.com/repos/' + repo + '/contents/' + encodeURI(path);
+      const headers = {
+        'Authorization': 'Bearer ' + token,
+        'Accept': 'application/vnd.github+json',
+        'Content-Type': 'application/json'
+      };
+      let sha = undefined;
+      const getRes = await fetch(apiUrl, { headers, cache: 'no-store' });
+      if (getRes.ok){
+        const existing = await getRes.json();
+        sha = existing.sha;
+      }
+      const body = {
+        message: 'Update ' + path + ' from Room Logger PWA',
+        content: textToBase64Utf8(content)
+      };
+      if (sha) body.sha = sha;
+      const putRes = await fetch(apiUrl, { method: 'PUT', headers, body: JSON.stringify(body) });
+      if (!putRes.ok){
+        const errTxt = await putRes.text();
+        throw new Error('HTTP ' + putRes.status + ': ' + errTxt.slice(0, 120));
+      }
+      msgEl.textContent = 'Pushed! GitHub Actions (build.yml) is compiling now (~1–2 min). Tap "Check build" once finished.';
+    } catch(err){
+      msgEl.textContent = 'Push failed: ' + err.message;
+    } finally{
+      btn.disabled = false;
+    }
+  }
+
   // ---------- settings persistence (localStorage) ----------
   // Every user-editable field on every tab is restored here on load and
   // re-saved on change, so nothing needs re-entering on a repeat visit --
@@ -2413,7 +2586,7 @@
       saveSetting(id, this.value);
     });
   }
-  ['fb-host', 'range-select', 'weather-loc', 'refresh-secs'].forEach(function(id){
+  ['fb-host', 'range-select', 'weather-loc', 'refresh-secs', 'gh-fw-repo', 'gh-fw-path', 'gh-fw-token'].forEach(function(id){
     restoreField(id);
     wirePersistence(id);
   });
@@ -2437,7 +2610,8 @@
   const restoredAutoOn = loadSetting('auto_on') === '1';
   if (restoredAutoOn) document.getElementById('auto-switch').classList.add('on');
   // initial load
-  fetchReadings(); // also triggers fetchStatus() and weather (if restored)
+  fetchReadings();
+  fetchFirmwareInfo(); // also triggers fetchStatus() and weather (if restored)
   if (restoredAutoOn) autoTimer = setInterval(fetchReadings, getRefreshSeconds() * 1000);
 
   // ---------- refresh on resume ----------
