@@ -26,6 +26,19 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v3.2.0 — live ONLINE/OFFLINE heartbeat detection + PWA self-update check:
+  - Dashboard now checks status.lastSeen (published every 45s by the ESP32
+    after verifying working internet) and shows OFFLINE (hiding dead IP links)
+    whenever the board stops checking in, instead of showing a stale hotspot.
+  - Added automatic app version check against ./app-version.json with a
+    floating "Refresh & Update" popup when a newer version is live on GitHub.
+  - Added an App Settings card on Dashboard with "Check for App Update" and a
+    one-tap "Force Refresh App" button that wipes Service Worker caches and
+    reloads cleanly.
+  - Clarified manual-approval OTA workflow: build.yml only compiles on .ino
+    changes and queues firmware/latest.bin; flashing only happens when you
+    personally trigger it on the ESP32 /update page.
+
   v3.1.0 — added 2-repo GitHub Actions OTA workflow integration on Dashboard:
   - Added /update ("OTA Update") device link tile and a new Firmware / OTA card
     that reads ./firmware/version.json from this GitHub Pages repo.
@@ -773,6 +786,15 @@
   .btn-primary{background:var(--temp);color:#0B0F14;}
   .btn-primary:hover{opacity:0.92;}
   .btn-primary:disabled,.btn-ghost:disabled{opacity:0.45;cursor:default;}
+  .update-popup{
+    position:fixed;left:16px;right:16px;bottom:18px;z-index:100;
+    max-width:688px;margin:0 auto;display:none;align-items:center;justify-content:space-between;
+    gap:12px;flex-wrap:wrap;background:#16202B;border:1px solid var(--temp);
+    border-radius:12px;padding:12px 16px;box-shadow:0 12px 32px rgba(0,0,0,0.55);
+  }
+  .update-popup.show{display:flex;}
+  .update-popup-text{font-family:var(--mono);font-size:12px;color:var(--text);}
+  .update-popup-actions{display:flex;gap:8px;align-items:center;}
 
   @media (max-width:380px){
     body{padding:18px 12px 40px;}
@@ -782,13 +804,20 @@
 </style>
 </head>
 <body>
+<div class="update-popup" id="update-popup" role="alert">
+  <div class="update-popup-text" id="update-popup-text">A newer version of Room Logger is available.</div>
+  <div class="update-popup-actions">
+    <button class="btn-primary" onclick="forceUpdateApp()">Refresh &amp; Update</button>
+    <button class="btn-ghost" onclick="dismissUpdatePopup()">Later</button>
+  </div>
+</div>
 <div class="wrap">
 
   <header>
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.1.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.2.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -821,7 +850,7 @@
       <h2>Firmware / OTA</h2>
       <div class="ota-meta" id="ota-meta">Checking latest build from <code>firmware/version.json</code>…</div>
       <div class="controls-row">
-        <button class="btn-primary" id="btn-flash-esp" onclick="openEspOta()" disabled>Flash Latest on ESP32</button>
+        <button class="btn-primary" id="btn-flash-esp" onclick="openEspOta()" disabled>Open ESP32 /update (Manual Flash)</button>
         <button class="btn-ghost" id="btn-copy-bin" onclick="copyBinUrl()" disabled>Copy .bin URL</button>
         <button class="btn-ghost" onclick="fetchFirmwareInfo()">Check build</button>
       </div>
@@ -851,6 +880,15 @@
           <div class="dash-msg" id="ota-push-msg"></div>
         </div>
       </details>
+    </div>
+
+    <div class="card ota-card">
+      <h2>App Settings</h2>
+      <div class="ota-meta" id="app-ver-meta">Running <b>v3.2.0</b> · checking GitHub for updates…</div>
+      <div class="controls-row">
+        <button class="btn-ghost" onclick="checkAppUpdate(true)">Check for App Update</button>
+        <button class="btn-ghost" onclick="forceUpdateApp()">Force Refresh App</button>
+      </div>
     </div>
   </div>
 
@@ -942,7 +980,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '3.1.0';
+  const APP_VERSION = '3.2.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- tabs ----------
@@ -1403,24 +1441,53 @@
         ? status.powerMode.toLowerCase()
         : (status.powerSavingActive ? 'low' : 'normal');
       lastKnownPowerMode = mode;
+
+      // Determine true ONLINE vs OFFLINE using status.lastSeen heartbeat from firmware.
+      const lastSeenSec = Number(status.lastSeen || 0);
+      const lastSeenMs = lastSeenSec > 1e9 ? lastSeenSec * 1000 : 0;
+      const ageMs = lastSeenMs ? (Date.now() - lastSeenMs) : Infinity;
+      const offlineWindowMs =
+        mode === 'high'   ? 35 * 60 * 1000 :
+        mode === 'medium' ?  6 * 60 * 1000 :
+        mode === 'low'    ?  4 * 60 * 1000 :
+                             2 * 60 * 1000;
+      const validIp = isSafeHostOrIp(status.ip) && status.ip !== '0.0.0.0';
+      const isOnline = validIp && status.internetOk !== false && (ageMs <= offlineWindowMs);
+
       const modeLabel = mode.charAt(0).toUpperCase() + mode.slice(1) + (mode === 'normal' ? '' : ' power save');
       const modeCls = mode === 'normal' ? 'ok' : 'warn';
       const fsBadge = (status.fsOk === false)
         ? '<span class="status-pill err">FS mount failed</span>'
         : '';
 
+      document.getElementById('device-status-row').style.display = '';
+      if (!isOnline){
+        lastKnownDeviceIp = '';
+        document.getElementById('device-status').innerHTML =
+          '<span class="status-pill err" style="margin-left:0;">OFFLINE</span>' +
+          (lastSeenMs
+            ? ' · last seen ' + escapeHtml(timeAgo(ageMs)) + ' on <b>' + escapeHtml(status.ssid || 'unknown') + '</b>'
+            : ' · no live heartbeat received yet (flash v3.2.0 firmware for live ONLINE/OFFLINE heartbeats)');
+        document.getElementById('dash-links').innerHTML = '';
+        dashMsg.textContent = 'Device is currently offline or unreachable. Admin links will reappear automatically once the ESP32 reconnects with working internet.';
+        updateOtaButtons();
+        return;
+      }
+
       document.getElementById('device-status').innerHTML =
+        '<span class="status-pill ok" style="margin-left:0;margin-right:6px;">ONLINE</span>' +
         'On <b>' + escapeHtml(status.ssid || 'unknown') + '</b>, at <b>' + escapeHtml(status.ip) + '</b>' +
         '<span class="status-pill ' + modeCls + '">' + escapeHtml(modeLabel) + '</span>' +
         fsBadge +
-        ' · checked ' +
-        new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
-      document.getElementById('device-status-row').style.display = '';
-      lastKnownDeviceIp = isSafeHostOrIp(status.ip) ? status.ip : '';
+        ' · heartbeat ' + escapeHtml(timeAgo(ageMs));
+      lastKnownDeviceIp = status.ip;
       renderDeviceLinks(status.ip);
       updateOtaButtons();
       dashMsg.textContent = '';
     } catch(err){
+      lastKnownDeviceIp = '';
+      document.getElementById('dash-links').innerHTML = '';
+      updateOtaButtons();
       dashMsg.textContent = 'Could not reach status.json (' + err.message + '). Check the Firebase host on the Graphs tab, and that the device has published at least once.';
     }
   }
@@ -2555,6 +2622,65 @@
     }
   }
 
+  // ---------- App Self-Update Check & Force Refresh ----------
+  function compareSemver(a, b){
+    const pa = String(a || '0.0.0').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+    const pb = String(b || '0.0.0').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < 3; i++){
+      if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+      if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+    }
+    return 0;
+  }
+
+  function dismissUpdatePopup(){
+    const pop = document.getElementById('update-popup');
+    if (pop) pop.classList.remove('show');
+  }
+
+  async function checkAppUpdate(manual){
+    const metaEl = document.getElementById('app-ver-meta');
+    const popEl = document.getElementById('update-popup');
+    const popText = document.getElementById('update-popup-text');
+    if (manual && metaEl) metaEl.textContent = 'Checking for app updates…';
+    try{
+      const url = new URL('app-version.json', window.location.href).href + '?_=' + Date.now();
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const remoteVer = String(data.version || '').replace(/^v/i, '');
+      if (remoteVer && compareSemver(remoteVer, APP_VERSION) > 0){
+        if (metaEl) metaEl.innerHTML = 'Running <b>v' + escapeHtml(APP_VERSION) + '</b> · <span class="status-pill warn" style="margin-left:0;">Update v' + escapeHtml(remoteVer) + ' available</span>';
+        if (popText) popText.textContent = 'Update available: v' + remoteVer + ' (currently v' + APP_VERSION + '). Tap Refresh to update.';
+        if (popEl) popEl.classList.add('show');
+      } else {
+        if (metaEl) metaEl.innerHTML = 'Running <b>v' + escapeHtml(APP_VERSION) + '</b> · up to date';
+        if (popEl) popEl.classList.remove('show');
+      }
+    } catch(err){
+      if (metaEl) metaEl.innerHTML = 'Running <b>v' + escapeHtml(APP_VERSION) + '</b> · could not check updates (' + escapeHtml(err.message) + ')';
+    }
+  }
+
+  async function forceUpdateApp(){
+    const metaEl = document.getElementById('app-ver-meta');
+    if (metaEl) metaEl.textContent = 'Clearing app cache and reloading…';
+    try{
+      if ('caches' in window){
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+      if ('serviceWorker' in navigator){
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      }
+    } catch(e){
+      console.warn('Cache clear warning:', e);
+    }
+    const cleanUrl = window.location.origin + window.location.pathname + '?v=' + Date.now();
+    window.location.replace(cleanUrl);
+  }
+
   // ---------- settings persistence (localStorage) ----------
   // Every user-editable field on every tab is restored here on load and
   // re-saved on change, so nothing needs re-entering on a repeat visit --
@@ -2611,7 +2737,8 @@
   if (restoredAutoOn) document.getElementById('auto-switch').classList.add('on');
   // initial load
   fetchReadings();
-  fetchFirmwareInfo(); // also triggers fetchStatus() and weather (if restored)
+  fetchFirmwareInfo();
+  checkAppUpdate(false); // also triggers fetchStatus() and weather (if restored)
   if (restoredAutoOn) autoTimer = setInterval(fetchReadings, getRefreshSeconds() * 1000);
 
   // ---------- refresh on resume ----------
@@ -2629,6 +2756,7 @@
   function refreshAllTabs(){
     // fetchReadings() already kicks off fetchStatus() without blocking.
     fetchReadings();
+    checkAppUpdate(false);
   }
   document.addEventListener('visibilitychange', function(){
     if (document.visibilityState === 'visible') refreshAllTabs();
