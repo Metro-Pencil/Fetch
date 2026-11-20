@@ -181,7 +181,7 @@ const char* MDNS_HOSTNAME  = "roomlogger";
 
 const unsigned long READ_UPLOAD_INTERVAL_MS = 60000;        // read + upload once per minute
 const unsigned long WIFI_CHECK_INTERVAL_MS  = 10000;        // check/retry WiFi every 10s
-const unsigned long STATUS_REPUBLISH_INTERVAL_MS = 120000;  // safety-net re-publish of status.json even without an SSID change -- see wifiMaintenanceTask()
+const unsigned long STATUS_REPUBLISH_INTERVAL_MS = 45000;   // heartbeat re-publish of status.json (with lastSeen epoch) for live ONLINE/OFFLINE detection
 const unsigned long DRAIN_INTERVAL_MS       = 3000;         // try to flush queued readings every 3s when online
 const unsigned long HIGH_POWER_SLEEP_MS       = 1800000UL;    // 30 min WiFi-off interval in High Power Saving
 const unsigned long HIGH_POWER_WAKE_WINDOW_MS = 60000UL;      // 60 s WiFi-on sync & web-UI window in High Power Saving
@@ -992,6 +992,7 @@ const char* updatePage = R"rawliteral(
 </form>
 
 <div id='status'></div>
+<pre id='otaLog' style='display:none;background:#111;color:#d6e2f0;font-family:monospace;font-size:12px;padding:12px;border-radius:8px;max-height:260px;overflow-y:auto;white-space:pre-wrap;margin-top:12px;line-height:1.45;'></pre>
 <script>
 // Allow Dashboard PWA to pass ?url=https://.../latest.bin for 1-tap flashing.
 (function () {
@@ -1000,12 +1001,25 @@ const char* updatePage = R"rawliteral(
   if (qUrl) document.getElementById('binUrl').value = qUrl;
 })();
 
+var logEl = document.getElementById('otaLog');
+function clearLog() {
+  logEl.style.display = 'block';
+  logEl.textContent = '';
+}
+function appendLog(line) {
+  logEl.style.display = 'block';
+  var t = new Date().toLocaleTimeString([], { hour12: false });
+  logEl.textContent += '[' + t + '] ' + line + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
 function setBusy(busy) {
   document.querySelectorAll('input').forEach(function (el) { el.disabled = busy; });
 }
 
 function pollAfterReboot(status) {
   var elapsed = 0, step = 2500, maxMs = 60000;
+  appendLog('Waiting for ESP32 to finish 5s solid-LED confirmation & reboot...');
   function ping() {
     var x = new XMLHttpRequest();
     x.open('GET', '/?_=' + Date.now(), true);
@@ -1014,6 +1028,7 @@ function pollAfterReboot(status) {
       if (x.status === 200) {
         status.className = 'ok';
         status.textContent = 'Device rebooted with new firmware! Reloading...';
+        appendLog('ESP32 is back online! Reloading page...');
         setTimeout(function () { window.location.reload(); }, 1000);
       } else retry();
     };
@@ -1026,12 +1041,14 @@ function pollAfterReboot(status) {
     if (elapsed >= maxMs) {
       status.className = 'fail';
       status.textContent = 'Device has not come back online yet -- check power/WiFi.';
+      appendLog('Timed out waiting for ESP32 to come back online.');
       setBusy(false);
       return;
     }
+    appendLog('Still waiting for reboot (' + Math.round(elapsed / 1000) + 's)...');
     setTimeout(ping, step);
   }
-  setTimeout(ping, 6000);
+  setTimeout(ping, 7500);
 }
 
 document.getElementById('urlForm').addEventListener('submit', function (e) {
@@ -1040,28 +1057,50 @@ document.getElementById('urlForm').addEventListener('submit', function (e) {
   if (!url) return;
   var status = document.getElementById('status');
   setBusy(true);
+  clearLog();
   status.className = 'busy';
-  status.textContent = 'Downloading & flashing firmware (takes ~15-30s, do not unplug)...';
+  status.textContent = 'Starting OTA pull...';
+  appendLog('Sending URL to ESP32: ' + url);
 
   var xhr = new XMLHttpRequest();
+  var seenLen = 0;
+  function flushStream() {
+    var txt = xhr.responseText || '';
+    if (txt.length > seenLen) {
+      var chunk = txt.slice(seenLen);
+      seenLen = txt.length;
+      chunk.split('\n').forEach(function (line) {
+        if (line.trim()) appendLog(line.trim());
+      });
+    }
+  }
   xhr.open('POST', '/update-url', true);
   xhr.timeout = 120000;
   xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+  xhr.addEventListener('progress', flushStream);
   xhr.addEventListener('load', function () {
-    var ok = xhr.status === 200;
+    flushStream();
+    var all = xhr.responseText || '';
+    var ok = xhr.status === 200 && all.indexOf('[OTA] DONE') !== -1;
     status.className = ok ? 'ok' : 'fail';
-    status.textContent = xhr.responseText || ('Failed (HTTP ' + xhr.status + ').');
+    status.textContent = ok
+      ? 'OTA succeeded! Blue LED solid for 5s, then rebooting...'
+      : 'OTA failed -- see live log below.';
     if (ok) pollAfterReboot(status);
     else setBusy(false);
   });
   xhr.addEventListener('error', function () {
+    flushStream();
     status.className = 'fail';
     status.textContent = 'Connection lost during update -- checking if device rebooted...';
+    appendLog('Connection dropped during update -- probing ESP32...');
     pollAfterReboot(status);
   });
   xhr.addEventListener('timeout', function () {
+    flushStream();
     status.className = 'fail';
     status.textContent = 'Update timed out -- check Serial or /health.';
+    appendLog('Request timed out after 120s.');
     setBusy(false);
   });
   xhr.send('url=' + encodeURIComponent(url));
@@ -1071,37 +1110,50 @@ document.getElementById('fileForm').addEventListener('submit', function (e) {
   e.preventDefault();
   var fileInput = document.getElementById('binFile');
   if (!fileInput.files || !fileInput.files.length) return;
+  var file = fileInput.files[0];
   var status = document.getElementById('status');
   var fd = new FormData();
-  fd.append('update', fileInput.files[0]);
+  fd.append('update', file);
 
   setBusy(true);
+  clearLog();
   status.className = 'busy';
   status.textContent = 'Uploading firmware (0%)...';
+  appendLog('Starting upload: ' + file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)');
 
+  var lastPct = -10;
   var xhr = new XMLHttpRequest();
   xhr.open('POST', '/update', true);
   xhr.timeout = 120000;
   xhr.upload.addEventListener('progress', function (ev) {
     if (ev.lengthComputable) {
-      status.textContent = 'Uploading firmware (' + Math.round(ev.loaded * 100 / ev.total) + '%)...';
+      var pct = Math.round(ev.loaded * 100 / ev.total);
+      status.textContent = 'Uploading & flashing (' + pct + '%)...';
+      if (pct >= lastPct + 10 || pct === 100) {
+        lastPct = pct;
+        appendLog('Uploading to ESP32: ' + pct + '% (' + Math.round(ev.loaded / 1024) + ' / ' + Math.round(ev.total / 1024) + ' KB)');
+      }
+      if (pct === 100) appendLog('Upload sent -- ESP32 is verifying flash image...');
     }
   });
   xhr.addEventListener('load', function () {
     var ok = xhr.status === 200;
     status.className = ok ? 'ok' : 'fail';
     status.textContent = xhr.responseText || ('Failed (HTTP ' + xhr.status + ').');
+    appendLog('ESP32: ' + (xhr.responseText || ('HTTP ' + xhr.status)));
     if (ok) pollAfterReboot(status);
     else setBusy(false);
   });
   xhr.addEventListener('error', function () {
     status.className = 'fail';
     status.textContent = 'Upload interrupted -- check WiFi and try again.';
+    appendLog('Upload interrupted (network error).');
     setBusy(false);
   });
   xhr.addEventListener('timeout', function () {
     status.className = 'fail';
     status.textContent = 'Upload timed out.';
+    appendLog('Upload timed out after 120s.');
     setBusy(false);
   });
   xhr.send(fd);
@@ -1231,8 +1283,21 @@ volatile bool highPowerWifiAwake = true;
 unsigned long highPowerSleepStartMs = 0;
 unsigned long highPowerWakeStartMs  = 0;
 
+volatile bool otaInProgress = false;
+bool otaLedState = false;
+unsigned long otaLedLastToggleMs = 0;
+
 bool ledAvailableForStatus() {
-  return powerMode == POWER_NORMAL;
+  return powerMode == POWER_NORMAL && !otaInProgress;
+}
+
+void serviceOtaLed() {
+  unsigned long now = millis();
+  if (now - otaLedLastToggleMs >= 200) {
+    otaLedLastToggleMs = now;
+    otaLedState = !otaLedState;
+    digitalWrite(LED_PIN, otaLedState ? HIGH : LOW);
+  }
 }
 
 // Registers every network in the live list (loadWifiNetworksFromDisk() must
@@ -1321,6 +1386,7 @@ void connectWiFi() {
 // which randomizes its hotspot subnet each time it's toggled on) still
 // triggers a fresh setup instead of being skipped as "unchanged".
 String lastConnectedSSID = "";
+String lastPublishedIp = "";
 volatile bool forceWifiSetupReset = false;
 bool staticIpWasActive = false;
 
@@ -1336,7 +1402,10 @@ bool onNetworkConnected() {
   }
 
   String currentSSID = WiFi.SSID();
-  if (currentSSID == lastConnectedSSID) return false;
+  String currentIp   = WiFi.localIP().toString();
+  if (currentSSID == lastConnectedSSID && currentIp == lastPublishedIp && currentIp != "0.0.0.0") {
+    return false;
+  }
   lastConnectedSSID = currentSSID;
 
   bool hasStaticConfig = false;
@@ -1388,6 +1457,7 @@ bool onNetworkConnected() {
     Serial.println("mDNS responder failed to start");
   }
 
+  lastPublishedIp = WiFi.localIP().toString();
   return true;
 }
 
@@ -1433,16 +1503,39 @@ void configureSecureClient(WiFiClientSecure& client) {
 // whenever any of those five fields actually changes -- see the call sites
 // there for why (a WiFi-on session doesn't reconnect when toggled, so
 // nothing would otherwise trigger a fresh publish).
-void publishStatusToFirebase() {
-  if (WiFi.status() != WL_CONNECTED) return;
+// Lightweight real-internet probe: resolves Firebase host via DNS and opens a
+// short TCP connection on port 443. Catches dead hotspots and captive portals
+// where WiFi.status() still claims WL_CONNECTED with no working internet.
+bool checkInternetReachable() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  if (WiFi.localIP() == IPAddress(0, 0, 0, 0)) return false;
 
-  // Snapshot under the lock -- see settingsMutex's comment up top. This
-  // function is called from core 1 (enterPowerSaving()/exitPowerSaving()/the
-  // toggles handler) AND, via onNetworkConnected(), from wifiMaintenanceTask
-  // on core 0 -- while /firebase's POST handler (core 1) can reassign these
-  // Strings at any time. Released immediately, before the HTTP call below.
+  String fbHost;
+  if (xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(500)) != pdTRUE) return true; // avoid false negative on lock contention
+  fbHost = currentFirebaseHost;
+  xSemaphoreGive(settingsMutex);
+
+  // Strip optional :port for DNS/TCP check
+  int colon = fbHost.indexOf(':');
+  String bareHost = (colon >= 0) ? fbHost.substring(0, colon) : fbHost;
+  IPAddress resolved;
+  if (!WiFi.hostByName(bareHost.c_str(), resolved)) {
+    return false;
+  }
+  WiFiClient probe;
+  probe.setTimeout(3000);
+  bool ok = probe.connect(resolved, 443);
+  if (ok) probe.stop();
+  return ok;
+}
+
+bool publishStatusToFirebase() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  IPAddress ip = WiFi.localIP();
+  if (ip == IPAddress(0, 0, 0, 0)) return false;
+
   String fbHost, fbAuth;
-  if (xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
+  if (xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return false;
   fbHost = currentFirebaseHost;
   fbAuth = currentFirebaseAuth;
   xSemaphoreGive(settingsMutex);
@@ -1451,17 +1544,19 @@ void publishStatusToFirebase() {
   String url = "https://" + fbHost + "/status.json";
   if (fbAuth.length() > 0) url += "?auth=" + fbAuth;
 
-  // fsOk reflects the filesystem-mount-safety logic in setup() -- false here
-  // means a mount failed on a device that's mounted before, and setup()
-  // deliberately did NOT auto-format to avoid wiping saved data (see
-  // fsHasMountedBefore() above). Surfaced here so that's visible remotely,
-  // not just in a Serial log nobody's watching.
-  String payload = "{\"ip\":\"" + WiFi.localIP().toString() + "\",\"ssid\":\"" + jsonEscape(WiFi.SSID()) + "\",\"fsOk\":" + (fsReady ? "true" : "false") +
+  time_t nowSec = time(nullptr);
+  unsigned long lastSeen = ((unsigned long)nowSec >= MIN_VALID_EPOCH) ? (unsigned long)nowSec : 0;
+
+  String payload = "{\"ip\":\"" + ip.toString() +
+                    "\",\"ssid\":\"" + jsonEscape(WiFi.SSID()) +
+                    "\",\"fsOk\":" + (fsReady ? "true" : "false") +
+                    ",\"internetOk\":true" +
+                    ",\"lastSeen\":" + String(lastSeen) +
                     ",\"powerMode\":\"" + String(powerModeName(powerMode)) + "\"}";
 
   if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
     Serial.println("Failed to publish status to Firebase (TLS busy)");
-    return;
+    return false;
   }
   int code = -1;
   {
@@ -1479,10 +1574,12 @@ void publishStatusToFirebase() {
   if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
 
   if (code == 200) {
+    lastPublishedIp = ip.toString();
     Serial.println("Status published to Firebase: " + payload);
-  } else {
-    Serial.println("Failed to publish status to Firebase (HTTP " + String(code) + ")");
+    return true;
   }
+  Serial.println("Failed to publish status to Firebase (HTTP " + String(code) + ")");
+  return false;
 }
 
 // Sends one reading to Firebase. Returns the HTTP status code (200 = success;
@@ -2039,20 +2136,35 @@ void saveOtaBinUrl(const String& url) {
   syncCodePrefs.putString("ota_bin_url", url);
 }
 
-// Downloads a compiled .bin from an https:// URL and flashes it via Update.h.
+void otaStreamLog(const String& msg) {
+  Serial.println(msg);
+  server.sendContent(msg + "\n");
+}
+
+// Downloads a compiled .bin from an https:// URL, flashes via Update.h, blinks
+// the blue LED every 200ms, and streams live status lines back to the browser.
 bool performOtaFromUrl(const String& url, String& errOut) {
   if (!url.startsWith("https://") || url.length() > 256 || url.indexOf(' ') >= 0) {
     errOut = "URL must start with https:// and contain no spaces.";
+    otaStreamLog("[OTA] FAILED: " + errOut);
     return false;
   }
   if (WiFi.status() != WL_CONNECTED) {
     errOut = "WiFi is not connected.";
+    otaStreamLog("[OTA] FAILED: " + errOut);
     return false;
   }
+  otaStreamLog("[OTA] Waiting for TLS lock...");
   if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
     errOut = "Device busy with another HTTPS request -- try again.";
+    otaStreamLog("[OTA] FAILED: " + errOut);
     return false;
   }
+
+  otaInProgress = true;
+  otaLedState = true;
+  otaLedLastToggleMs = millis();
+  digitalWrite(LED_PIN, HIGH);
 
   bool ok = false;
   {
@@ -2064,34 +2176,98 @@ bool performOtaFromUrl(const String& url, String& errOut) {
     http.setTimeout(30000);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
+    otaStreamLog("[OTA] Connecting to firmware server...");
     if (!http.begin(client, url)) {
       errOut = "Could not initialize HTTPS connection.";
+      otaStreamLog("[OTA] FAILED: " + errOut);
     } else {
       int httpCode = http.GET();
       if (httpCode != HTTP_CODE_OK) {
         errOut = "Download failed (HTTP " + String(httpCode) + ").";
+        otaStreamLog("[OTA] FAILED: " + errOut);
       } else {
         int contentLength = http.getSize();
         size_t updateSize = (contentLength > 0) ? (size_t)contentLength : UPDATE_SIZE_UNKNOWN;
+        if (contentLength > 0) {
+          otaStreamLog("[OTA] Connected (HTTP 200) -- firmware size: " + String(contentLength / 1024.0, 1) + " KB");
+        } else {
+          otaStreamLog("[OTA] Connected (HTTP 200) -- chunked stream");
+        }
+        otaStreamLog("[OTA] Preparing OTA flash partition...");
         if (!Update.begin(updateSize)) {
           errOut = "Not enough OTA space: " + String(Update.errorString());
+          otaStreamLog("[OTA] FAILED: " + errOut);
         } else {
+          otaStreamLog("[OTA] Downloading & flashing (blue LED blinking every 200ms)...");
           WiFiClient* stream = http.getStreamPtr();
-          size_t written = Update.writeStream(*stream);
-          if (contentLength > 0 && (int)written != contentLength) {
+          uint8_t buf[1024];
+          size_t written = 0;
+          int lastPctLogged = -10;
+          unsigned long lastProgressMs = millis();
+          unsigned long lastDataMs = millis();
+          bool writeErr = false;
+
+          while (http.connected() && (contentLength < 0 || (int)written < contentLength)) {
+            serviceOtaLed();
+            size_t avail = stream->available();
+            if (avail > 0) {
+              size_t toRead = avail > sizeof(buf) ? sizeof(buf) : avail;
+              int n = stream->readBytes(buf, toRead);
+              if (n > 0) {
+                lastDataMs = millis();
+                if (Update.write(buf, (size_t)n) != (size_t)n) {
+                  writeErr = true;
+                  break;
+                }
+                written += (size_t)n;
+                if (contentLength > 0) {
+                  int pct = (int)((written * 100UL) / (size_t)contentLength);
+                  if (pct >= lastPctLogged + 10 || pct == 100) {
+                    lastPctLogged = pct;
+                    lastProgressMs = millis();
+                    otaStreamLog("[OTA] Flashing... " + String(pct) + "% (" +
+                                 String(written / 1024) + " / " + String(contentLength / 1024) + " KB)");
+                  }
+                } else if (millis() - lastProgressMs >= 2000) {
+                  lastProgressMs = millis();
+                  otaStreamLog("[OTA] Flashing... " + String(written / 1024) + " KB written");
+                }
+              }
+            } else {
+              if (millis() - lastDataMs > 15000) break;
+              delay(5);
+            }
+          }
+
+          if (writeErr) {
+            Update.abort();
+            errOut = "Flash write error: " + String(Update.errorString());
+            otaStreamLog("[OTA] FAILED: " + errOut);
+          } else if (contentLength > 0 && (int)written != contentLength) {
             Update.abort();
             errOut = "Incomplete download (" + String(written) + "/" + String(contentLength) + " bytes).";
-          } else if (!Update.end(true)) {
-            errOut = "Flash verification failed: " + String(Update.errorString());
-          } else if (!Update.isFinished()) {
-            errOut = "Update did not finish cleanly.";
+            otaStreamLog("[OTA] FAILED: " + errOut);
           } else {
-            ok = true;
+            otaStreamLog("[OTA] Verifying written image & switching boot partition...");
+            if (!Update.end(true)) {
+              errOut = "Flash verification failed: " + String(Update.errorString());
+              otaStreamLog("[OTA] FAILED: " + errOut);
+            } else if (!Update.isFinished()) {
+              errOut = "Update did not finish cleanly.";
+              otaStreamLog("[OTA] FAILED: " + errOut);
+            } else {
+              otaStreamLog("[OTA] DONE! " + String(written / 1024.0, 1) + " KB flashed & verified. Holding blue LED solid for 5s, then rebooting...");
+              ok = true;
+            }
           }
         }
       }
       http.end();
     }
+  }
+  if (!ok) {
+    digitalWrite(LED_PIN, LOW);
+    otaInProgress = false;
   }
   if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
   return ok;
@@ -2852,6 +3028,7 @@ void wifiMaintenanceTask(void* param) {
   unsigned long lastStatusPublishMs = 0;
   unsigned long lastZombieReconnectMs = 0;
   unsigned long lastPreferredScanMs = 0;
+  int consecutiveNetFailures = 0;
 
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -3023,13 +3200,37 @@ void wifiMaintenanceTask(void* param) {
     // are mutually exclusive per iteration below only to avoid firing the
     // blocking PUT twice back-to-back for no reason, not because the
     // periodic one is redundant with it).
+    unsigned long heartbeatMs = STATUS_REPUBLISH_INTERVAL_MS;
+    if (powerMode == POWER_LOW)    heartbeatMs = 90000UL;
+    if (powerMode == POWER_MEDIUM) heartbeatMs = 150000UL;
+
     if (justConnected) {
-      lastZombieReconnectMs = now; // give the fresh connection a full window before any zombie reconnect
-      publishStatusToFirebase();
+      lastZombieReconnectMs = now;
+      if (publishStatusToFirebase()) {
+        consecutiveNetFailures = 0;
+      } else {
+        consecutiveNetFailures++;
+      }
       lastStatusPublishMs = now;
-    } else if (now - lastStatusPublishMs >= STATUS_REPUBLISH_INTERVAL_MS) {
-      publishStatusToFirebase();
+    } else if (WiFi.status() == WL_CONNECTED && (now - lastStatusPublishMs >= heartbeatMs)) {
+      bool alive = checkInternetReachable() && publishStatusToFirebase();
       lastStatusPublishMs = now;
+      if (alive) {
+        consecutiveNetFailures = 0;
+      } else {
+        consecutiveNetFailures++;
+        Serial.println("WiFi connected but internet check/heartbeat failed (" + String(consecutiveNetFailures) + "/2).");
+        if (consecutiveNetFailures >= 2 && wifiCheckAllowedNow()) {
+          Serial.println("No working internet on '" + WiFi.SSID() + "' -- disconnecting to look for a working network.");
+          consecutiveNetFailures = 0;
+          if (xSemaphoreTake(wifiMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            WiFi.disconnect();
+            lastConnectedSSID = "";
+            lastPublishedIp = "";
+            xSemaphoreGive(wifiMutex);
+          }
+        }
+      }
     }
   }
 }
@@ -3463,24 +3664,33 @@ void setup() {
   server.on("/update", HTTP_POST,
     []() {
       if (!requireAdminAuth()) return;
-      bool ok = !Update.hasError();
+      bool ok = !Update.hasError() && Update.isFinished();
       server.sendHeader("Connection", "close");
       server.send(ok ? 200 : 500, "text/plain",
-        ok ? "Firmware flashed -- restarting..." : ("Update failed: " + String(Update.errorString())));
+        ok ? "Firmware flashed -- LED solid 5s, then restarting..." : ("Update failed: " + String(Update.errorString())));
       if (ok) {
-        delay(500);
+        digitalWrite(LED_PIN, HIGH);
+        delay(5000);
         ESP.restart();
+      } else {
+        digitalWrite(LED_PIN, LOW);
+        otaInProgress = false;
       }
     },
     []() {
       if (!server.authenticate(currentOtaUser.c_str(), currentOtaPass.c_str())) return;
       HTTPUpload& upload = server.upload();
       if (upload.status == UPLOAD_FILE_START) {
+        otaInProgress = true;
+        otaLedState = true;
+        otaLedLastToggleMs = millis();
+        digitalWrite(LED_PIN, HIGH);
         Serial.println("OTA upload start: " + upload.filename);
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
           Serial.println("OTA begin failed: " + String(Update.errorString()));
         }
       } else if (upload.status == UPLOAD_FILE_WRITE) {
+        serviceOtaLed();
         if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
           Serial.println("OTA write failed: " + String(Update.errorString()));
         }
@@ -3490,6 +3700,10 @@ void setup() {
         } else {
           Serial.println("OTA end failed: " + String(Update.errorString()));
         }
+      } else if (upload.status == UPLOAD_FILE_ABORTED) {
+        Update.abort();
+        digitalWrite(LED_PIN, LOW);
+        otaInProgress = false;
       }
     }
   );
@@ -3503,17 +3717,21 @@ void setup() {
     url.trim();
     saveOtaBinUrl(url);
 
-    String err;
-    Serial.println("OTA pull requested from: " + url);
-    if (!performOtaFromUrl(url, err)) {
-      Serial.println("OTA pull failed: " + err);
-      return server.send(500, "text/plain", err);
-    }
-
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.sendHeader("Cache-Control", "no-store");
     server.sendHeader("Connection", "close");
-    server.send(200, "text/plain", "Firmware downloaded & flashed -- restarting...");
-    delay(500);
-    ESP.restart();
+    server.send(200, "text/plain", "");
+
+    String err;
+    otaStreamLog("[OTA] Request accepted -- starting pull update.");
+    bool ok = performOtaFromUrl(url, err);
+    server.sendContent(""); // finish chunked response
+
+    if (ok) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(5000);
+      ESP.restart();
+    }
   });
 
   server.begin();
