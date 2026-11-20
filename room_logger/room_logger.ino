@@ -849,6 +849,14 @@ const char* healthPage = R"rawliteral(<!DOCTYPE html>
   <span class='badge' id='power-badge'>...</span>
 </div>
 
+<div class='health-row'>
+  <div>
+    <div class='health-name'>OTA partition slot</div>
+    <div class='health-detail' id='ota-detail'>Checking...</div>
+  </div>
+  <span class='badge' id='ota-badge'>...</span>
+</div>
+
 <a class='back-link' href='/'>&larr; Back</a>
 
 <script>
@@ -921,7 +929,15 @@ function refreshHealth() {
       var pm = d.power.mode || 'normal';
       var label = pm.charAt(0).toUpperCase() + pm.slice(1);
       setBadge('power-badge', label, pm === 'normal' ? 'badge-ok' : 'badge-warn');
-      setDetail('power-detail', d.power.cpuMhz + ' MHz · read every ' + Math.round(d.power.readIntervalMs / 1000) + 's');
+      setDetail('power-detail', d.power.cpuMhz + ' MHz \u00b7 read every ' + Math.round(d.power.readIntervalMs / 1000) + 's');
+    }
+
+    if (d.ota) {
+      var slotKb = d.ota.slotKb || 0;
+      var sketchKb = d.ota.sketchKb || 0;
+      var okSlot = slotKb >= 1500;
+      setBadge('ota-badge', okSlot ? (slotKb + ' KB') : (slotKb + ' KB (Small)'), okSlot ? 'badge-ok' : 'badge-warn');
+      setDetail('ota-detail', 'App ' + sketchKb + ' KB / ' + slotKb + ' KB slot' + (okSlot ? ' \u00b7 OTA ready' : ' \u00b7 flash partitions.csv over USB'));
     }
 
     document.getElementById('pageSubtitle').textContent = 'Refreshes automatically every few seconds. Last updated ' + new Date().toLocaleTimeString() + '.';
@@ -2555,6 +2571,11 @@ String buildHealthStatusJson() {
   json += "\"power\":{\"mode\":\"" + String(powerModeName(powerMode)) + "\"" +
           ",\"cpuMhz\":" + String(cpuMhz) +
           ",\"readIntervalMs\":" + String(effectiveReadUploadIntervalMs()) +
+          "},";
+  unsigned long otaSlotKb = (unsigned long)(ESP.getFreeSketchSpace() / 1024UL);
+  unsigned long sketchKb  = (unsigned long)(ESP.getSketchSize() / 1024UL);
+  json += "\"ota\":{\"slotKb\":" + String(otaSlotKb) +
+          ",\"sketchKb\":" + String(sketchKb) +
           "}";
   json += "}";
   return json;
