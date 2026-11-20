@@ -901,15 +901,16 @@ function refreshHealth() {
 
     }
 
+    var rtcInfo = d.rtc.diag ? (' (' + d.rtc.diag + ')') : '';
     if (!d.rtc.present) {
       setBadge('rtc-badge', 'Not found', 'badge-bad');
-      setDetail('rtc-detail', 'No RTC detected on I2C at boot.');
+      setDetail('rtc-detail', 'No RTC detected on I2C' + rtcInfo + '.');
     } else if (!d.rtc.timeValid) {
       setBadge('rtc-badge', 'Unset', 'badge-warn');
-      setDetail('rtc-detail', 'Present, but its clock looks unset.');
+      setDetail('rtc-detail', 'Present, but clock unset' + rtcInfo + '.');
     } else {
       setBadge('rtc-badge', 'OK', 'badge-ok');
-      setDetail('rtc-detail', 'Present and keeping time.');
+      setDetail('rtc-detail', 'Present and keeping time' + rtcInfo + '.');
     }
 
     if (!d.dht.everRead) {
@@ -1842,21 +1843,41 @@ void handleReadingCycle() {
 // than reaching for a JSON library.
 const uint8_t DS1307_I2C_ADDR = 0x68;
 bool rtcPresent = false;
+String rtcDiag = "not probed";
 
 uint8_t bcdToDec(uint8_t bcd) { return ((bcd >> 4) * 10) + (bcd & 0x0F); }
 uint8_t decToBcd(uint8_t dec) { return ((dec / 10) << 4) | (dec % 10); }
 
-// Wire.begin() with these pins, then a bare address probe -- endTransmission()
-// returning 0 means something actually ACK'd at 0x68, not just that the I2C
-// peripheral itself initialized. Safe to call even if no RTC is wired up at
-// all; the rest of the sketch already falls back to NTP-only exactly as it
-// did before this feature existed (see setup()/syncTimeSources()).
+// Wire.begin() with 100 kHz clock + short power-up settle + 3 probe retries.
+// If 0x68 does not ACK, scans the I2C bus and records a short diagnostic
+// string for /health so wiring/address/voltage issues are visible immediately.
 bool rtcBegin() {
   if (i2cMutex != NULL && xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
-  Wire.begin(RTC_SDA_PIN, RTC_SCL_PIN);
-  Wire.setClock(100000); // DS1307 datasheet max is 100 kHz
-  Wire.beginTransmission(DS1307_I2C_ADDR);
-  bool ok = (Wire.endTransmission(true) == 0);
+  Wire.begin(RTC_SDA_PIN, RTC_SCL_PIN, 100000);
+  delay(50);
+
+  uint8_t err = 4;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    Wire.beginTransmission(DS1307_I2C_ADDR);
+    err = Wire.endTransmission(true);
+    if (err == 0) break;
+    delay(25);
+  }
+
+  bool ok = (err == 0);
+  if (!ok) {
+    String found = "";
+    for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+      Wire.beginTransmission(addr);
+      if (Wire.endTransmission(true) == 0) {
+        if (found.length() > 0) found += ",";
+        found += "0x";
+        if (addr < 16) found += "0";
+        found += String(addr, HEX);
+      }
+    }
+    rtcDiag = "I2C err " + String(err) + " at 0x68; bus: " + (found.length() ? found : "empty");
+  }
   if (i2cMutex != NULL) xSemaphoreGive(i2cMutex);
   return ok;
 }
@@ -1868,7 +1889,9 @@ bool rtcHasValidTime() {
   Wire.write((uint8_t)0x00);
   // Use STOP (true) instead of repeated-start (false): ESP32 Core 3.x / IDF 5.5
   // I2C driver frequently fails repeated-start reads on DS1307 modules.
-  if (Wire.endTransmission(true) == 0 && Wire.requestFrom((uint8_t)DS1307_I2C_ADDR, (uint8_t)7) == 7) {
+  uint8_t txErr = Wire.endTransmission(true);
+  int got = (txErr == 0) ? Wire.requestFrom((uint8_t)DS1307_I2C_ADDR, (uint8_t)7) : 0;
+  if (txErr == 0 && got == 7) {
     uint8_t rawSec   = Wire.read();
     Wire.read(); // min
     Wire.read(); // hour
@@ -1878,9 +1901,12 @@ bool rtcHasValidTime() {
     uint8_t rawYear  = Wire.read();
     bool oscRunning  = (rawSec & 0x80) == 0;
     int year2000     = 2000 + bcdToDec(rawYear);
-    int month        = bcdToDec(rawMonth);
-    int day          = bcdToDec(rawDate);
+    int month        = bcdToDec(rawMonth & 0x1F);
+    int day          = bcdToDec(rawDate & 0x3F);
     valid = oscRunning && (year2000 >= 2021) && (month >= 1 && month <= 12) && (day >= 1 && day <= 31);
+    rtcDiag = String(year2000) + "-" + String(month) + "-" + String(day) + (oscRunning ? "" : " (CH halted)");
+  } else {
+    rtcDiag = "read failed (txErr=" + String(txErr) + ", got=" + String(got) + ")";
   }
   if (i2cMutex != NULL) xSemaphoreGive(i2cMutex);
   return valid;
@@ -2042,7 +2068,7 @@ const unsigned long RTC_RETRY_INTERVAL_MS = 30UL * 1000; // how often to retry a
 // Cheap to retry: pure I2C, no WiFi involved, so it runs the same whether
 // WiFi is on, off, or mid-power-saving.
 void retryRtcIfNeeded() {
-  if (timeSynced || rtcPresent) return; // already have a time source -- nothing to do
+  if (rtcPresent) return; // already detected on I2C -- syncTimeSources() handles calibration
   unsigned long nowMs = millis();
   if (nowMs - lastRtcRetryMillis < RTC_RETRY_INTERVAL_MS) return;
   lastRtcRetryMillis = nowMs;
@@ -2052,15 +2078,19 @@ void retryRtcIfNeeded() {
 
   rtcTimeValid = rtcHasValidTime();
   if (!rtcTimeValid) {
-    Serial.println("RTC found on retry, but not set yet -- still waiting on NTP.");
+    Serial.println("RTC found on retry (" + rtcDiag + "), waiting on NTP calibration.");
     return;
   }
 
-  time_t rtcEpoch = rtcGetEpoch();
-  struct timeval tv = { .tv_sec = rtcEpoch, .tv_usec = 0 };
-  settimeofday(&tv, nullptr);
-  timeSynced = true;
-  Serial.println("RTC found on retry (" + String((unsigned long)rtcEpoch) + ") -- system clock synced.");
+  if (!timeSynced) {
+    time_t rtcEpoch = rtcGetEpoch();
+    struct timeval tv = { .tv_sec = rtcEpoch, .tv_usec = 0 };
+    settimeofday(&tv, nullptr);
+    timeSynced = true;
+    Serial.println("RTC found on retry (" + String((unsigned long)rtcEpoch) + ") -- system clock synced.");
+  } else {
+    Serial.println("RTC found on retry (" + rtcDiag + ").");
+  }
 }
 
 // ---------------- Admin username/password storage (NVS) ----------------
@@ -2557,8 +2587,11 @@ String buildHealthStatusJson() {
           ",\"secondsAgo\":" + (fbAttempted ? String((now - lastFirebaseAttemptMillis) / 1000) : String("null")) +
           "},";
 
+  String diagCopy = rtcDiag;
+  diagCopy.replace("\"", "'");
   json += "\"rtc\":{\"present\":" + String(rtcPresent ? "true" : "false") +
-          ",\"timeValid\":" + String(rtcTimeValid ? "true" : "false") + "},";
+          ",\"timeValid\":" + String(rtcTimeValid ? "true" : "false") +
+          ",\"diag\":\"" + diagCopy + "\"},";
 
   json += "\"dht\":{\"everRead\":" + String(dhtEverRead ? "true" : "false") +
           ",\"secondsAgo\":" + (dhtEverRead ? String((now - lastGoodDhtReadMillis) / 1000) : String("null")) +
@@ -2999,8 +3032,9 @@ void sensorUploadTask(void* param) {
 
     unsigned long now = millis();
 
-    if (!firstReadDone || (now - lastReadUploadLocal >= effectiveReadUploadIntervalMs())) {
-      firstReadDone = true;
+    unsigned long readInterval = firstReadDone ? effectiveReadUploadIntervalMs() : 10000UL;
+    if (lastReadUploadLocal == 0 || (now - lastReadUploadLocal >= readInterval)) {
+      if (timeSynced) firstReadDone = true;
       lastReadUploadLocal = now;
       handleReadingCycle();
     }
