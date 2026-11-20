@@ -114,6 +114,7 @@ void applyWifiRadioProfileLocked(PowerMode mode);
 void applyPowerMode(PowerMode newMode, bool publishStatus);
 String jsonEscape(const String& s);
 bool isValidSsid(const String& ssid);
+bool checkInternetReachable();
 
 // Hard cap on how many networks /wifi will let you save. LittleFS and the
 // device's RAM could handle a lot more than this, but a page rendering
@@ -190,7 +191,6 @@ const unsigned long MIN_VALID_EPOCH         = 1600000000UL; // sanity floor for 
 const size_t        MAX_QUEUE_BYTES         = 120000;       // ~120 KB safety cap (fits comfortably in 190 KB min_spiffs LittleFS)
 // ---------------- Button timing (ms) ----------------
 const unsigned long DEBOUNCE_MS            = 50;
-const unsigned long DOUBLE_CLICK_WINDOW_MS = 300;
 const unsigned long LONG_PRESS_MS          = 1000; // hold-to-power-save
 
 // %WIFI_ROWS% is filled in server-side (see the GET /wifi handler) with
@@ -1205,7 +1205,11 @@ bool requireAdminAuth() {
     return false;
   }
   if (!server.authenticate(currentOtaUser.c_str(), currentOtaPass.c_str())) {
-    otaRegisterAuthFailure();
+    // Only count as a failed login when the browser actually sent credentials,
+    // not on the initial unauthenticated challenge that triggers the login popup.
+    if (server.hasHeader("Authorization")) {
+      otaRegisterAuthFailure();
+    }
     server.requestAuthentication();
     return false;
   }
@@ -1283,6 +1287,8 @@ volatile PowerMode powerMode = POWER_NORMAL;
 volatile bool highPowerWifiAwake = true;
 unsigned long highPowerSleepStartMs = 0;
 unsigned long highPowerWakeStartMs  = 0;
+volatile bool statusPublishRequested = false;
+volatile bool highPowerPendingSleep  = false;
 
 volatile bool otaInProgress = false;
 bool otaLedState = false;
@@ -1367,7 +1373,12 @@ bool connectToAnyOpenNetwork() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("Connected to open network: " + openSsid);
+    if (!checkInternetReachable()) {
+      Serial.println("Open network '" + openSsid + "' has no working internet (captive portal?) -- disconnecting.");
+      WiFi.disconnect(false, false);
+      return false;
+    }
+    Serial.println("Connected to open network with working internet: " + openSsid);
     return true;
   }
   return false;
@@ -1430,7 +1441,11 @@ bool onNetworkConnected() {
 
   bool staticIpApplied = false;
   if (hasStaticConfig) {
-    if (WiFi.config(targetIp, targetGw, targetSn, targetDns)) {
+    if (WiFi.localIP() == targetIp) {
+      staticIpApplied = true;
+      staticIpWasActive = true;
+    } else if (WiFi.config(targetIp, targetGw, targetSn, targetDns)) {
+      delay(200);
       Serial.println("Static IP applied: " + targetIp.toString());
       staticIpApplied = true;
       staticIpWasActive = true;
@@ -1577,7 +1592,10 @@ bool publishStatusToFirebase() {
   if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
 
   if (code == 200) {
-    lastPublishedIp = ip.toString();
+    if (wifiMutex == NULL || xSemaphoreTake(wifiMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+      lastPublishedIp = ip.toString();
+      if (wifiMutex != NULL) xSemaphoreGive(wifiMutex);
+    }
     Serial.println("Status published to Firebase: " + payload);
     return true;
   }
@@ -1678,84 +1696,63 @@ void drainQueue(int maxCount) {
     return;
   }
 
-  File tmp = LittleFS.open(QUEUE_TMP_FILE, "w");
-  if (!tmp) {
-    Serial.println("Could not open scratch file for draining backlog");
-    src.close();
-    return;
-  }
-
-  // Same idea as handleReadingCycle() above -- glow for the whole drain pass
-  // (it's a burst of WiFi uploads), gated the same way on ledAvailableForStatus().
   bool litForThisDrain = ledAvailableForStatus();
   if (litForThisDrain) digitalWrite(LED_PIN, HIGH);
 
   int uploaded = 0;
-  bool droppedAny = false; // any entry Firebase permanently rejected (4xx) this pass --
-                           // see the commit-guard below for why this has to be tracked
-                           // separately from `uploaded`
-  bool stopUploading = false;
+  bool droppedAny = false;
+  String failedLine = "";
 
-  while (src.available()) {
+  // Process up to maxCount entries FIRST without touching flash. If nothing
+  // succeeds or gets dropped (e.g. Firebase unreachable), we exit with ZERO
+  // LittleFS writes instead of rewriting the whole backlog every 3 seconds.
+  while (src.available() && uploaded < maxCount && !otaInProgress) {
     String line = src.readStringUntil('\n');
     line.trim();
     if (line.length() == 0) continue;
 
-    if (stopUploading) {
-      tmp.println(line);
-      continue;
-    }
-
     int tabIdx = line.indexOf('\t');
-    if (tabIdx < 0) continue;  // malformed line, drop it
+    if (tabIdx < 0) { droppedAny = true; continue; }
 
-    unsigned long epoch = (unsigned long)line.substring(0, tabIdx).toInt();
+    unsigned long epoch = strtoul(line.substring(0, tabIdx).c_str(), nullptr, 10);
     String payload = line.substring(tabIdx + 1);
-
-    if (uploaded >= maxCount) {
-      tmp.println(line);
-      stopUploading = true;
-      continue;
-    }
 
     int code = putReading(epoch, payload);
     if (code == 200) {
       uploaded++;
     } else if (code >= 400 && code < 500) {
-      // Firebase rejected this specific entry (bad payload, bad path, etc.)
-      // -- retrying it will never succeed, so drop it and keep going instead
-      // of jamming every entry behind it.
       Serial.println("Dropping unrecoverable queued reading (HTTP " + String(code) + ")");
       droppedAny = true;
     } else {
-      // Transport failure or server error -- likely temporary. Keep it and
-      // stop this pass so entries stay in order.
-      tmp.println(line);
-      stopUploading = true;
+      failedLine = line;
+      break;
     }
   }
 
-  src.close();
-  tmp.close();
-
-  // Commit whenever the queue actually changed -- either something uploaded
-  // OR something was dropped as unrecoverable. Checking `uploaded > 0` alone
-  // (the original condition) meant a pass where EVERY entry was a 4xx drop
-  // and nothing succeeded (uploaded stays 0) fell into the else branch below
-  // and discarded the correctly-filtered tmp file instead of committing it --
-  // leaving the original, unmodified QUEUE_FILE on disk with the "dropped"
-  // entries still sitting in it. They'd never actually be removed: the next
-  // drainQueue() pass reads the same unrecoverable entries again, logs the
-  // same "Dropping unrecoverable..." line again, and again fails to persist
-  // the removal -- forever.
   if (uploaded > 0 || droppedAny) {
-    // rename() atomically replaces an existing destination on its own -- no
-    // separate remove() first, which used to leave a window where a power
-    // loss between the two calls could orphan the whole backlog.
-    LittleFS.rename(QUEUE_TMP_FILE, QUEUE_FILE);
+    if (failedLine.length() == 0 && !src.available()) {
+      src.close();
+      LittleFS.remove(QUEUE_FILE);
+    } else {
+      File tmp = LittleFS.open(QUEUE_TMP_FILE, "w");
+      if (tmp) {
+        if (failedLine.length() > 0) tmp.println(failedLine);
+        uint8_t buf[256];
+        while (src.available()) {
+          size_t n = src.read(buf, sizeof(buf));
+          if (n > 0) tmp.write(buf, n);
+        }
+        tmp.close();
+        src.close();
+        LittleFS.rename(QUEUE_TMP_FILE, QUEUE_FILE);
+      } else {
+        Serial.println("Could not open scratch file for draining backlog");
+        src.close();
+      }
+    }
     Serial.println("Drained " + String(uploaded) + " queued reading(s) from backlog");
   } else {
-    LittleFS.remove(QUEUE_TMP_FILE);
+    src.close();
   }
 
   if (litForThisDrain && ledAvailableForStatus()) digitalWrite(LED_PIN, LOW);
@@ -1944,8 +1941,7 @@ bool rtcSetEpoch(time_t epoch) {
 
 unsigned long lastButtonPress      = 0;
 volatile bool timeSynced           = false;
-int           idleClickCount       = 0;
-unsigned long idleClickWindowStart = 0;
+bool          holdingForPowerSave  = false;
 unsigned long longPressStart       = 0;
 
 bool sessionButtonPressed() {
@@ -1985,7 +1981,7 @@ void syncTimeSources() {
 
   if (!timeSynced) {
     timeSynced = true; // no RTC, or an unset one -- NTP is this boot's first valid time
-    Serial.println("Time synced via NTP -- session button is now live.");
+    Serial.println("Time synced via NTP -- system clock synced.");
   }
 
   if (!rtcPresent) return;
@@ -2048,7 +2044,7 @@ void retryRtcIfNeeded() {
   struct timeval tv = { .tv_sec = rtcEpoch, .tv_usec = 0 };
   settimeofday(&tv, nullptr);
   timeSynced = true;
-  Serial.println("RTC found on retry (" + String((unsigned long)rtcEpoch) + ") -- session button is now live.");
+  Serial.println("RTC found on retry (" + String((unsigned long)rtcEpoch) + ") -- system clock synced.");
 }
 
 // ---------------- Admin username/password storage (NVS) ----------------
@@ -2774,7 +2770,7 @@ WifiSaveResult addOrUpdateWifiNetwork(const String& ssid, const String& password
 // comment above), so this only updates storage -- the /wifi/remove handler
 // is the one that decides to reboot. Refuses to remove the last remaining
 // network so the device is never left with nothing to connect to.
-bool removeWifiNetworkByIndex(int index) {
+bool removeWifiNetworkByIndex(int index, String& outRemovedSsid) {
   if (wifiNetworksMutex != NULL && xSemaphoreTake(wifiNetworksMutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
     return false;
   }
@@ -2784,6 +2780,7 @@ bool removeWifiNetworkByIndex(int index) {
     wifiNetworks.erase(wifiNetworks.begin() + index);
     if (saveWifiNetworksToDisk()) {
       ok = true;
+      outRemovedSsid = removed.ssid;
       if (removed.ssid == preferredWifiSsid) {
         preferredWifiSsid = "";
         syncCodePrefs.putString("pref_ssid", "");
@@ -2897,24 +2894,17 @@ void applyPowerMode(PowerMode newMode, bool publishStatus) {
   }
 
   if (newMode == POWER_HIGH) {
-    if (publishStatus && WiFi.status() == WL_CONNECTED) {
-      publishStatusToFirebase();
-    }
-    highPowerWifiAwake = false;
-    highPowerSleepStartMs = millis();
-    if (xSemaphoreTake(wifiMutex, pdMS_TO_TICKS(1500)) == pdTRUE) {
-      WiFi.mode(WIFI_OFF);
-      lastConnectedSSID = "";
-      xSemaphoreGive(wifiMutex);
-    } else {
-      forceWifiSetupReset = true;
-    }
     setCpuFrequencyMhz(POWER_SAVING_CPU_MHZ);
-    Serial.println("Power mode -> High Power Saving (80 MHz, WiFi off for 30m between 60s sync windows).");
+    // Let wifiMaintenanceTask (Core 0) publish status.json and cut WiFi cleanly
+    // so Core 1's HTTP handler never stalls for a blocking HTTPS request.
+    highPowerPendingSleep = true;
+    if (publishStatus) statusPublishRequested = true;
+    Serial.println("Power mode -> High Power Saving (80 MHz, WiFi sleeping for 30m after status publish).");
     return;
   }
 
   // Normal / Low / Medium: WiFi stays on with mode-appropriate modem sleep & TX power.
+  highPowerPendingSleep = false;
   setCpuFrequencyMhz(newMode == POWER_NORMAL ? NORMAL_CPU_MHZ : POWER_SAVING_CPU_MHZ);
   highPowerWifiAwake = true;
 
@@ -2929,9 +2919,7 @@ void applyPowerMode(PowerMode newMode, bool publishStatus) {
     forceWifiSetupReset = true;
   }
 
-  if (publishStatus && WiFi.status() == WL_CONNECTED) {
-    publishStatusToFirebase();
-  }
+  if (publishStatus) statusPublishRequested = true;
   Serial.println("Power mode -> " + String(powerModeLabel(newMode)));
 }
 
@@ -2976,23 +2964,27 @@ String buildPowerSavingContentHtml() {
 // now touched exclusively from this task (loop() no longer calls either
 // function), so -- unlike SESSION_LOG_FILE -- no mutex is needed for them.
 void sensorUploadTask(void* param) {
+  bool firstReadDone                  = false;
   unsigned long lastReadUploadLocal   = 0;
   unsigned long lastDrainAttemptLocal = 0;
 
+  vTaskDelay(pdMS_TO_TICKS(2000)); // let DHT22 stabilize after boot
+
   for (;;) {
+    if (otaInProgress) {
+      vTaskDelay(pdMS_TO_TICKS(500));
+      continue;
+    }
+
     unsigned long now = millis();
 
-    if (now - lastReadUploadLocal >= effectiveReadUploadIntervalMs()) {
+    if (!firstReadDone || (now - lastReadUploadLocal >= effectiveReadUploadIntervalMs())) {
+      firstReadDone = true;
       lastReadUploadLocal = now;
       handleReadingCycle();
     }
 
-    // Interval check always runs on schedule regardless of the
-    // uploads-paused toggle, so flipping it back on mid-session behaves
-    // predictably (next check, not "however long it's been paused").
-    // uploadsAllowedNow() gates only whether this particular check actually
-    // does anything.
-    if (now - lastDrainAttemptLocal >= effectiveDrainIntervalMs()) {
+    if (!otaInProgress && (now - lastDrainAttemptLocal >= effectiveDrainIntervalMs())) {
       lastDrainAttemptLocal = now;
       if (uploadsAllowedNow() && WiFi.status() == WL_CONNECTED) {
         drainQueue(DRAIN_BATCH_SIZE);
@@ -3055,7 +3047,30 @@ void wifiMaintenanceTask(void* param) {
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(500));
 
+    if (otaInProgress) continue;
+
     unsigned long now = millis();
+
+    // Handle async status publish / High Power Saving sleep handoff requested from Core 1.
+    if (statusPublishRequested) {
+      statusPublishRequested = false;
+      if (WiFi.status() == WL_CONNECTED) {
+        publishStatusToFirebase();
+        lastStatusPublishMs = now;
+      }
+    }
+    if (highPowerPendingSleep && powerMode == POWER_HIGH) {
+      highPowerPendingSleep = false;
+      highPowerWifiAwake = false;
+      highPowerSleepStartMs = now;
+      if (xSemaphoreTake(wifiMutex, pdMS_TO_TICKS(1500)) == pdTRUE) {
+        WiFi.mode(WIFI_OFF);
+        lastConnectedSSID = "";
+        lastPublishedIp = "";
+        xSemaphoreGive(wifiMutex);
+      }
+      continue;
+    }
 
     // High Power Saving duty-cycle: keep WiFi off for HIGH_POWER_SLEEP_MS, then
     // wake for HIGH_POWER_WAKE_WINDOW_MS so queued readings drain and the admin
@@ -3283,40 +3298,34 @@ void wifiMaintenanceTask(void* param) {
 
 // Physical BOOT button handler:
 // - In any power-saving mode (Low/Medium/High): single click returns to Normal immediately.
-// - In Normal mode: 1s hold or triple-click switches to High Power Saving.
+// - In Normal mode: hold for 1 second to enter High Power Saving.
 void handleButton() {
   bool rawPress = sessionButtonPressed();
   unsigned long now = millis();
 
   if (powerMode != POWER_NORMAL) {
+    holdingForPowerSave = false;
     if (rawPress) {
-      idleClickCount = 0;
       applyPowerMode(POWER_NORMAL, true);
     }
     return;
   }
 
   if (rawPress) {
-    idleClickCount++;
-    idleClickWindowStart = now;
+    holdingForPowerSave = true;
     longPressStart = now;
-    if (idleClickCount >= 3) {
-      idleClickCount = 0;
-      applyPowerMode(POWER_HIGH, true);
-    }
     return;
   }
 
-  if (idleClickCount == 1 && digitalRead(BUTTON_PIN) == LOW) {
-    if (now - longPressStart >= LONG_PRESS_MS) {
-      idleClickCount = 0;
-      applyPowerMode(POWER_HIGH, true);
+  if (holdingForPowerSave) {
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      if (now - longPressStart >= LONG_PRESS_MS) {
+        holdingForPowerSave = false;
+        applyPowerMode(POWER_HIGH, true);
+      }
+    } else {
+      holdingForPowerSave = false;
     }
-    return;
-  }
-
-  if (idleClickCount > 0 && now - idleClickWindowStart >= DOUBLE_CLICK_WINDOW_MS) {
-    idleClickCount = 0;
   }
 }
 
@@ -3351,7 +3360,7 @@ void setup() {
     struct timeval tv = { .tv_sec = rtcEpoch, .tv_usec = 0 };
     settimeofday(&tv, nullptr);
     timeSynced = true;
-    Serial.println("Time set from RTC (" + String((unsigned long)rtcEpoch) + ") -- session button is live immediately.");
+    Serial.println("Time set from RTC (" + String((unsigned long)rtcEpoch) + ") -- system clock synced.");
   } else if (rtcPresent) {
     Serial.println("RTC found but not set yet -- waiting on NTP once WiFi connects, then will set it.");
   } else {
@@ -3552,10 +3561,9 @@ void setup() {
       return server.send(400, "text/plain", "Missing 'index' field.");
     }
     int index = server.arg("index").toInt();
-    String removedSsid = (index >= 0 && index < (int)wifiNetworks.size())
-      ? wifiNetworks[index].ssid : "";
+    String removedSsid;
 
-    if (!removeWifiNetworkByIndex(index)) {
+    if (!removeWifiNetworkByIndex(index, removedSsid)) {
       return server.send(400, "text/plain",
         "Could not remove that network -- it may already be gone, or it's the only one left.");
     }
@@ -3782,6 +3790,8 @@ void setup() {
     }
   });
 
+  const char* authHeaders[] = { "Authorization" };
+  server.collectHeaders(authHeaders, 1);
   server.begin();
 
   // All three pinned to core 0, so a slow/stalled Firebase call, Ledger
