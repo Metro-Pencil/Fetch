@@ -706,9 +706,9 @@
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:68%;
     text-align:right;font-variant-numeric:tabular-nums;
   }
-  .chart-canvas-box{position:relative;height:420px;touch-action:pan-y;}
+  .chart-canvas-box{position:relative;height:420px;touch-action:none;}
   @media (min-width:600px){ .chart-canvas-box{height:540px;} }
-  .chart-canvas-box canvas{touch-action:pan-y;}
+  .chart-canvas-box canvas{touch-action:none;}
   .chart-stats-bar{
     display:flex;align-items:center;gap:12px;flex-wrap:wrap;
     margin:-2px 0 8px;font-family:var(--mono);font-size:10.5px;
@@ -1272,6 +1272,56 @@
     box-shadow: 0 0 0 1px var(--espresso);
   }
 
+
+  /* ---------- Offline gap toggle & Spike Quarantine Review UI (v3.4.0) ---------- */
+  .gap-toggle-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-size: 12px; color: var(--muted); font-family: var(--mono);
+    margin: 6px 0 12px; cursor: pointer; min-height: 36px; user-select: none;
+  }
+  .gap-toggle-row input[type=checkbox] {
+    width: 18px; height: 18px; accent-color: var(--temp); cursor: pointer; flex-shrink: 0;
+  }
+  .anomaly-banner {
+    background: var(--panel-2); border: 1.5px solid var(--warn);
+    border-radius: 14px; padding: 14px 16px; margin: 12px 0;
+  }
+  .anomaly-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
+  }
+  .anomaly-title {
+    font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--warn);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .anomaly-list { display: flex; flex-direction: column; gap: 8px; }
+  .anomaly-item {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 12px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap;
+  }
+  .anomaly-info { font-family: var(--mono); font-size: 11.5px; color: var(--text); line-height: 1.5; min-width: 0; }
+  .anomaly-sub { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+  .anomaly-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .anomaly-actions button { min-height: 36px; padding: 6px 12px; font-size: 11.5px; }
+  .btn-danger { background: var(--err); color: #fff; }
+  .btn-danger:hover { opacity: 0.9; }
+  .vault-details {
+    margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
+  }
+  .vault-details summary {
+    cursor: pointer; font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+    user-select: none; min-height: 32px; display: flex; align-items: center; gap: 6px;
+  }
+  .vault-details summary:hover { color: var(--text); }
+  .vault-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin: 8px 0; line-height: 1.5; }
+  .vault-status { font-family: var(--mono); font-size: 11px; color: var(--warn); margin-top: 8px; }
+  [data-theme="atelier"] .anomaly-banner {
+    background: #F7F1E8; border-color: var(--warn); border-radius: 18px;
+  }
+  [data-theme="atelier"] .anomaly-item { border-radius: 14px; }
+
 </style>
 </head>
 <body>
@@ -1288,7 +1338,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.3.2</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.4.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -1386,7 +1436,7 @@
           </span>
         </button>
       </div>
-      <div class="ota-meta" id="app-ver-meta">Running <b>v3.3.2</b> · checking GitHub for updates…</div>
+      <div class="ota-meta" id="app-ver-meta">Running <b>v3.4.0</b> · checking GitHub for updates…</div>
       <div class="controls-row">
         <button class="btn-ghost" onclick="checkAppUpdate(true)">Check for App Update</button>
         <button class="btn-ghost" onclick="forceUpdateApp()">Force Refresh App</button>
@@ -1440,6 +1490,22 @@
     </div>
     <div class="chart-hint weather-status" id="weather-status" style="display:none;"></div>
 
+    <label class="gap-toggle-row" for="toggle-gaps">
+      <input type="checkbox" id="toggle-gaps" checked onchange="toggleGapShading()">
+      <span>Show offline gap shading &amp; dotted lines</span>
+    </label>
+
+    <div class="anomaly-banner" id="anomaly-banner" style="display:none;" role="region" aria-label="Sudden spike review">
+      <div class="anomaly-head">
+        <div class="anomaly-title" id="anomaly-title">&#9888; Sudden sensor spikes detected</div>
+        <div class="anomaly-actions">
+          <button type="button" class="btn-danger" onclick="deleteAllPendingAnomalies()">Delete All Flagged</button>
+        </div>
+      </div>
+      <div class="anomaly-list" id="anomaly-list"></div>
+      <div class="vault-status" id="anomaly-status"></div>
+    </div>
+
     <div class="chart-wrap">
       <div class="chart-head">
         <span class="chart-caption" id="chart-caption">—</span>
@@ -1468,6 +1534,20 @@
       <button class="btn-ghost" onclick="resetView()">Reset zoom</button>
     </div>
 
+    <details class="vault-details" id="anomaly-vault">
+      <summary id="vault-summary">Spike Quarantine Vault (0 saved)</summary>
+      <div class="vault-meta">Sudden single-instant glitches (&ge;6&deg;C or &ge;20%RH spike, or out-of-range readings) are quarantined here before deletion and archived locally even after deleting from Firebase.</div>
+      <div class="field-row">
+        <label for="fb-auth-secret">Firebase DB secret (optional — only needed if your RTDB rules require auth for DELETE)</label>
+        <input type="password" id="fb-auth-secret" placeholder="Leave blank if RTDB allows direct writes" autocomplete="off" onchange="saveFbAuthSecret()">
+      </div>
+      <div class="controls-row" style="margin-top:8px;">
+        <button type="button" class="btn-ghost" onclick="exportAnomalyVault()">Download Vault JSON</button>
+        <button type="button" class="btn-ghost" onclick="clearResolvedVault()">Clear Deleted History</button>
+      </div>
+      <div class="anomaly-list" id="vault-list" style="margin-top:10px;"></div>
+    </details>
+
     <div class="refresh-row">
       <div class="switch" id="auto-switch" onclick="toggleAuto()"><div class="knob"></div></div>
       <span>Auto-refresh every</span>
@@ -1484,7 +1564,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '3.3.2';
+  const APP_VERSION = '3.4.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- tabs ----------
@@ -1803,8 +1883,280 @@
   // Entries with a null epochMs are from a boot session we can't place in
   // real time (see anchorEpoch() above) — every chart-facing code path
   // should read through this instead of the raw getSorted().
+  // ---------- Gap shading toggle & Spike Quarantine system (v3.4.0) ----------
+  const GAP_SHADING_LS = 'rl_show_gaps';
+  const ANOMALY_VAULT_LS = 'rl_anomaly_quarantine';
+  const ANOMALY_KEPT_LS = 'rl_anomaly_kept';
+  const FB_AUTH_LS = 'rl_fb_auth_secret';
+  const TEMP_SPIKE_DELTA = 6.0;    // °C sudden single-instant jump vs both neighbors
+  const HUM_SPIKE_DELTA  = 20.0;   // %RH sudden single-instant jump vs both neighbors
+  const NEIGHBOR_MAX_MS  = 20 * 60 * 1000;
+
+  let showGapShading = true;
+  try {
+    const savedGap = localStorage.getItem(GAP_SHADING_LS);
+    if (savedGap === '0') showGapShading = false;
+  } catch(e) {}
+
+  let anomalyVault = {};   // rawKey -> record
+  let anomalyKept  = {};   // rawKey -> true
+  try {
+    anomalyVault = JSON.parse(localStorage.getItem(ANOMALY_VAULT_LS) || '{}') || {};
+    anomalyKept  = JSON.parse(localStorage.getItem(ANOMALY_KEPT_LS)  || '{}') || {};
+  } catch(e) { anomalyVault = {}; anomalyKept = {}; }
+
+  function persistAnomalyState(){
+    try {
+      localStorage.setItem(ANOMALY_VAULT_LS, JSON.stringify(anomalyVault));
+      localStorage.setItem(ANOMALY_KEPT_LS, JSON.stringify(anomalyKept));
+    } catch(e) {}
+  }
+
+  function saveFbAuthSecret(){
+    const el = document.getElementById('fb-auth-secret');
+    if (!el) return;
+    try { localStorage.setItem(FB_AUTH_LS, el.value.trim()); } catch(e) {}
+  }
+
+  function getFbAuthParam(){
+    let sec = '';
+    const el = document.getElementById('fb-auth-secret');
+    if (el && el.value.trim()) sec = el.value.trim();
+    else { try { sec = localStorage.getItem(FB_AUTH_LS) || ''; } catch(e) {} }
+    return sec ? ('?auth=' + encodeURIComponent(sec)) : '';
+  }
+
+  function toggleGapShading(){
+    const cb = document.getElementById('toggle-gaps');
+    showGapShading = cb ? !!cb.checked : true;
+    try { localStorage.setItem(GAP_SHADING_LS, showGapShading ? '1' : '0'); } catch(e) {}
+    if (chartTemp && chartHum){
+      chartTemp.update('none');
+      chartHum.update('none');
+    }
+  }
+
+  function scanAnomalies(rawValid){
+    let changed = false;
+    for (let i = 0; i < rawValid.length; i++){
+      const cur = rawValid[i];
+      const rk = String(cur.rawKey !== undefined ? cur.rawKey : cur.key);
+      if (anomalyKept[rk]) continue;
+      if (anomalyVault[rk] && anomalyVault[rk].status === 'deleted') continue;
+
+      let reason = '';
+      if (cur.temp < -10 || cur.temp > 65){
+        reason = 'Out-of-range temperature (' + cur.temp.toFixed(1) + '°C)';
+      } else if (cur.hum < 0 || cur.hum > 100){
+        reason = 'Out-of-range humidity (' + cur.hum.toFixed(1) + '%)';
+      } else if (i > 0 && i < rawValid.length - 1){
+        const prev = rawValid[i - 1], next = rawValid[i + 1];
+        if ((cur.epochMs - prev.epochMs) <= NEIGHBOR_MAX_MS && (next.epochMs - cur.epochMs) <= NEIGHBOR_MAX_MS){
+          const dPrevT = Math.abs(cur.temp - prev.temp), dNextT = Math.abs(cur.temp - next.temp);
+          const spanT  = Math.abs(next.temp - prev.temp);
+          const dPrevH = Math.abs(cur.hum - prev.hum), dNextH = Math.abs(cur.hum - next.hum);
+          const spanH  = Math.abs(next.hum - prev.hum);
+          if (dPrevT >= TEMP_SPIKE_DELTA && dNextT >= TEMP_SPIKE_DELTA && spanT < TEMP_SPIKE_DELTA * 0.6){
+            const baseT = (prev.temp + next.temp) / 2;
+            const diffT = cur.temp - baseT;
+            reason = 'Sudden temp spike (' + (diffT >= 0 ? '+' : '') + diffT.toFixed(1) + '°C for 1 reading)';
+          } else if (dPrevH >= HUM_SPIKE_DELTA && dNextH >= HUM_SPIKE_DELTA && spanH < HUM_SPIKE_DELTA * 0.6){
+            const baseH = (prev.hum + next.hum) / 2;
+            const diffH = cur.hum - baseH;
+            reason = 'Sudden humidity spike (' + (diffH >= 0 ? '+' : '') + diffH.toFixed(1) + '% for 1 reading)';
+          }
+        }
+      } else if (i > 0 && i === rawValid.length - 1){
+        const prev = rawValid[i - 1];
+        if ((cur.epochMs - prev.epochMs) <= 5 * 60 * 1000){
+          if (Math.abs(cur.temp - prev.temp) >= TEMP_SPIKE_DELTA * 2){
+            reason = 'Extreme newest temp jump (' + prev.temp.toFixed(1) + '°C → ' + cur.temp.toFixed(1) + '°C)';
+          } else if (Math.abs(cur.hum - prev.hum) >= HUM_SPIKE_DELTA * 1.75){
+            reason = 'Extreme newest humidity jump (' + prev.hum.toFixed(1) + '% → ' + cur.hum.toFixed(1) + '%)';
+          }
+        }
+      }
+
+      if (reason && !anomalyVault[rk]){
+        const prev = i > 0 ? rawValid[i - 1] : null;
+        const next = i < rawValid.length - 1 ? rawValid[i + 1] : null;
+        anomalyVault[rk] = {
+          rawKey: rk,
+          key: cur.key,
+          epochMs: cur.epochMs,
+          temp: cur.temp,
+          hum: cur.hum,
+          prevTemp: prev ? prev.temp : null,
+          nextTemp: next ? next.temp : null,
+          prevHum: prev ? prev.hum : null,
+          nextHum: next ? next.hum : null,
+          reason: reason,
+          detectedAt: Date.now(),
+          status: 'pending'
+        };
+        changed = true;
+      }
+    }
+    if (changed) persistAnomalyState();
+    renderAnomalyUI();
+  }
+
+  function renderAnomalyUI(){
+    const banner = document.getElementById('anomaly-banner');
+    const listEl = document.getElementById('anomaly-list');
+    const titleEl = document.getElementById('anomaly-title');
+    const vaultSum = document.getElementById('vault-summary');
+    const vaultList = document.getElementById('vault-list');
+    if (!banner || !listEl) return;
+
+    const all = Object.values(anomalyVault).sort((a, b) => (b.epochMs || 0) - (a.epochMs || 0));
+    const pending = all.filter(x => x.status === 'pending' && entriesByKey.has(Number(x.key)));
+    const archived = all.filter(x => x.status !== 'pending');
+
+    if (pending.length){
+      banner.style.display = 'block';
+      titleEl.innerHTML = '&#9888; ' + pending.length + ' sudden sensor spike' + (pending.length === 1 ? '' : 's') + ' quarantined — review before deleting';
+      listEl.innerHTML = pending.map(item => {
+        const ts = item.epochMs ? formatFull(item.epochMs, true) : ('key ' + item.rawKey);
+        const nbT = (item.prevTemp !== null && item.nextTemp !== null)
+          ? (' · neighbors ' + item.prevTemp.toFixed(1) + '°C / ' + item.nextTemp.toFixed(1) + '°C') : '';
+        return '<div class="anomaly-item">' +
+          '<div class="anomaly-info">' +
+            '<b>' + item.temp.toFixed(1) + '°C · ' + item.hum.toFixed(1) + '%RH</b> <span style="color:var(--muted);">at ' + ts + '</span>' +
+            '<div class="anomaly-sub">' + item.reason + nbT + '</div>' +
+          '</div>' +
+          '<div class="anomaly-actions">' +
+            '<button type="button" class="btn-danger" onclick="deleteAnomalyFromFirebase(\'' + item.rawKey + '\')">Delete from Firebase</button>' +
+            '<button type="button" class="btn-ghost" onclick="keepAnomaly(\'' + item.rawKey + '\')">Keep</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+    } else {
+      banner.style.display = 'none';
+      listEl.innerHTML = '';
+    }
+
+    if (vaultSum){
+      vaultSum.textContent = 'Spike Quarantine Vault (' + all.length + ' saved · ' + pending.length + ' pending, ' + archived.length + ' archived)';
+    }
+    if (vaultList){
+      if (!all.length){
+        vaultList.innerHTML = '<div class="vault-meta">No spikes recorded yet.</div>';
+      } else {
+        vaultList.innerHTML = all.slice(0, 40).map(item => {
+          const ts = item.epochMs ? formatFull(item.epochMs, true) : ('key ' + item.rawKey);
+          const badge = item.status === 'deleted' ? 'DELETED' : (item.status === 'kept' ? 'KEPT' : 'PENDING');
+          const restoreBtn = item.status === 'deleted'
+            ? '<button type="button" class="btn-ghost" onclick="restoreAnomalyToFirebase(\'' + item.rawKey + '\')">Restore</button>' : '';
+          return '<div class="anomaly-item">' +
+            '<div class="anomaly-info">' +
+              '<b>[' + badge + ']</b> ' + item.temp.toFixed(1) + '°C · ' + item.hum.toFixed(1) + '%RH · ' + ts +
+              '<div class="anomaly-sub">' + item.reason + ' (key ' + item.rawKey + ')</div>' +
+            '</div>' +
+            '<div class="anomaly-actions">' + restoreBtn + '</div>' +
+          '</div>';
+        }).join('');
+      }
+    }
+  }
+
+  async function deleteAnomalyFromFirebase(rawKey, skipRedraw){
+    const host = getHost();
+    const statusEl = document.getElementById('anomaly-status');
+    if (!host) return false;
+    try {
+      const url = 'https://' + host + '/readings/' + encodeURIComponent(rawKey) + '.json' + getFbAuthParam();
+      const res = await fetch(url, { method: 'DELETE', cache: 'no-store' });
+      if (!res.ok){
+        if (statusEl) statusEl.textContent = 'Delete failed (HTTP ' + res.status + '). If RTDB requires auth, add your Firebase DB secret in the Spike Quarantine Vault below.';
+        return false;
+      }
+      entriesByKey.delete(Number(rawKey));
+      invalidateSorted();
+      if (anomalyVault[rawKey]){
+        anomalyVault[rawKey].status = 'deleted';
+        anomalyVault[rawKey].deletedAt = Date.now();
+      }
+      persistAnomalyState();
+      if (statusEl) statusEl.textContent = 'Deleted spike ' + rawKey + ' from Firebase (archived in local Spike Vault).';
+      if (!skipRedraw){
+        renderAnomalyUI();
+        applyRangeSelection();
+      }
+      return true;
+    } catch(err){
+      if (statusEl) statusEl.textContent = 'Delete error: ' + err.message;
+      return false;
+    }
+  }
+
+  async function deleteAllPendingAnomalies(){
+    const pending = Object.values(anomalyVault).filter(x => x.status === 'pending' && entriesByKey.has(Number(x.key)));
+    if (!pending.length) return;
+    if (!confirm('Delete ' + pending.length + ' flagged spike(s) from Firebase? Their info stays archived in your local Spike Vault.')) return;
+    let okCount = 0;
+    for (const item of pending){
+      if (await deleteAnomalyFromFirebase(item.rawKey, true)) okCount++;
+    }
+    const statusEl = document.getElementById('anomaly-status');
+    if (statusEl) statusEl.textContent = 'Deleted ' + okCount + '/' + pending.length + ' spike(s) from Firebase (archived in local Spike Vault).';
+    renderAnomalyUI();
+    applyRangeSelection();
+  }
+
+  function keepAnomaly(rawKey){
+    anomalyKept[rawKey] = true;
+    if (anomalyVault[rawKey]) anomalyVault[rawKey].status = 'kept';
+    persistAnomalyState();
+    renderAnomalyUI();
+    applyRangeSelection();
+  }
+
+  async function restoreAnomalyToFirebase(rawKey){
+    const item = anomalyVault[rawKey];
+    const host = getHost();
+    if (!item || !host) return;
+    try {
+      const url = 'https://' + host + '/readings/' + encodeURIComponent(rawKey) + '.json' + getFbAuthParam();
+      const body = JSON.stringify({ temp: item.temp, hum: item.hum, t: Math.round((item.epochMs || 0) / 1000) });
+      const res = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      anomalyKept[rawKey] = true;
+      item.status = 'kept';
+      entriesByKey.set(Number(rawKey), { key: Number(rawKey), rawKey: rawKey, temp: item.temp, hum: item.hum, epochMs: item.epochMs });
+      invalidateSorted();
+      persistAnomalyState();
+      renderAnomalyUI();
+      applyRangeSelection();
+    } catch(err){
+      alert('Restore failed: ' + err.message);
+    }
+  }
+
+  function exportAnomalyVault(){
+    const blob = new Blob([JSON.stringify(Object.values(anomalyVault), null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'room-logger-spike-vault.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  function clearResolvedVault(){
+    for (const k of Object.keys(anomalyVault)){
+      if (anomalyVault[k].status !== 'pending') delete anomalyVault[k];
+    }
+    persistAnomalyState();
+    renderAnomalyUI();
+  }
+
   function getValidSorted(){
-    return getSorted().filter(e => typeof e.epochMs === 'number');
+    const raw = getSorted().filter(e => typeof e.epochMs === 'number');
+    scanAnomalies(raw);
+    return raw.filter(e => {
+      const rk = String(e.rawKey !== undefined ? e.rawKey : e.key);
+      return !(anomalyVault[rk] && anomalyVault[rk].status === 'pending');
+    });
   }
 
   async function fbGet(host, query){
@@ -1874,7 +2226,7 @@
     return Object.entries(data)
       .map(([key, v]) => {
         const k = Number(key);
-        const e = { key: k, temp: Number(v.temp), hum: Number(v.hum) };
+        const e = { key: k, rawKey: key, temp: Number(v.temp), hum: Number(v.hum) };
         // RTC-stamped reading: epochMs is a known fact, not an estimate.
         // Set it now so it's never touched by the anchoring code below.
         if (isAbsoluteKey(k)) e.epochMs = k * 1000;
@@ -2270,6 +2622,7 @@
   }
 
   async function applyRangeSelection(){
+    userZoomedY = false;
     if (!getValidSorted().length) return;
     const mode = document.getElementById('range-select').value;
     userHasInteracted = false;
@@ -2325,6 +2678,7 @@
   }
 
   function resetView(){
+    userZoomedY = false;
     // resetZoom() clears any y-axis zoom/pan (vertical zoom is per-chart and
     // isn't touched by applyRangeSelection, which only manages the shared
     // x/time domain), then applyRangeSelection puts the time range back.
@@ -2452,6 +2806,7 @@
   const gapShadingPlugin = {
     id: 'gapShading',
     beforeDatasetsDraw(chart, args, opts){
+      if (!showGapShading) return;
       const gaps = opts.gaps;
       if (!gaps || !gaps.length) return;
       const { ctx, chartArea, scales } = chart;
@@ -2609,10 +2964,10 @@
           },
           zoom: {
             limits: { x: { min: 0, minRange: MIN_DOMAIN_MS } },
-            pan: { enabled: true, mode: 'x', onPan: syncOtherChart, onPanComplete: onViewChanged },
+            pan: { enabled: true, mode: 'xy', onPan: syncOtherChart, onPanComplete: onViewChanged },
             zoom: {
               wheel: { enabled: true }, pinch: { enabled: true }, drag: { enabled: false },
-              mode: 'x', onZoom: syncOtherChart, onZoomComplete: onViewChanged
+              mode: 'xy', onZoom: syncOtherChart, onZoomComplete: onViewChanged
             }
           }
         },
@@ -2720,8 +3075,17 @@
     updateChartsTheme();
   }
 
-  // Sync toggle button & picker state on load
+  // Sync toggle button, gap checkbox, vault auth & picker state on load
   applyTheme(getActiveTheme());
+  (function initV340Controls(){
+    const cb = document.getElementById('toggle-gaps');
+    if (cb) cb.checked = showGapShading;
+    const authEl = document.getElementById('fb-auth-secret');
+    if (authEl){
+      try { authEl.value = localStorage.getItem(FB_AUTH_LS) || ''; } catch(e) {}
+    }
+    renderAnomalyUI();
+  })();
 
   // Keeps the chart NOT being dragged/zoomed visually in step with the one
   // that is, during the gesture itself (not just once it completes). Only
@@ -2759,7 +3123,10 @@
     return grad;
   }
 
+  let userZoomedY = false;
+
   function applyYAxisBounds(chart, pts, outdoorPts, minSpan, clampLo, clampHi){
+    if (userZoomedY) return;
     let lo = Infinity, hi = -Infinity;
     const scan = (arr) => {
       if (!arr) return;
@@ -2869,6 +3236,7 @@
 
   // debounced: fires after the user stops panning/zooming either chart
   function onViewChanged({ chart }){
+    userZoomedY = true;
     clearTimeout(viewChangeTimer);
     viewChangeTimer = setTimeout(async () => {
       userHasInteracted = true;
