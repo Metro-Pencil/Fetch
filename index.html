@@ -26,6 +26,16 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v3.2.1 — fixed false OFFLINE when live sensor readings are actively arriving:
+  - ONLINE/OFFLINE check now uses Math.max(status.lastSeen, latestReadingEpoch),
+    so the device is immediately recognized as ONLINE whenever either a status
+    heartbeat OR a fresh sensor reading arrived within the window (also fixes
+    boards still running pre-v3.2.0 firmware before their first OTA update).
+  - Re-evaluates the Dashboard status banner automatically right after
+    fetchReadings() updates latestReadingEpoch.
+  - When genuinely OFFLINE, keeps last-known IP links tucked inside a collapsed
+    "Show last-known IP links" drawer instead of locking you out completely.
+
   v3.2.0 — live ONLINE/OFFLINE heartbeat detection + PWA self-update check:
   - Dashboard now checks status.lastSeen (published every 45s by the ESP32
     after verifying working internet) and shows OFFLINE (hiding dead IP links)
@@ -817,7 +827,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.2.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.2.1</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -884,7 +894,7 @@
 
     <div class="card ota-card">
       <h2>App Settings</h2>
-      <div class="ota-meta" id="app-ver-meta">Running <b>v3.2.0</b> · checking GitHub for updates…</div>
+      <div class="ota-meta" id="app-ver-meta">Running <b>v3.2.1</b> · checking GitHub for updates…</div>
       <div class="controls-row">
         <button class="btn-ghost" onclick="checkAppUpdate(true)">Check for App Update</button>
         <button class="btn-ghost" onclick="forceUpdateApp()">Force Refresh App</button>
@@ -980,7 +990,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '3.2.0';
+  const APP_VERSION = '3.2.1';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- tabs ----------
@@ -1053,6 +1063,7 @@
   let lastNewDataMs = null;    // wall-clock time we last saw a genuinely new reading
   let lastKnownPowerMode = 'normal'; // tracks status.json powerMode for smart staleness thresholds
   let lastKnownDeviceIp = '';
+  let lastFetchedStatus = null;
   let latestBinUrl = '';
 
   function escapeHtml(str){
@@ -1422,6 +1433,81 @@
     }).join('');
   }
 
+  function renderStatusUi(){
+    const status = lastFetchedStatus;
+    const dashMsg = document.getElementById('dash-msg');
+    if (!status || !status.ip) return;
+
+    const mode = (typeof status.powerMode === 'string' && status.powerMode)
+      ? status.powerMode.toLowerCase()
+      : (status.powerSavingActive ? 'low' : 'normal');
+    lastKnownPowerMode = mode;
+
+    // Use the freshest signal from EITHER status.lastSeen (45s heartbeat) OR
+    // latestReadingEpoch (live DHT22 uploads). That way active uploads always
+    // prove the board is ONLINE—even before flashing v3.2.0+ firmware—while a
+    // genuinely dropped hotspot stops BOTH signals and flips to OFFLINE.
+    const lastSeenSec = Number(status.lastSeen || 0);
+    const heartbeatMs = lastSeenSec > 1e9 ? lastSeenSec * 1000 : 0;
+    const readingMs   = (typeof latestReadingEpoch === 'number' && latestReadingEpoch > 1e12) ? latestReadingEpoch : 0;
+    const bestSeenMs  = Math.max(heartbeatMs, readingMs);
+    const ageMs       = bestSeenMs ? Math.max(0, Date.now() - bestSeenMs) : Infinity;
+
+    const offlineWindowMs =
+      mode === 'high'   ? 35 * 60 * 1000 :
+      mode === 'medium' ?  7 * 60 * 1000 :
+      mode === 'low'    ?  4 * 60 * 1000 :
+                           2.5 * 60 * 1000;
+    const validIp = isSafeHostOrIp(status.ip) && status.ip !== '0.0.0.0';
+    const isOnline = validIp && status.internetOk !== false && (ageMs <= offlineWindowMs);
+
+    const modeLabel = mode.charAt(0).toUpperCase() + mode.slice(1) + (mode === 'normal' ? '' : ' power save');
+    const modeCls = mode === 'normal' ? 'ok' : 'warn';
+    const fsBadge = (status.fsOk === false)
+      ? '<span class="status-pill err">FS mount failed</span>'
+      : '';
+
+    document.getElementById('device-status-row').style.display = '';
+    if (!isOnline){
+      lastKnownDeviceIp = validIp ? status.ip : '';
+      document.getElementById('device-status').innerHTML =
+        '<span class="status-pill err" style="margin-left:0;">OFFLINE</span>' +
+        (bestSeenMs
+          ? ' · last seen ' + escapeHtml(timeAgo(ageMs)) + ' on <b>' + escapeHtml(status.ssid || 'unknown') + '</b>'
+          : ' · waiting for first reading or heartbeat');
+      document.getElementById('dash-links').innerHTML = '';
+      if (validIp){
+        dashMsg.innerHTML =
+          'Device appears offline (no readings or heartbeat recently). ' +
+          '<details class="ota-details" style="margin-top:8px;padding-top:8px;">' +
+          '<summary>Show last-known IP links (' + escapeHtml(status.ip) + ')</summary>' +
+          '<div class="dash-links" style="margin-top:10px;">' +
+          DEVICE_PAGES.map(function(p){
+            return '<a class="link-tile" href="http://' + encodeURI(status.ip) + '/' + p[0] + '" target="_blank" rel="noopener">' +
+              '<div class="link-tile-name">' + escapeHtml(p[1]) + '</div>' +
+              '<div class="link-tile-desc">' + escapeHtml(p[2]) + '</div>' +
+              '</a>';
+          }).join('') +
+          '</div></details>';
+      } else {
+        dashMsg.textContent = 'Device is currently offline.';
+      }
+      updateOtaButtons();
+      return;
+    }
+
+    document.getElementById('device-status').innerHTML =
+      '<span class="status-pill ok" style="margin-left:0;margin-right:6px;">ONLINE</span>' +
+      'On <b>' + escapeHtml(status.ssid || 'unknown') + '</b>, at <b>' + escapeHtml(status.ip) + '</b>' +
+      '<span class="status-pill ' + modeCls + '">' + escapeHtml(modeLabel) + '</span>' +
+      fsBadge +
+      ' · active ' + escapeHtml(timeAgo(ageMs));
+    lastKnownDeviceIp = status.ip;
+    renderDeviceLinks(status.ip);
+    updateOtaButtons();
+    dashMsg.textContent = '';
+  }
+
   async function fetchStatus(){
     const host = getHost();
     const dashMsg = document.getElementById('dash-msg');
@@ -1437,53 +1523,8 @@
         dashMsg.textContent = 'No status published yet -- the device publishes this on every (re)connect, so it should appear shortly after it\'s next online.';
         return;
       }
-      const mode = (typeof status.powerMode === 'string' && status.powerMode)
-        ? status.powerMode.toLowerCase()
-        : (status.powerSavingActive ? 'low' : 'normal');
-      lastKnownPowerMode = mode;
-
-      // Determine true ONLINE vs OFFLINE using status.lastSeen heartbeat from firmware.
-      const lastSeenSec = Number(status.lastSeen || 0);
-      const lastSeenMs = lastSeenSec > 1e9 ? lastSeenSec * 1000 : 0;
-      const ageMs = lastSeenMs ? (Date.now() - lastSeenMs) : Infinity;
-      const offlineWindowMs =
-        mode === 'high'   ? 35 * 60 * 1000 :
-        mode === 'medium' ?  6 * 60 * 1000 :
-        mode === 'low'    ?  4 * 60 * 1000 :
-                             2 * 60 * 1000;
-      const validIp = isSafeHostOrIp(status.ip) && status.ip !== '0.0.0.0';
-      const isOnline = validIp && status.internetOk !== false && (ageMs <= offlineWindowMs);
-
-      const modeLabel = mode.charAt(0).toUpperCase() + mode.slice(1) + (mode === 'normal' ? '' : ' power save');
-      const modeCls = mode === 'normal' ? 'ok' : 'warn';
-      const fsBadge = (status.fsOk === false)
-        ? '<span class="status-pill err">FS mount failed</span>'
-        : '';
-
-      document.getElementById('device-status-row').style.display = '';
-      if (!isOnline){
-        lastKnownDeviceIp = '';
-        document.getElementById('device-status').innerHTML =
-          '<span class="status-pill err" style="margin-left:0;">OFFLINE</span>' +
-          (lastSeenMs
-            ? ' · last seen ' + escapeHtml(timeAgo(ageMs)) + ' on <b>' + escapeHtml(status.ssid || 'unknown') + '</b>'
-            : ' · no live heartbeat received yet (flash v3.2.0 firmware for live ONLINE/OFFLINE heartbeats)');
-        document.getElementById('dash-links').innerHTML = '';
-        dashMsg.textContent = 'Device is currently offline or unreachable. Admin links will reappear automatically once the ESP32 reconnects with working internet.';
-        updateOtaButtons();
-        return;
-      }
-
-      document.getElementById('device-status').innerHTML =
-        '<span class="status-pill ok" style="margin-left:0;margin-right:6px;">ONLINE</span>' +
-        'On <b>' + escapeHtml(status.ssid || 'unknown') + '</b>, at <b>' + escapeHtml(status.ip) + '</b>' +
-        '<span class="status-pill ' + modeCls + '">' + escapeHtml(modeLabel) + '</span>' +
-        fsBadge +
-        ' · heartbeat ' + escapeHtml(timeAgo(ageMs));
-      lastKnownDeviceIp = status.ip;
-      renderDeviceLinks(status.ip);
-      updateOtaButtons();
-      dashMsg.textContent = '';
+      lastFetchedStatus = status;
+      renderStatusUi();
     } catch(err){
       lastKnownDeviceIp = '';
       document.getElementById('dash-links').innerHTML = '';
@@ -2431,6 +2472,7 @@
     document.getElementById('hum-value').innerHTML = latest.hum.toFixed(1) + '<span class="unit">%RH</span>';
     latestReadingEpoch = latest.epochMs;
     updateAgeText();
+    renderStatusUi();
 
     ['stat-temp', 'stat-hum'].forEach(id => {
       const el = document.getElementById(id);
@@ -2454,6 +2496,7 @@
   // the LED green/"reachable" straight through an hour-long sensor outage.
   setInterval(() => {
     if (lastNewDataMs && Date.now() - lastNewDataMs > stalenessThresholdMs()) setConnState('stale');
+    renderStatusUi();
   }, 10000);
 
   // ---------- auto-refresh ----------
