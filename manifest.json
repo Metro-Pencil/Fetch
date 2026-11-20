@@ -1,7 +1,7 @@
 {
   "name": "Room Logger",
   "short_name": "RoomLogger",
-  "description": "Live dashboard, temp/humidity graphs, and terminal log for the ESP32 room logger.",
+  "description": "Live dashboard and temp/humidity graphs for the ESP32 room logger.",
   "start_url": "./",
   "scope": "./",
   "id": "./",
@@ -10,8 +10,23 @@
   "background_color": "#0B0F14",
   "theme_color": "#0B0F14",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }

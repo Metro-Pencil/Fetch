@@ -16,7 +16,7 @@
 // index.html); a service worker getting in the way of that would be
 // actively harmful, not helpful.
 
-const SHELL_CACHE = 'room-logger-shell-v1';
+const SHELL_CACHE = 'room-logger-shell-v3';
 const RUNTIME_CACHE = 'room-logger-runtime-v1';
 
 // Known-path assets precached at install time. The HTML page itself is
@@ -44,12 +44,12 @@ const RUNTIME_HOSTS = new Set([
 
 // Anything to these hosts, or these exact ESP32 device paths, is live data
 // or a device control action -- never intercepted, never cached.
-const NEVER_CACHE_PATHS = new Set(['/update', '/sync-code', '/status.json', '/readings.json']);
+const NEVER_CACHE_PATHS = new Set(['/wifi', '/firebase', '/credentials', '/power-saving', '/health', '/status.json', '/readings.json']);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(SHELL_CACHE)
-      .then((cache) => cache.addAll(PRECACHE_ASSETS))
+      .then((cache) => Promise.allSettled(PRECACHE_ASSETS.map((url) => cache.add(url))))
       .then(() => self.skipWaiting())
       .catch((err) => console.warn('sw: precache failed (non-fatal):', err))
   );

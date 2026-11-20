@@ -26,6 +26,19 @@
     1. The APP_VERSION constant in the <script> below
     2. The visible "v#.#.#" badge in the header markup
 
+  v3.0.0 — aligned dashboard with the streamlined ESP32 firmware:
+  - Removed the Terminal tab and Cloudflare Worker polling (firmware /terminal
+    and study-tracker /sync-code were removed).
+  - Updated Dashboard device links to the 6 active firmware pages (Home, WiFi,
+    Firebase, Dashboard Login, Power Saving, Device Health) and surfaced the
+    active powerMode (Normal / Low / Medium / High) and fsOk warning from
+    status.json.
+  - Scaled the connection staleness threshold to match the active powerMode so
+    Low/Medium/High power saving no longer false-triggers "no recent readings".
+  - Fixed XSS escaping on status.ssid/ip, chart resize when switching from the
+    hidden Graphs tab, duplicate status.json fetches on resume, stale links /
+    counters when changing Firebase host, and defensive chart scale checks.
+
   v2.20.1 — fixed the Dashboard tab showing a stale SSID/IP (and, more
   generally, any tab showing stale data) after the device actually switched
   networks or the underlying data actually changed. Checked the firmware
@@ -727,18 +740,15 @@
   .link-tile-desc{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4;}
   .dash-msg{font-size:12px;color:var(--muted);font-family:var(--mono);margin-top:10px;line-height:1.5;}
 
-  /* terminal */
-  .term-status{font-size:11px;color:var(--muted);font-family:var(--mono);margin-bottom:10px;}
-  .term-status.ok{color:var(--ok);}
-  .term-status.fail{color:var(--err);}
-  .term-status.busy{color:var(--warn);}
-  .term-log{
-    background:var(--panel-2);border:1px solid var(--border);border-radius:9px;
-    padding:12px;height:420px;overflow-y:auto;font-family:var(--mono);
-    font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-all;
-    line-height:1.5;
+  /* status pills */
+  .status-pill{
+    display:inline-block;font-family:var(--mono);font-size:10.5px;font-weight:600;
+    padding:2px 7px;border-radius:99px;margin-left:6px;vertical-align:middle;
+    border:1px solid var(--border);background:var(--panel-2);color:var(--text);
   }
-  @media (min-width:600px){ .term-log{height:540px;} }
+  .status-pill.ok{border-color:rgba(74,222,128,0.4);color:var(--ok);}
+  .status-pill.warn{border-color:rgba(251,191,36,0.4);color:var(--warn);}
+  .status-pill.err{border-color:rgba(248,113,113,0.4);color:var(--err);}
 
   @media (max-width:380px){
     body{padding:18px 12px 40px;}
@@ -754,8 +764,8 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v2.20.1</span></h1>
-        <div class="sub">esp32 · dht22 · firebase rtdb · terminal</div>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.0.0</span></h1>
+        <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
     <div class="conn-label" id="conn-label">not connected</div>
@@ -764,7 +774,6 @@
   <div class="tabbar" role="tablist">
     <button class="tab-btn active" role="tab" aria-selected="true" data-view="dashboard" onclick="showView('dashboard')">Dashboard</button>
     <button class="tab-btn" role="tab" aria-selected="false" data-view="graphs" onclick="showView('graphs')">Graphs</button>
-    <button class="tab-btn" role="tab" aria-selected="false" data-view="terminal" onclick="showView('terminal')">Terminal</button>
   </div>
 
   <div id="view-dashboard" class="tab-view">
@@ -866,37 +875,6 @@
   </div>
   </div>
 
-  <div id="view-terminal" class="tab-view" style="display:none;">
-  <div class="card">
-    <h2>Terminal</h2>
-
-    <div class="field-row">
-      <label for="term-worker">Worker URL</label>
-      <input type="text" id="term-worker" value="https://ledger-sync.metropencil01.workers.dev" autocomplete="off">
-    </div>
-
-    <div class="field-row">
-      <label for="term-code">Terminal sync code</label>
-      <input type="text" id="term-code" placeholder="set on the device's /terminal page" autocomplete="off" autocapitalize="off">
-    </div>
-
-    <div class="term-status" id="term-status">Enter a sync code above to load terminal lines.</div>
-
-    <div class="term-log" id="term-log">—</div>
-
-    <div class="controls-row">
-      <button class="btn-ghost" onclick="fetchTerminal()">Refresh now</button>
-    </div>
-
-    <div class="refresh-row">
-      <div class="switch" id="term-auto-switch" onclick="toggleTermAuto()"><div class="knob"></div></div>
-      <span>Auto-refresh every</span>
-      <input type="number" id="term-refresh-secs" value="15" min="5" step="1" inputmode="numeric">
-      <span>sec</span>
-    </div>
-  </div>
-  </div>
-
 </div>
 
 <script>
@@ -904,7 +882,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '2.20.1';
+  const APP_VERSION = '3.0.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- tabs ----------
@@ -914,7 +892,7 @@
   // an immediate fetch for that tab so it never opens looking stale on
   // first click; Graphs keeps its own existing fetch/auto-refresh timing.
   function showView(name){
-    ['dashboard', 'graphs', 'terminal'].forEach(function(v){
+    ['dashboard', 'graphs'].forEach(function(v){
       document.getElementById('view-' + v).style.display = (v === name) ? '' : 'none';
     });
     document.querySelectorAll('.tab-btn').forEach(function(btn){
@@ -923,7 +901,11 @@
       btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
     });
     if (name === 'dashboard') fetchStatus();
-    if (name === 'terminal') fetchTerminal();
+    if (name === 'graphs'){
+      // Charts initialized while hidden can have 0x0 size; resize cleanly on reveal.
+      if (chartTemp){ chartTemp.resize(); chartTemp.update('none'); }
+      if (chartHum){ chartHum.resize(); chartHum.update('none'); }
+    }
   }
 
   // ---------- constants ----------
@@ -971,6 +953,22 @@
   // anchorNewestKey/lastFetchOk.
   let sessionPeakKey = null;   // highest raw key seen in any LIVE poll so far
   let lastNewDataMs = null;    // wall-clock time we last saw a genuinely new reading
+  let lastKnownPowerMode = 'normal'; // tracks status.json powerMode for smart staleness thresholds
+
+  function escapeHtml(str){
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+  function stalenessThresholdMs(){
+    if (lastKnownPowerMode === 'low')    return 5 * 60 * 1000;   // 2 min read interval
+    if (lastKnownPowerMode === 'medium') return 11 * 60 * 1000;  // 5 min read interval
+    if (lastKnownPowerMode === 'high')   return 40 * 60 * 1000;  // 30 min WiFi wake cycle
+    return 150 * 1000;                                           // 60 s normal interval
+  }
   let chartTemp = null;
   let chartHum = null;
   let autoTimer = null;
@@ -1299,21 +1297,26 @@
   const DEVICE_PAGES = [
     ['', 'Home', 'Index of every page this device serves'],
     ['wifi', 'WiFi Networks', 'Saved networks, static IP, open-network fallback'],
-    ['sync-code', 'Ledger Sync Code', "Change the study-tracker's sync code"],
     ['firebase', 'Firebase', 'Realtime Database host and auth token'],
     ['credentials', 'Dashboard Login', 'Username/password for these admin pages'],
-    ['power-saving', 'Power Saving', 'Turn power saving on/off, session toggles'],
-    ['power-presets', 'Power Presets', 'Saved read/wifi-check/upload interval presets'],
-    ['terminal', 'Terminal', 'Live serial log, on/off switch, cloud sync code'],
-    ['health', 'Device Health', 'Firebase, Ledger, RTC, DHT22 and terminal status'],
-    ['update', 'Firmware Update', 'Flash new firmware over WiFi'],
+    ['power-saving', 'Power Saving', 'Switch between Normal, Low, Medium, and High power modes'],
+    ['health', 'Device Health', 'Firebase, RTC, DHT22, and active power mode status'],
   ];
 
+  function isSafeHostOrIp(v){
+    return typeof v === 'string' && /^[0-9a-zA-Z.:-]+$/.test(v);
+  }
+
   function renderDeviceLinks(ip){
+    const safeIp = isSafeHostOrIp(ip) ? ip : '';
+    if (!safeIp){
+      document.getElementById('dash-links').innerHTML = '';
+      return;
+    }
     document.getElementById('dash-links').innerHTML = DEVICE_PAGES.map(function(p){
-      return '<a class="link-tile" href="http://' + ip + '/' + p[0] + '" target="_blank" rel="noopener">' +
-        '<div class="link-tile-name">' + p[1] + '</div>' +
-        '<div class="link-tile-desc">' + p[2] + '</div>' +
+      return '<a class="link-tile" href="http://' + encodeURI(safeIp) + '/' + p[0] + '" target="_blank" rel="noopener">' +
+        '<div class="link-tile-name">' + escapeHtml(p[1]) + '</div>' +
+        '<div class="link-tile-desc">' + escapeHtml(p[2]) + '</div>' +
         '</a>';
     }).join('');
   }
@@ -1326,12 +1329,6 @@
       return;
     }
     try{
-      // no-store: confirmed against the firmware (onNetworkConnected() in
-      // room_logger.ino) that it correctly republishes status.json on every
-      // SSID change, not just first boot -- so a stale SSID/IP showing here
-      // was this fetch (or the page itself) serving an old cached copy, not
-      // the device failing to update Firebase. Same reasoning below for
-      // readings/weather/terminal.
       const res = await fetch('https://' + host + '/status.json', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const status = await res.json();
@@ -1339,15 +1336,26 @@
         dashMsg.textContent = 'No status published yet -- the device publishes this on every (re)connect, so it should appear shortly after it\'s next online.';
         return;
       }
+      const mode = (typeof status.powerMode === 'string' && status.powerMode)
+        ? status.powerMode.toLowerCase()
+        : (status.powerSavingActive ? 'low' : 'normal');
+      lastKnownPowerMode = mode;
+      const modeLabel = mode.charAt(0).toUpperCase() + mode.slice(1) + (mode === 'normal' ? '' : ' power save');
+      const modeCls = mode === 'normal' ? 'ok' : 'warn';
+      const fsBadge = (status.fsOk === false)
+        ? '<span class="status-pill err">FS mount failed</span>'
+        : '';
+
       document.getElementById('device-status').innerHTML =
-        'On <b>' + status.ssid + '</b>, at <b>' + status.ip + '</b> · checked ' +
+        'On <b>' + escapeHtml(status.ssid || 'unknown') + '</b>, at <b>' + escapeHtml(status.ip) + '</b>' +
+        '<span class="status-pill ' + modeCls + '">' + escapeHtml(modeLabel) + '</span>' +
+        fsBadge +
+        ' · checked ' +
         new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
       document.getElementById('device-status-row').style.display = '';
       renderDeviceLinks(status.ip);
       dashMsg.textContent = '';
     } catch(err){
-      // Graphs tab: readings still work fine without this, so this must
-      // never throw. Dashboard tab: this IS the content, so say why.
       dashMsg.textContent = 'Could not reach status.json (' + err.message + '). Check the Firebase host on the Graphs tab, and that the device has published at least once.';
     }
   }
@@ -1471,7 +1479,7 @@
       renderCurrent(latest);
       ensureChart();
 
-      if (!userHasInteracted){
+      if (!userHasInteracted || !chartTemp || !chartTemp.scales || !chartTemp.scales.x){
         await applyRangeSelection();
       } else {
         const xScale = chartTemp.scales.x;
@@ -2313,7 +2321,7 @@
   // lastFetchOk keeps refreshing every poll either way, which used to keep
   // the LED green/"reachable" straight through an hour-long sensor outage.
   setInterval(() => {
-    if (lastNewDataMs && Date.now() - lastNewDataMs > 90000) setConnState('stale');
+    if (lastNewDataMs && Date.now() - lastNewDataMs > stalenessThresholdMs()) setConnState('stale');
   }, 10000);
 
   // ---------- auto-refresh ----------
@@ -2360,6 +2368,7 @@
     entriesByKey.clear();
     invalidateSorted();
     anchorNewestKey = null; anchorNowMs = null; keyScaleToMs = 1;
+    staleFromPriorBoot = 0; lastKnownPowerMode = 'normal';
     sessionPeakKey = null; lastNewDataMs = null;
     noMoreHistory = false; currentFetchLimit = PAGE_SIZE;
     userHasInteracted = false; latestReadingEpoch = null;
@@ -2368,97 +2377,10 @@
     document.getElementById('temp-age').textContent = 'no data yet';
     document.getElementById('hum-age').textContent = 'no data yet';
     document.getElementById('device-status-row').style.display = 'none';
+    document.getElementById('dash-links').innerHTML = '';
     showEmptyState();
     fetchReadings();
   });
-
-  // ---------- terminal (reads from the Cloudflare Worker, not the device) ----------
-  // Entirely separate data path from everything above -- this tab never
-  // touches Firebase, and the device never touches this tab. The device's
-  // own /terminal page uploads batches to this same Worker (from a phone's
-  // browser tab, only while that page is open) under a sync code set
-  // there; this tab just reads back whatever has accumulated under that
-  // code. See the v2.20.0 changelog entry above and worker.js for the full
-  // picture -- notably, this only ever does GET /sync?code=..., never
-  // POST/PUT, since reading is all this tab needs to do.
-  const TERM_MAX_DISPLAY = 500; // render cap only -- the full fetched array is still sorted first
-  let termAutoTimer = null;
-
-  function setTermStatus(cls, text){
-    const el = document.getElementById('term-status');
-    el.className = 'term-status' + (cls ? ' ' + cls : '');
-    el.textContent = text;
-  }
-
-  async function fetchTerminal(){
-    const workerUrl = document.getElementById('term-worker').value.trim().replace(/\/+$/, '');
-    const code = document.getElementById('term-code').value.trim();
-    const logEl = document.getElementById('term-log');
-
-    if (!code){
-      setTermStatus('', 'Enter a sync code above to load terminal lines.');
-      return;
-    }
-    if (!workerUrl){
-      setTermStatus('fail', 'Enter a Worker URL above.');
-      return;
-    }
-
-    setTermStatus('busy', 'Loading…');
-    try{
-      const res = await fetch(workerUrl + '/sync?code=' + encodeURIComponent(code), { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      const lines = Array.isArray(data.terminalLog) ? data.terminalLog.slice() : [];
-      // The Worker's merge just appends each incoming batch in whatever
-      // order requests happened to arrive (mergeAdditive() in worker.js) --
-      // it doesn't guarantee the stored array is globally ordered, so this
-      // sorts by index rather than trusting fetch order.
-      lines.sort(function(a, b){
-        return (typeof a.i === 'number' ? a.i : 0) - (typeof b.i === 'number' ? b.i : 0);
-      });
-
-      const nowStr = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
-      if (!lines.length){
-        logEl.textContent = "No terminal lines synced yet under this code. Open the device's /terminal page (with this same sync code set there) to start syncing -- it only uploads while that page is open in a browser tab.";
-        setTermStatus('ok', '0 lines · checked ' + nowStr);
-        return;
-      }
-
-      const wasAtBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
-      const toShow = lines.slice(-TERM_MAX_DISPLAY);
-      logEl.textContent = toShow.map(function(l){
-        const ts = l.t ? new Date(l.t * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true }) : '--:--:--';
-        return '[' + ts + '] ' + (l.text || '');
-      }).join('\n');
-      if (wasAtBottom) logEl.scrollTop = logEl.scrollHeight;
-
-      const shownNote = lines.length > TERM_MAX_DISPLAY ? (' (showing last ' + TERM_MAX_DISPLAY + ')') : '';
-      setTermStatus('ok', lines.length + ' line(s)' + shownNote + ' · checked ' + nowStr);
-    } catch(err){
-      setTermStatus('fail', 'Could not reach the Worker (' + err.message + ').');
-    }
-  }
-
-  function getTermRefreshSeconds(){
-    const input = document.getElementById('term-refresh-secs');
-    let v = parseInt(input.value, 10);
-    if (isNaN(v) || v < 5) v = 15;
-    input.value = v;
-    return v;
-  }
-  function toggleTermAuto(){
-    const sw = document.getElementById('term-auto-switch');
-    const isOn = sw.classList.toggle('on');
-    saveSetting('term_auto_on', isOn ? '1' : '0');
-    if (isOn){
-      fetchTerminal();
-      termAutoTimer = setInterval(fetchTerminal, getTermRefreshSeconds() * 1000);
-    } else {
-      clearInterval(termAutoTimer);
-      termAutoTimer = null;
-    }
-  }
 
   // ---------- settings persistence (localStorage) ----------
   // Every user-editable field on every tab is restored here on load and
@@ -2491,8 +2413,7 @@
       saveSetting(id, this.value);
     });
   }
-  ['fb-host', 'range-select', 'weather-loc', 'refresh-secs',
-   'term-worker', 'term-code', 'term-refresh-secs'].forEach(function(id){
+  ['fb-host', 'range-select', 'weather-loc', 'refresh-secs'].forEach(function(id){
     restoreField(id);
     wirePersistence(id);
   });
@@ -2515,14 +2436,9 @@
   }
   const restoredAutoOn = loadSetting('auto_on') === '1';
   if (restoredAutoOn) document.getElementById('auto-switch').classList.add('on');
-  const restoredTermAutoOn = loadSetting('term_auto_on') === '1';
-  if (restoredTermAutoOn) document.getElementById('term-auto-switch').classList.add('on');
-
   // initial load
-  fetchReadings(); // also covers weather (weatherEnabled already restored above) via its normal redraw path
-  if (restoredAutoOn) autoTimer = setInterval(fetchReadings, getRefreshSeconds() * 1000); // no extra fetchReadings() call -- the line above just did one
-  fetchTerminal();
-  if (restoredTermAutoOn) termAutoTimer = setInterval(fetchTerminal, getTermRefreshSeconds() * 1000); // same reasoning
+  fetchReadings(); // also triggers fetchStatus() and weather (if restored)
+  if (restoredAutoOn) autoTimer = setInterval(fetchReadings, getRefreshSeconds() * 1000);
 
   // ---------- refresh on resume ----------
   // Mobile PWAs/tabs commonly get fully suspended in the background --
@@ -2537,9 +2453,8 @@
   // explicitly refetch the moment the page is actually visible/interactive
   // again, rather than trusting whatever's already on screen.
   function refreshAllTabs(){
-    fetchStatus();
+    // fetchReadings() already kicks off fetchStatus() without blocking.
     fetchReadings();
-    fetchTerminal();
   }
   document.addEventListener('visibilitychange', function(){
     if (document.visibilityState === 'visible') refreshAllTabs();
