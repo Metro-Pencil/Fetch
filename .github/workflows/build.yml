@@ -1,5 +1,5 @@
 # Single-repo setup: place this at .github/workflows/build.yml in your Room Logger app repo
-# alongside index.html, manifest.json, sw.js, and room_logger/room_logger.ino.
+# alongside index.html, manifest.json, sw.js, room_logger/room_logger.ino, and room_logger/partitions.csv.
 #
 # ONLY ONE GitHub Secret required (Settings -> Secrets and variables -> Actions):
 #   SECRETS_H : Full contents of your secrets.h file (never commit secrets.h to a public repo!)
@@ -14,6 +14,7 @@ on:
     branches: [ main, master ]
     paths:
       - 'room_logger/room_logger.ino'
+      - 'room_logger/partitions.csv'
       - '.github/workflows/build.yml'
   workflow_dispatch:
 
@@ -30,7 +31,17 @@ jobs:
       - name: Set up Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
-      - name: Install ESP32 core & DHT libraries
+      - name: Cache ESP32 core & Arduino libraries
+        id: arduino-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/.arduino15
+            /home/runner/Arduino/libraries
+          key: esp32-arduino-core-v1-dht
+
+      - name: Install ESP32 core & DHT libraries (skipped on cache hit)
+        if: steps.arduino-cache.outputs.cache-hit != 'true'
         run: |
           arduino-cli config init --overwrite --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli core update-index
@@ -48,10 +59,10 @@ jobs:
           fi
           printf '%s\n' "$SECRETS_H" > ./room_logger/secrets.h
 
-      - name: Compile ESP32 binary (Minimal SPIFFS / 1.9 MB OTA slots)
+      - name: Compile ESP32 binary (custom 1.66 MB OTA partition from room_logger/partitions.csv)
         run: |
           arduino-cli compile \
-            --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs \
+            --fqbn esp32:esp32:esp32:PartitionScheme=custom \
             --output-dir build \
             ./room_logger
           ls -lh build/room_logger.ino.bin
