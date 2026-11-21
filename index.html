@@ -561,8 +561,8 @@
     --mono:'IBM Plex Mono', ui-monospace, monospace;
     --sans:'Inter', system-ui, sans-serif;
   }
-  *{box-sizing:border-box;}
-  html,body{margin:0;padding:0;overflow-x:hidden;}
+  *,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;overflow-x:hidden;overscroll-behavior-y:contain;}
   body{
     background:
       radial-gradient(ellipse 900px 500px at 15% -10%, #14202b 0%, transparent 60%),
@@ -624,7 +624,7 @@
     color:var(--text);font-family:var(--mono);font-size:13px;
     padding:9px 11px;border-radius:7px;
   }
-  input[type=text]:focus{outline:2px solid var(--temp);outline-offset:1px;border-color:transparent;}
+  input[type=text]:focus-visible{outline:2px solid var(--temp);outline-offset:1px;border-color:transparent;}
 
   select{
     width:100%;background:var(--panel-2);border:1px solid var(--border);
@@ -634,7 +634,7 @@
     background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%237C8798'/></svg>");
     background-repeat:no-repeat;background-position:right 12px center;
   }
-  select:focus{outline:2px solid var(--temp);outline-offset:1px;border-color:transparent;}
+  select:focus-visible{outline:2px solid var(--temp);outline-offset:1px;border-color:transparent;}
 
   input[type=number]{
     width:64px;background:var(--panel-2);border:1px solid var(--border);
@@ -644,7 +644,7 @@
   }
   input[type=number]::-webkit-outer-spin-button,
   input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
-  input[type=number]:focus{outline:2px solid var(--temp);outline-offset:1px;border-color:transparent;}
+  input[type=number]:focus-visible{outline:2px solid var(--temp);outline-offset:1px;border-color:transparent;}
 
   button{
     font-family:var(--sans);font-weight:600;font-size:13px;
@@ -1578,35 +1578,27 @@
     background: #06080B;
     transition: opacity 420ms ease;
   }
-  [data-theme="atelier"] .ambient-stage { opacity: 0; }
-  [data-theme="obsidian"] .ambient-stage { opacity: 0.22; }
+  [data-theme="atelier"] .ambient-stage { display: none; }
+  [data-theme="obsidian"] .ambient-stage { opacity: 0.18; }
   [data-theme="kinetic"] .ambient-stage { opacity: 1; }
 
+  /* Single GPU-cached static ambient layer (rasterized once, zero per-frame blur stalls) */
   .ambient-layer {
     position: absolute;
-    inset: -32%;
+    inset: -10%;
     background-image: url('bg-backdrop.jpg');
     background-size: cover;
     background-position: center;
-    will-change: transform;
+    contain: strict;
   }
   .ambient-layer.base {
-    filter: blur(22px) saturate(1.45) contrast(1.12) brightness(0.76);
+    filter: blur(14px) saturate(1.35) contrast(1.08) brightness(0.72);
     opacity: 0.92;
-    animation: amDriftA 26s ease-in-out infinite alternate;
+    transform: translateZ(0);
   }
-  .ambient-layer.flow {
-    filter: blur(36px) saturate(1.65) contrast(1.18) brightness(0.85);
-    mix-blend-mode: screen;
-    opacity: 0.56;
-    animation: amDriftB 34s ease-in-out infinite alternate;
-  }
+  .ambient-layer.flow,
   .ambient-layer.matrix {
-    inset: -16%;
-    filter: contrast(1.15) brightness(0.9);
-    mix-blend-mode: soft-light;
-    opacity: 0.34;
-    animation: amDriftC 44s ease-in-out infinite alternate;
+    display: none;
   }
   .ambient-vignette {
     position: absolute;
@@ -1650,13 +1642,12 @@
 
   /* Glass & tactile card language for Kinetic theme */
   [data-theme="kinetic"] .card {
-    background: var(--panel);
-    backdrop-filter: blur(22px) saturate(130%);
-    -webkit-backdrop-filter: blur(22px) saturate(130%);
-    border: 1px solid var(--border);
+    background: rgba(15, 18, 24, 0.86);
+    border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: 24px;
     padding: 18px;
-    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.34);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    contain: layout style;
   }
   [data-theme="kinetic"] .card h2 {
     font-family: var(--display);
@@ -1757,7 +1748,7 @@
   }
   [data-theme="kinetic"] .theme-pill-btn {
     background: rgba(255, 255, 255, 0.08);
-    backdrop-filter: blur(12px);
+    
     border: 1px solid rgba(255, 255, 255, 0.14);
     color: var(--text);
   }
@@ -1770,8 +1761,8 @@
     border-radius: 30px;
     overflow: hidden;
     background: rgba(14, 15, 18, 0.56);
-    backdrop-filter: blur(18px) saturate(135%);
-    -webkit-backdrop-filter: blur(18px) saturate(135%);
+    background: rgba(18, 21, 28, 0.88);
+    -webkit-background: rgba(18, 21, 28, 0.88);
     border: 1px solid rgba(255, 255, 255, 0.12);
     box-shadow: 0 22px 54px rgba(0, 0, 0, 0.45);
     margin-bottom: 16px;
@@ -2179,8 +2170,8 @@
     padding: 6px;
     border-radius: 9999px;
     background: rgba(13, 14, 17, 0.90);
-    backdrop-filter: blur(26px) saturate(140%);
-    -webkit-backdrop-filter: blur(26px) saturate(140%);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border: 1px solid rgba(255, 255, 255, 0.12);
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   }
@@ -2205,10 +2196,9 @@
     font-weight: 600;
     cursor: pointer;
     transition:
-      background-color 240ms cubic-bezier(0.22, 1, 0.36, 1),
-      color 200ms ease,
-      padding 240ms cubic-bezier(0.22, 1, 0.36, 1),
-      transform 120ms ease;
+      background-color 160ms ease-out,
+      color 140ms ease-out,
+      transform 100ms ease-out;
     white-space: nowrap;
   }
   .bnav-btn svg {
@@ -2222,10 +2212,7 @@
     stroke-linejoin: round;
   }
   .bnav-btn .bnav-lbl {
-    max-width: 0;
-    overflow: hidden;
-    opacity: 0;
-    transition: max-width 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease;
+    display: none;
   }
   .bnav-btn.active {
     background: rgba(255, 255, 255, 0.14);
@@ -2234,8 +2221,7 @@
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
   }
   .bnav-btn.active .bnav-lbl {
-    max-width: 90px;
-    opacity: 1;
+    display: inline;
   }
   .bnav-btn:hover:not(.active) { color: rgba(244, 242, 238, 0.90); }
   .bnav-btn:active { transform: scale(0.95); }
@@ -2276,8 +2262,7 @@
      ========================================================================== */
   .views-viewport {
     position: relative;
-    will-change: transform;
-    transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .views-viewport.dragging {
     transition: none;
@@ -2289,24 +2274,24 @@
     display: block;
   }
   .tab-view.slide-from-right {
-    animation: viewSlideRight 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: viewSlideRight 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
   .tab-view.slide-from-left {
-    animation: viewSlideLeft 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: viewSlideLeft 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
   .tab-view.fade-pop {
-    animation: viewFadePop 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: viewFadePop 160ms ease-out both;
   }
   @keyframes viewSlideRight {
-    from { opacity: 0; transform: translate3d(34px, 0, 0); }
+    from { opacity: 0; transform: translate3d(18px, 0, 0); }
     to   { opacity: 1; transform: translate3d(0, 0, 0); }
   }
   @keyframes viewSlideLeft {
-    from { opacity: 0; transform: translate3d(-34px, 0, 0); }
+    from { opacity: 0; transform: translate3d(-18px, 0, 0); }
     to   { opacity: 1; transform: translate3d(0, 0, 0); }
   }
   @keyframes viewFadePop {
-    from { opacity: 0; transform: translate3d(0, 10px, 0); }
+    from { opacity: 0; transform: translate3d(0, 6px, 0); }
     to   { opacity: 1; transform: translate3d(0, 0, 0); }
   }
 
@@ -2324,7 +2309,7 @@
     color: #F4F2EE;
     font-family: var(--mono);
     font-size: 11px;
-    backdrop-filter: blur(14px);
+    
     opacity: 0;
     pointer-events: none;
     transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease;
@@ -2345,7 +2330,7 @@
     color: #F4F2EE;
     font-family: var(--mono);
     font-size: 11.5px;
-    backdrop-filter: blur(16px);
+    
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
     opacity: 0;
     pointer-events: none;
@@ -2425,7 +2410,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.7.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.7.1</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -2833,11 +2818,11 @@
           <div class="card-head-toggle" style="margin-bottom:4px;">
             <h2>App Theme &amp; Updates</h2>
             <div class="card-head-meta">
-              <span class="minimal-pill-hint">v3.7.0</span>
+              <span class="minimal-pill-hint">v3.7.1</span>
               <span class="expand-chevron" aria-hidden="true">&#9662;</span>
             </div>
           </div>
-          <div class="ota-meta" id="app-ver-meta">Running <b>v3.7.0</b> · checking GitHub for updates…</div>
+          <div class="ota-meta" id="app-ver-meta">Running <b>v3.7.1</b> · checking GitHub for updates…</div>
           <div class="card-detail-drawer">
             <div class="card-detail-content">
               <div class="card-detail-inner-pad">
@@ -2934,7 +2919,7 @@
 </nav>
 
 <script>
-  const APP_VERSION = '3.7.0';
+  const APP_VERSION = '3.7.1';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   const VIEW_ORDER = ['dashboard', 'graphs', 'controls', 'system'];
@@ -3013,17 +2998,24 @@
       btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
     });
 
+    const nowMs = Date.now();
     if (name === 'dashboard' || name === 'controls' || name === 'system'){
-      fetchStatus();
-      if (name === 'controls') fetchFirmwareInfo();
+      if (!window._lastTabStatusMs || (nowMs - window._lastTabStatusMs) > 4000){
+        window._lastTabStatusMs = nowMs;
+        fetchStatus();
+      }
+      if (name === 'controls' && (!window._lastFwCheckMs || (nowMs - window._lastFwCheckMs) > 15000)){
+        window._lastFwCheckMs = nowMs;
+        fetchFirmwareInfo();
+      }
     }
     if (name === 'graphs'){
-      setTimeout(() => {
+      requestAnimationFrame(() => {
         if (chartTemp){ chartTemp.resize(); chartTemp.update('none'); }
         if (chartHum){ chartHum.resize(); chartHum.update('none'); }
-      }, 40);
+      });
     }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (window.scrollY > 0) window.scrollTo(0, 0);
   }
 
   function triggerFabRefresh(){
@@ -3224,55 +3216,65 @@
       const dx = e.touches[0].clientX - sx;
       const dy = e.touches[0].clientY - sy;
 
-      if (!lockedAxis && (Math.abs(dx) > 10 || Math.abs(dy) > 10)){
-        lockedAxis = Math.abs(dx) > Math.abs(dy) * 1.25 ? 'x' : 'y';
+      if (!lockedAxis && (Math.abs(dx) > 16 || Math.abs(dy) > 16)){
+        lockedAxis = Math.abs(dx) > Math.abs(dy) * 1.45 ? 'x' : 'y';
       }
 
       if (lockedAxis === 'x' && swiping && viewport){
         const curIdx = VIEW_ORDER.indexOf(currentViewName);
-        let damped = dx * 0.24;
+        let damped = dx * 0.18;
         if ((curIdx === 0 && dx > 0) || (curIdx === VIEW_ORDER.length - 1 && dx < 0)){
-          damped = dx * 0.09; // rubber-band edge resistance
+          damped = dx * 0.06;
         }
+        damped = Math.max(-44, Math.min(44, damped));
         viewport.classList.add('dragging');
         viewport.style.transform = 'translate3d(' + damped.toFixed(1) + 'px, 0, 0)';
-      } else if (lockedAxis === 'y' && pulling && dy > 0 && window.scrollY <= 2){
-        pullDist = Math.min(90, dy * 0.45);
-        if (ptrEl && pullDist > 16){
+      } else if (lockedAxis === 'y' && pulling && dy > 24 && window.scrollY <= 2){
+        pullDist = Math.min(90, (dy - 24) * 0.45);
+        if (ptrEl && pullDist > 14){
           ptrEl.classList.add('visible');
-          ptrEl.style.transform = 'translate(-50%, ' + Math.min(26, pullDist - 36).toFixed(0) + 'px)';
-          ptrEl.textContent = pullDist > 58 ? 'Release to refresh' : 'Pull to refresh…';
+          ptrEl.style.transform = 'translate3d(-50%, ' + Math.min(26, pullDist - 36).toFixed(0) + 'px, 0)';
+          ptrEl.textContent = pullDist > 62 ? 'Release to refresh' : 'Pull to refresh…';
         }
       }
     }, { passive: true });
 
-    document.addEventListener('touchend', function(e){
+    function finishGesture(e, cancelled){
+      const didSwipeX = !cancelled && lockedAxis === 'x' && swiping && e.changedTouches && e.changedTouches.length;
+      const dx = didSwipeX ? (e.changedTouches[0].clientX - sx) : 0;
+      const idx = VIEW_ORDER.indexOf(currentViewName);
+      let nextView = null, nextDir = null;
+      if (didSwipeX && Math.abs(dx) >= 64){
+        if (dx < 0 && idx < VIEW_ORDER.length - 1){ nextView = VIEW_ORDER[idx + 1]; nextDir = 'right'; }
+        else if (dx > 0 && idx > 0){ nextView = VIEW_ORDER[idx - 1]; nextDir = 'left'; }
+      }
       if (viewport){
-        viewport.classList.remove('dragging');
-        viewport.style.transform = '';
+        if (nextView){
+          viewport.classList.add('dragging');
+          viewport.style.transform = '';
+          requestAnimationFrame(() => viewport.classList.remove('dragging'));
+        } else {
+          viewport.classList.remove('dragging');
+          viewport.style.transform = '';
+        }
       }
       if (ptrEl){
         ptrEl.classList.remove('visible');
-        ptrEl.style.transform = 'translate(-50%, -60px)';
+        ptrEl.style.transform = 'translate3d(-50%, -60px, 0)';
       }
-      if (pulling && pullDist > 58){
+      if (!cancelled && pulling && pullDist > 62){
         triggerFabRefresh();
       }
-      if (lockedAxis === 'x' && swiping && e.changedTouches && e.changedTouches.length){
-        const dx = e.changedTouches[0].clientX - sx;
-        if (Math.abs(dx) >= 54){
-          const idx = VIEW_ORDER.indexOf(currentViewName);
-          if (dx < 0 && idx < VIEW_ORDER.length - 1){
-            showView(VIEW_ORDER[idx + 1], 'right');
-          } else if (dx > 0 && idx > 0){
-            showView(VIEW_ORDER[idx - 1], 'left');
-          }
-        }
+      if (nextView){
+        showView(nextView, nextDir);
       }
       swiping = false;
       pulling = false;
       lockedAxis = null;
-    }, { passive: true });
+      pullDist = 0;
+    }
+    document.addEventListener('touchend', (e) => finishGesture(e, false), { passive: true });
+    document.addEventListener('touchcancel', (e) => finishGesture(e, true), { passive: true });
 
     // Dedicated horizontal swipe on Hero Dial to swap Temp <-> Humidity
     const dialWrap = document.getElementById('hero-dial-wrap');
