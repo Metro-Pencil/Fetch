@@ -112,7 +112,7 @@ const char* powerModeName(PowerMode mode);
 const char* powerModeLabel(PowerMode mode);
 void applyWifiRadioProfileLocked(PowerMode mode);
 void applyPowerMode(PowerMode newMode, bool publishStatus);
-String buildHealthJson();
+String buildHealthStatusJson();
 WifiSaveResult addOrUpdateWifiNetwork(const String& ssid, const String& password,
                                       const String& ipStr, const String& gwStr,
                                       const String& snStr, const String& dnsStr);
@@ -1682,7 +1682,7 @@ bool publishStatusToFirebase() {
                     "\",\"url\":\"" + jsonEscape(otaUrlCopy) +
                     "\"},\"wifi\":{\"preferred\":\"" + jsonEscape(prefCopy) +
                     "\",\"networks\":" + wifiListJson +
-                    "},\"health\":" + buildHealthJson() + ",\"storage\":" + buildStorageJson() + "}";
+                    "},\"health\":" + buildHealthStatusJson() + ",\"storage\":" + buildStorageJson() + "}";
 
   if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
     Serial.println("Failed to publish status to Firebase (TLS busy)");
