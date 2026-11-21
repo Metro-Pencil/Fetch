@@ -16,7 +16,7 @@
 // index.html); a service worker getting in the way of that would be
 // actively harmful, not helpful.
 
-const SHELL_CACHE = 'room-logger-shell-v16';
+const SHELL_CACHE = 'room-logger-shell-v17';
 const RUNTIME_CACHE = 'room-logger-runtime-v1';
 
 // Known-path assets precached at install time. The HTML page itself is
@@ -31,6 +31,7 @@ const PRECACHE_ASSETS = [
   'icon-maskable-512.png',
   'apple-touch-icon.png',
   'favicon-48.png',
+  'bg-backdrop.jpg',
 ];
 
 // Third-party hosts this page loads scripts/fonts from, by exact version --

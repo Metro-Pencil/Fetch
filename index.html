@@ -7,8 +7,8 @@
 
 <!-- PWA: manifest + icons + iOS's separate (non-manifest-based) install tags -->
 <link rel="manifest" href="manifest.json">
-<meta name="theme-color" id="meta-theme-color" content="#0B0F14">
-<script>(function(){try{var t=localStorage.getItem("rl_theme");if(t==="atelier"){document.documentElement.setAttribute("data-theme","atelier");var m=document.getElementById("meta-theme-color");if(m)m.setAttribute("content","#F3EFE9");}}catch(e){}})();</script>
+<meta name="theme-color" id="meta-theme-color" content="#07090D">
+<script>(function(){try{var t=localStorage.getItem("rl_theme")||"kinetic";if(t!=="atelier"&&t!=="obsidian"&&t!=="kinetic")t="kinetic";document.documentElement.setAttribute("data-theme",t);var m=document.getElementById("meta-theme-color");if(m)m.setAttribute("content",t==="atelier"?"#F3EFE9":(t==="obsidian"?"#0B0F14":"#07090D"));}catch(e){document.documentElement.setAttribute("data-theme","kinetic");}})();</script>
 <link rel="icon" href="favicon-48.png" sizes="48x48" type="image/png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -542,6 +542,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.2.0/chartjs-plugin-zoom.min.js"></script>
 <style>
+
   :root{
     --bg:#0B0F14;
     --panel:#12181F;
@@ -1541,9 +1542,856 @@
   [data-theme="atelier"] .cmd-stepper,
   [data-theme="atelier"] .storage-block { border-radius: 16px; }
 
+
+
+  /* ==========================================================================
+     v3.7.0 KINETIC THEME — Apple Music Animated Backdrop + Tactile Cream/Obsidian
+     ========================================================================== */
+  [data-theme="kinetic"] {
+    --bg: #07090D;
+    --panel: rgba(16, 18, 23, 0.72);
+    --panel-2: rgba(255, 255, 255, 0.055);
+    --border: rgba(255, 255, 255, 0.11);
+    --text: #F4F2EE;
+    --muted: rgba(235, 232, 226, 0.66);
+    --muted-2: rgba(235, 232, 226, 0.44);
+    --temp: #F5A66B;
+    --hum: #7DC4E4;
+    --ok: #5EEAD4;
+    --warn: #FBBF24;
+    --err: #FB7185;
+    --cream: #EFECE5;
+    --cream-2: #E4DFD5;
+    --cream-ink: #141518;
+    --cream-muted: #5D5B56;
+    --accent-gold: #C9985A;
+    --display: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+  }
+
+  /* Apple Music-style multi-layer drifting halftone backdrop */
+  .ambient-stage {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    background: #06080B;
+    transition: opacity 420ms ease;
+  }
+  [data-theme="atelier"] .ambient-stage { opacity: 0; }
+  [data-theme="obsidian"] .ambient-stage { opacity: 0.22; }
+  [data-theme="kinetic"] .ambient-stage { opacity: 1; }
+
+  .ambient-layer {
+    position: absolute;
+    inset: -32%;
+    background-image: url('bg-backdrop.jpg');
+    background-size: cover;
+    background-position: center;
+    will-change: transform;
+  }
+  .ambient-layer.base {
+    filter: blur(22px) saturate(1.45) contrast(1.12) brightness(0.76);
+    opacity: 0.92;
+    animation: amDriftA 26s ease-in-out infinite alternate;
+  }
+  .ambient-layer.flow {
+    filter: blur(36px) saturate(1.65) contrast(1.18) brightness(0.85);
+    mix-blend-mode: screen;
+    opacity: 0.56;
+    animation: amDriftB 34s ease-in-out infinite alternate;
+  }
+  .ambient-layer.matrix {
+    inset: -16%;
+    filter: contrast(1.15) brightness(0.9);
+    mix-blend-mode: soft-light;
+    opacity: 0.34;
+    animation: amDriftC 44s ease-in-out infinite alternate;
+  }
+  .ambient-vignette {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 85% 55% at 50% 15%, rgba(8, 10, 14, 0.20) 0%, rgba(6, 8, 11, 0.72) 100%),
+      linear-gradient(180deg, rgba(6, 8, 11, 0.28) 0%, rgba(6, 8, 11, 0.58) 55%, rgba(6, 8, 11, 0.86) 100%);
+  }
+
+  @keyframes amDriftA {
+    0%   { transform: translate3d(-6%, -4%, 0) scale(1.16) rotate(0deg); }
+    33%  { transform: translate3d(5%, -7%, 0) scale(1.28) rotate(8deg); }
+    66%  { transform: translate3d(7%, 6%, 0) scale(1.22) rotate(-6deg); }
+    100% { transform: translate3d(-5%, 5%, 0) scale(1.32) rotate(12deg); }
+  }
+  @keyframes amDriftB {
+    0%   { transform: translate3d(7%, 5%, 0) scale(1.26) rotate(180deg); }
+    50%  { transform: translate3d(-8%, 2%, 0) scale(1.38) rotate(155deg); }
+    100% { transform: translate3d(4%, -8%, 0) scale(1.20) rotate(205deg); }
+  }
+  @keyframes amDriftC {
+    0%   { transform: translate3d(-3%, -2%, 0) scale(1.06); }
+    50%  { transform: translate3d(3%, 2%, 0) scale(1.11); }
+    100% { transform: translate3d(-2%, 3%, 0) scale(1.07); }
+  }
+
+  body {
+    position: relative;
+    padding-bottom: calc(108px + env(safe-area-inset-bottom)) !important;
+  }
+  [data-theme="kinetic"] body {
+    background: #07090D;
+    color: var(--text);
+    font-family: var(--display);
+  }
+  .wrap {
+    position: relative;
+    z-index: 2;
+    max-width: 680px;
+  }
+
+  /* Glass & tactile card language for Kinetic theme */
+  [data-theme="kinetic"] .card {
+    background: var(--panel);
+    backdrop-filter: blur(22px) saturate(130%);
+    -webkit-backdrop-filter: blur(22px) saturate(130%);
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    padding: 18px;
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.34);
+  }
+  [data-theme="kinetic"] .card h2 {
+    font-family: var(--display);
+    font-size: 0.98rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    text-transform: none;
+    color: var(--text);
+    margin: 0;
+  }
+  [data-theme="kinetic"] .card h2::before {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--temp), var(--hum));
+  }
+  [data-theme="kinetic"] button {
+    font-family: var(--display);
+    border-radius: 9999px;
+  }
+  [data-theme="kinetic"] .btn-primary {
+    background: var(--cream);
+    color: var(--cream-ink);
+    font-weight: 700;
+  }
+  [data-theme="kinetic"] .btn-primary:hover { background: #FFFFFF; opacity: 1; }
+  [data-theme="kinetic"] .btn-ghost {
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    color: var(--text);
+  }
+  [data-theme="kinetic"] .btn-ghost:hover {
+    background: rgba(255, 255, 255, 0.13);
+    border-color: rgba(255, 255, 255, 0.24);
+  }
+  [data-theme="kinetic"] input[type=text],
+  [data-theme="kinetic"] input[type=password],
+  [data-theme="kinetic"] input[type=number],
+  [data-theme="kinetic"] input[type=file],
+  [data-theme="kinetic"] select {
+    background-color: rgba(10, 12, 16, 0.62);
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    color: var(--text);
+    border-radius: 14px;
+  }
+  [data-theme="kinetic"] .chart-box {
+    background: rgba(10, 12, 16, 0.56);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 20px;
+  }
+  [data-theme="kinetic"] .stat {
+    background: rgba(255, 255, 255, 0.055);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 18px;
+  }
+  [data-theme="kinetic"] .health-row,
+  [data-theme="kinetic"] .wifi-item,
+  [data-theme="kinetic"] .storage-block,
+  [data-theme="kinetic"] .power-opt,
+  [data-theme="kinetic"] .link-tile {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 16px;
+  }
+  [data-theme="kinetic"] .power-opt.active {
+    border-color: rgba(94, 234, 212, 0.65);
+    background: rgba(94, 234, 212, 0.08);
+    box-shadow: 0 0 0 1px rgba(94, 234, 212, 0.35);
+  }
+  [data-theme="kinetic"] .power-opt.staged {
+    border-color: var(--temp);
+    background: rgba(245, 166, 107, 0.12);
+    box-shadow: 0 0 0 1.5px var(--temp);
+  }
+  .power-opt.staged {
+    border-color: var(--temp);
+    box-shadow: 0 0 0 1.5px var(--temp);
+  }
+  [data-theme="kinetic"] .storage-mini {
+    background: rgba(0, 0, 0, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+  }
+  [data-theme="kinetic"] .storage-track {
+    background: rgba(255, 255, 255, 0.09);
+    border-color: transparent;
+  }
+
+  /* Compact top header */
+  header {
+    margin-bottom: 14px;
+    padding: 4px 2px;
+  }
+  [data-theme="kinetic"] .brand h1 {
+    font-family: var(--display);
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    text-transform: none;
+  }
+  [data-theme="kinetic"] .theme-pill-btn {
+    background: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: var(--text);
+  }
+
+  /* ==========================================================================
+     IMAGE 2 INSPIRED HERO STAGE + SIGNATURE CREAM OVERVIEW CARD (HOME TAB)
+     ========================================================================== */
+  .hero-stage {
+    position: relative;
+    border-radius: 30px;
+    overflow: hidden;
+    background: rgba(14, 15, 18, 0.56);
+    backdrop-filter: blur(18px) saturate(135%);
+    -webkit-backdrop-filter: blur(18px) saturate(135%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 22px 54px rgba(0, 0, 0, 0.45);
+    margin-bottom: 16px;
+  }
+  [data-theme="atelier"] .hero-stage {
+    background: #231D18;
+    border-color: rgba(35, 29, 24, 0.18);
+  }
+
+  .hero-dial-wrap {
+    padding: 24px 18px 22px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    cursor: pointer;
+    user-select: none;
+    touch-action: pan-y;
+  }
+  .hero-top-pills {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #F4F2EE;
+    letter-spacing: 0.03em;
+  }
+  .hero-badge .dot-live {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #7C8798;
+    box-shadow: 0 0 8px rgba(124, 135, 152, 0.5);
+  }
+  .hero-badge.online .dot-live { background: #4ADE80; box-shadow: 0 0 10px rgba(74, 222, 128, 0.8); }
+  .hero-badge.stale .dot-live { background: #FBBF24; box-shadow: 0 0 10px rgba(251, 191, 36, 0.8); }
+  .hero-badge.offline .dot-live { background: #FB7185; box-shadow: 0 0 10px rgba(251, 113, 133, 0.8); }
+
+  .hero-gauge {
+    position: relative;
+    width: 224px;
+    height: 224px;
+    display: grid;
+    place-items: center;
+    margin: 4px 0 6px;
+    transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .hero-dial-wrap:active .hero-gauge { transform: scale(0.975); }
+  .hero-gauge svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .hero-gauge-center {
+    text-align: center;
+    z-index: 2;
+    transition: opacity 200ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .hero-gauge-center.switching {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+  .hero-gauge-val {
+    font-family: var(--display, var(--sans));
+    font-size: 50px;
+    font-weight: 600;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    color: #F7F5F0;
+    font-variant-numeric: tabular-nums;
+  }
+  .hero-gauge-val .unit-sup {
+    font-size: 20px;
+    font-weight: 500;
+    vertical-align: super;
+    opacity: 0.72;
+    margin-left: 2px;
+  }
+  .hero-gauge-sub {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: rgba(244, 242, 238, 0.60);
+    margin-top: 6px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .hero-dial-dots {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .hero-dial-dot {
+    width: 6px; height: 6px; border-radius: 99px;
+    background: rgba(255, 255, 255, 0.24);
+    transition: width 220ms ease, background 220ms ease;
+  }
+  .hero-dial-dot.active {
+    width: 18px;
+    background: #F4F2EE;
+  }
+
+  /* Signature Cream Overview Sheet (Image 2 bottom sheet) */
+  .hero-cream-card {
+    background: #EFECE5;
+    color: #141518;
+    border-radius: 28px 28px 28px 28px;
+    padding: 22px 20px 18px;
+    margin: 0 4px 4px;
+    box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.24);
+  }
+  .cream-head {
+    text-align: center;
+    margin-bottom: 16px;
+  }
+  .cream-title {
+    font-family: var(--display, var(--sans));
+    font-size: 21px;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    color: #141518;
+    margin: 0;
+  }
+  .cream-sub {
+    font-family: var(--display, var(--sans));
+    font-size: 13px;
+    font-weight: 500;
+    color: #6B6760;
+    margin-top: 3px;
+  }
+  .cream-metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding: 12px 6px 16px;
+    border-top: 1px solid rgba(20, 21, 24, 0.08);
+    border-bottom: 1px solid rgba(20, 21, 24, 0.08);
+    margin-bottom: 16px;
+    text-align: center;
+  }
+  .cream-metric-val {
+    font-family: var(--display, var(--sans));
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    color: #141518;
+    font-variant-numeric: tabular-nums;
+  }
+  .cream-metric-val span {
+    font-size: 13px;
+    font-weight: 500;
+    color: #6B6760;
+    margin-left: 2px;
+  }
+  .cream-metric-lbl {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: #6B6760;
+    margin-top: 3px;
+  }
+  .cream-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .cream-pill-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: #1C1D21;
+    padding: 4px;
+    border-radius: 999px;
+    flex: 1;
+  }
+  .cream-pill-btn {
+    flex: 1;
+    min-height: 40px !important;
+    padding: 8px 10px !important;
+    border-radius: 999px !important;
+    background: transparent;
+    color: rgba(244, 242, 238, 0.86);
+    font-size: 12px;
+    font-weight: 600;
+    border: none;
+    transition: background 160ms ease, color 160ms ease, transform 100ms ease;
+  }
+  .cream-pill-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+  .cream-pill-btn.active-sub { background: rgba(255, 255, 255, 0.16); color: #fff; }
+  .cream-primary-btn {
+    min-height: 48px !important;
+    padding: 10px 22px !important;
+    border-radius: 999px !important;
+    background: #141518;
+    color: #F4F2EE;
+    font-size: 13px;
+    font-weight: 700;
+    border: none;
+    white-space: nowrap;
+    box-shadow: 0 6px 18px rgba(20, 21, 24, 0.24);
+  }
+  .cream-primary-btn:hover { background: #26282E; }
+
+  /* Keep inline stepper styled crisply inside the cream card too */
+  .hero-cream-card .cmd-stepper {
+    background: #18191D;
+    border-color: rgba(20, 21, 24, 0.16);
+    color: #F4F2EE;
+  }
+  .hero-cream-card .cmd-stepper-head { color: #F4F2EE; }
+  .hero-cream-card .cmd-step { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.10); color: rgba(244,242,238,0.62); }
+  .hero-cream-card .cmd-step.active, .hero-cream-card .cmd-step.done { color: #F4F2EE; }
+  .hero-cream-card .cmd-stepper-foot { color: rgba(244,242,238,0.72); }
+
+  /* ==========================================================================
+     INLINE 4-STEP VERIFICATION DROPDOWN (SMOOTH SLIDE DOWN & AUTO-DISAPPEAR)
+     ========================================================================== */
+  .inline-cmd-slot {
+    width: 100%;
+  }
+  .cmd-stepper {
+    display: block !important;
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    margin-top: 0;
+    padding: 0 14px;
+    border-width: 0;
+    transform: translateY(-6px);
+    pointer-events: none;
+    transition:
+      max-height 360ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 260ms ease,
+      transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
+      margin-top 280ms ease,
+      padding 280ms ease;
+  }
+  .cmd-stepper.show {
+    max-height: 260px;
+    opacity: 1;
+    margin-top: 12px;
+    padding: 13px 14px;
+    border-width: 1px;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+  .cmd-stepper.is-done {
+    border-color: rgba(74, 222, 128, 0.55) !important;
+    box-shadow: 0 8px 24px rgba(74, 222, 128, 0.14);
+  }
+  .cmd-stepper.is-err {
+    border-color: rgba(251, 113, 133, 0.55) !important;
+  }
+  .cmd-step.active .cmd-step-dot {
+    animation: stepPulse 1.1s ease-in-out infinite;
+  }
+  @keyframes stepPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.5); }
+    50% { box-shadow: 0 0 0 6px rgba(251, 191, 36, 0); }
+  }
+  .cmd-stepper-close {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    min-height: 24px !important;
+    padding: 2px 8px !important;
+    font-size: 11px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.10);
+    color: inherit;
+    border: none;
+    cursor: pointer;
+  }
+
+  /* ==========================================================================
+     MINIMAL-FIRST / TAP-TO-EXPAND PROGRESSIVE DISCLOSURE CARDS
+     ========================================================================== */
+  .expandable-card {
+    cursor: pointer;
+    transition: border-color 200ms ease, transform 180ms ease, box-shadow 220ms ease;
+  }
+  .card-head-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+    user-select: none;
+  }
+  .card-head-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .minimal-pill-hint {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    padding: 3px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .expand-chevron {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1), background 180ms ease, color 180ms ease;
+    flex-shrink: 0;
+  }
+  .expandable-card.is-expanded .expand-chevron {
+    transform: rotate(180deg);
+    background: var(--temp);
+    color: #0B0F14;
+    border-color: transparent;
+  }
+
+  .card-detail-drawer,
+  .inner-detail-drawer {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition: grid-template-rows 340ms cubic-bezier(0.22, 1, 0.36, 1), opacity 240ms ease;
+  }
+  .card-detail-content,
+  .inner-detail-content {
+    overflow: hidden;
+  }
+  .expandable-card.is-expanded > .card-detail-drawer,
+  .expandable-inner.is-expanded > .inner-detail-drawer {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  .card-detail-inner-pad {
+    padding-top: 14px;
+    margin-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .expandable-inner { cursor: pointer; }
+  .expandable-inner .storage-sub-grid { margin-top: 10px; }
+
+  /* Compact Minimal Health Strip on Home */
+  .health-pills-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .mini-health-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 11px;
+    border-radius: 999px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+  }
+  .mini-health-chip .mhd {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--muted);
+  }
+  .mini-health-chip.ok .mhd { background: var(--ok); }
+  .mini-health-chip.warn .mhd { background: var(--warn); }
+  .mini-health-chip.err .mhd { background: var(--err); }
+
+  /* ==========================================================================
+     IMAGE 3 FLOATING PILL BOTTOM NAVIGATION BAR + QUICK REFRESH FAB
+     ========================================================================== */
+  .bottom-nav-dock {
+    position: fixed;
+    left: 50%;
+    bottom: max(14px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: calc(100vw - 24px);
+  }
+  .bottom-pill {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px;
+    border-radius: 9999px;
+    background: rgba(13, 14, 17, 0.90);
+    backdrop-filter: blur(26px) saturate(140%);
+    -webkit-backdrop-filter: blur(26px) saturate(140%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+  [data-theme="atelier"] .bottom-pill {
+    background: rgba(28, 23, 19, 0.94);
+    border-color: rgba(198, 146, 101, 0.22);
+  }
+  .bnav-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-height: 44px !important;
+    height: 44px;
+    padding: 0 14px !important;
+    border-radius: 9999px !important;
+    background: transparent;
+    border: none;
+    color: rgba(244, 242, 238, 0.58);
+    font-family: var(--display, var(--sans));
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background-color 240ms cubic-bezier(0.22, 1, 0.36, 1),
+      color 200ms ease,
+      padding 240ms cubic-bezier(0.22, 1, 0.36, 1),
+      transform 120ms ease;
+    white-space: nowrap;
+  }
+  .bnav-btn svg {
+    width: 19px;
+    height: 19px;
+    flex-shrink: 0;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .bnav-btn .bnav-lbl {
+    max-width: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-width 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease;
+  }
+  .bnav-btn.active {
+    background: rgba(255, 255, 255, 0.14);
+    color: #F8F6F1;
+    padding: 0 18px !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  }
+  .bnav-btn.active .bnav-lbl {
+    max-width: 90px;
+    opacity: 1;
+  }
+  .bnav-btn:hover:not(.active) { color: rgba(244, 242, 238, 0.90); }
+  .bnav-btn:active { transform: scale(0.95); }
+
+  .bnav-fab {
+    width: 54px;
+    height: 54px;
+    min-height: 54px !important;
+    padding: 0 !important;
+    border-radius: 50% !important;
+    background: linear-gradient(145deg, #D5A465 0%, #B78347 100%);
+    color: #161412;
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    display: grid;
+    place-items: center;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: transform 160ms ease, filter 160ms ease;
+  }
+  .bnav-fab:hover { filter: brightness(1.07); }
+  .bnav-fab:active { transform: scale(0.93); }
+  .bnav-fab svg {
+    width: 20px; height: 20px;
+    stroke: currentColor; fill: none; stroke-width: 2.1;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
+  .bnav-fab.spinning svg { animation: spin360 720ms cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+  @keyframes spin360 { to { transform: rotate(360deg); } }
+
+  /* Shift update popup above floating bottom nav */
+  .update-popup {
+    bottom: calc(84px + env(safe-area-inset-bottom)) !important;
+  }
+
+  /* ==========================================================================
+     SLIDING TAB VIEWPORT, SWIPE FEEDBACK, PULL-TO-REFRESH & TOAST
+     ========================================================================== */
+  .views-viewport {
+    position: relative;
+    will-change: transform;
+    transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .views-viewport.dragging {
+    transition: none;
+  }
+  .tab-view {
+    display: none;
+  }
+  .tab-view.active-view {
+    display: block;
+  }
+  .tab-view.slide-from-right {
+    animation: viewSlideRight 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .tab-view.slide-from-left {
+    animation: viewSlideLeft 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .tab-view.fade-pop {
+    animation: viewFadePop 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes viewSlideRight {
+    from { opacity: 0; transform: translate3d(34px, 0, 0); }
+    to   { opacity: 1; transform: translate3d(0, 0, 0); }
+  }
+  @keyframes viewSlideLeft {
+    from { opacity: 0; transform: translate3d(-34px, 0, 0); }
+    to   { opacity: 1; transform: translate3d(0, 0, 0); }
+  }
+  @keyframes viewFadePop {
+    from { opacity: 0; transform: translate3d(0, 10px, 0); }
+    to   { opacity: 1; transform: translate3d(0, 0, 0); }
+  }
+
+  /* Pull-to-refresh indicator */
+  .ptr-indicator {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translate(-50%, -60px);
+    z-index: 95;
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: rgba(15, 17, 22, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: #F4F2EE;
+    font-family: var(--mono);
+    font-size: 11px;
+    backdrop-filter: blur(14px);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease;
+  }
+  .ptr-indicator.visible { opacity: 1; }
+
+  /* Subtle floating toast for mode/swipe feedback */
+  .ui-toast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(82px + env(safe-area-inset-bottom));
+    transform: translate(-50%, 14px);
+    z-index: 96;
+    padding: 8px 15px;
+    border-radius: 999px;
+    background: rgba(16, 18, 23, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #F4F2EE;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    backdrop-filter: blur(16px);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 200ms ease, transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+    white-space: nowrap;
+  }
+  .ui-toast.show {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  /* Section spacing */
+  .section-stack { display: flex; flex-direction: column; gap: 14px; }
+  .section-stack .ota-card { margin-top: 0; }
+  .swipe-hint-bar {
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted-2);
+    margin: 12px 0 4px;
+    letter-spacing: 0.03em;
+  }
+
+  @media (max-width: 420px) {
+    .bnav-btn { padding: 0 11px !important; }
+    .bnav-btn.active { padding: 0 14px !important; }
+    .bnav-fab { width: 48px; height: 48px; min-height: 48px !important; }
+    .hero-gauge { width: 204px; height: 204px; }
+    .hero-gauge-val { font-size: 44px; }
+    .cream-actions { flex-direction: column; align-items: stretch; }
+  }
+
 </style>
 </head>
 <body>
+<!-- Apple Music-style animated halftone backdrop -->
+<div class="ambient-stage" aria-hidden="true">
+  <div class="ambient-layer base"></div>
+  <div class="ambient-layer flow"></div>
+  <div class="ambient-layer matrix"></div>
+  <div class="ambient-vignette"></div>
+</div>
+
+<div class="ptr-indicator" id="ptr-indicator" aria-hidden="true">Release to refresh…</div>
+<div class="ui-toast" id="ui-toast" role="status" aria-live="polite"></div>
+
 <div class="update-popup" id="update-popup" role="alert">
   <div class="update-popup-text" id="update-popup-text">A newer version of Room Logger is available.</div>
   <div class="update-popup-actions">
@@ -1551,337 +2399,913 @@
     <button class="btn-ghost" onclick="dismissUpdatePopup()">Later</button>
   </div>
 </div>
-<div class="wrap">
 
+<!-- Single reusable 4-Step Verification Dropdown (dynamically mounted inline beneath whichever Apply/Action button you click) -->
+<div id="cmd-stepper-fallback-host" style="display:none;">
+  <div class="cmd-stepper" id="cmd-stepper" role="status" aria-live="polite">
+    <div class="cmd-stepper-head">
+      <span id="cmd-stepper-title">Cloud Command</span>
+      <span style="display:inline-flex;align-items:center;gap:8px;">
+        <span id="cmd-stepper-time">0.0s</span>
+        <button type="button" class="cmd-stepper-close" id="cmd-stepper-close" onclick="dismissCmdStepper()" aria-label="Dismiss">&times;</button>
+      </span>
+    </div>
+    <div class="cmd-steps">
+      <div class="cmd-step" id="cstep-1"><span class="cmd-step-dot">1</span><span>Firebase</span></div>
+      <div class="cmd-step" id="cstep-2"><span class="cmd-step-dot">2</span><span>ESP Got</span></div>
+      <div class="cmd-step" id="cstep-3"><span class="cmd-step-dot">3</span><span>Applied</span></div>
+      <div class="cmd-step" id="cstep-4"><span class="cmd-step-dot">4</span><span>Done</span></div>
+    </div>
+    <div class="cmd-stepper-foot" id="cmd-stepper-foot"></div>
+  </div>
+</div>
+
+<div class="wrap">
   <header>
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.6.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.7.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
     <div class="header-right">
       <button type="button" class="theme-pill-btn" id="theme-toggle-btn" onclick="toggleTheme()" aria-label="Switch color theme">
         <span class="theme-pill-dot" aria-hidden="true"></span>
-        <span id="theme-toggle-label">Atelier</span>
+        <span id="theme-toggle-label">Kinetic</span>
       </button>
       <div class="conn-label" id="conn-label">not connected</div>
     </div>
   </header>
 
-  <div class="tabbar" role="tablist">
-    <button class="tab-btn active" role="tab" aria-selected="true" data-view="dashboard" onclick="showView('dashboard')">Dashboard</button>
-    <button class="tab-btn" role="tab" aria-selected="false" data-view="graphs" onclick="showView('graphs')">Graphs</button>
-  </div>
+  <div class="views-viewport" id="views-viewport">
 
-  <div id="view-dashboard" class="tab-view">
-    <div class="card">
-      <h2>Device &amp; Health</h2>
-
-      <div class="field-row" id="device-status-row" style="display:none;">
-        <label>Connection</label>
-        <div class="device-status" id="device-status"></div>
-      </div>
-
-      <div class="cloud-health-list" id="cloud-health-list"></div>
-      <div class="cmd-stepper" id="cmd-stepper" role="status" aria-live="polite">
-        <div class="cmd-stepper-head">
-          <span id="cmd-stepper-title">Cloud Command</span>
-          <span id="cmd-stepper-time">0.0s</span>
-        </div>
-        <div class="cmd-steps">
-          <div class="cmd-step" id="cstep-1"><span class="cmd-step-dot">1</span><span>Firebase</span></div>
-          <div class="cmd-step" id="cstep-2"><span class="cmd-step-dot">2</span><span>ESP Got</span></div>
-          <div class="cmd-step" id="cstep-3"><span class="cmd-step-dot">3</span><span>Applied</span></div>
-          <div class="cmd-step" id="cstep-4"><span class="cmd-step-dot">4</span><span>Done</span></div>
-        </div>
-        <div class="cmd-stepper-foot" id="cmd-stepper-foot"></div>
-      </div>
-      <div class="cloud-cmd-bar" id="cloud-cmd-status"></div>
-      <div class="dash-msg" id="dash-msg">Loading device status…</div>
-
-      <div class="controls-row">
-        <button type="button" class="btn-primary" onclick="sendCloudCommand({ action: 'refreshStatus' }, 'Requesting live health refresh…')">Refresh Live</button>
-        <button type="button" class="btn-ghost" onclick="fetchStatus()">Reload Status</button>
-        <button type="button" class="btn-ghost" onclick="confirmCloudReboot()">Reboot ESP32</button>
-      </div>
-
-      <details class="ota-details" id="local-links-details">
-        <summary>Local LAN website links (only when on the ESP32's own hotspot)</summary>
-        <div class="dash-links" id="dash-links"></div>
-      </details>
-    </div>
-
-    <div class="card ota-card">
-      <h2>ESP32 Storage &amp; Memory</h2>
-      <div class="ota-meta" id="storage-meta">Live breakdown of flash, LittleFS queue, WiFi config, and RAM.</div>
-      <div class="storage-bars" id="cloud-storage-body"></div>
-    </div>
-
-    <div class="card ota-card">
-      <h2>Power Mode (Cloud Control)</h2>
-      <div class="ota-meta" id="cloud-power-meta">Switches the ESP32 over Firebase — works from any network or mobile data.</div>
-      <div class="power-grid" id="cloud-power-grid">
-        <button type="button" class="power-opt" data-pm="normal" onclick="cloudSetPowerMode('normal')">
-          <span class="power-opt-title">Normal</span>
-          <span class="power-opt-sub">240 MHz · WiFi always on · read 60s</span>
-        </button>
-        <button type="button" class="power-opt" data-pm="low" onclick="cloudSetPowerMode('low')">
-          <span class="power-opt-title">Low Power Save</span>
-          <span class="power-opt-sub">80 MHz · min modem PS · read 120s</span>
-        </button>
-        <button type="button" class="power-opt" data-pm="medium" onclick="cloudSetPowerMode('medium')">
-          <span class="power-opt-title">Medium Power Save</span>
-          <span class="power-opt-sub">80 MHz · max modem PS · read 300s</span>
-        </button>
-        <button type="button" class="power-opt" data-pm="high" onclick="cloudSetPowerMode('high')">
-          <span class="power-opt-title">High Power Save</span>
-          <span class="power-opt-sub">80 MHz · WiFi off 30m / 60s window · read 600s</span>
-        </button>
-      </div>
-    </div>
-
-    <div class="card ota-card">
-      <h2>WiFi Networks (Cloud Control)</h2>
-      <div class="ota-meta" id="cloud-wifi-meta">Saved networks synced from the ESP32 (passwords stay private on the device).</div>
-      <div class="wifi-list" id="cloud-wifi-list"></div>
-      <details class="ota-details">
-        <summary>Add or update a WiFi network</summary>
-        <div class="ota-form">
-          <div class="field-row">
-            <label for="cw-ssid">WiFi Name (SSID)</label>
-            <input type="text" id="cw-ssid" placeholder="e.g. MyHotspot" autocomplete="off">
+    <!-- ==================== 1. HOME / GENERAL OVERVIEW ==================== -->
+    <div id="view-dashboard" class="tab-view active-view">
+      <!-- Image 2 Inspired Hero Stage + Signature Cream Overview Sheet -->
+      <section class="hero-stage" aria-label="Live Room Overview">
+        <div class="hero-dial-wrap" id="hero-dial-wrap" onclick="cycleHeroDial()" title="Tap or swipe to switch Temperature / Humidity">
+          <div class="hero-top-pills">
+            <span class="hero-badge" id="hero-online-badge">
+              <span class="dot-live"></span>
+              <span id="hero-online-text">CONNECTING</span>
+            </span>
+            <span class="hero-badge" id="hero-power-badge">Normal</span>
           </div>
-          <div class="field-row">
-            <label for="cw-pass">Password (leave blank for open WiFi)</label>
-            <input type="password" id="cw-pass" placeholder="WiFi password" autocomplete="off">
+
+          <div class="hero-gauge" id="hero-gauge">
+            <svg viewBox="0 0 220 220" id="hero-gauge-svg" aria-hidden="true"></svg>
+            <div class="hero-gauge-center" id="hero-gauge-center">
+              <div class="hero-gauge-val" id="hero-gauge-val">—<span class="unit-sup">°</span></div>
+              <div class="hero-gauge-sub" id="hero-gauge-sub">Temperature</div>
+            </div>
+          </div>
+
+          <div class="hero-dial-dots" aria-hidden="true">
+            <span class="hero-dial-dot active" id="dial-dot-temp"></span>
+            <span class="hero-dial-dot" id="dial-dot-hum"></span>
+          </div>
+        </div>
+
+        <div class="hero-cream-card">
+          <div class="cream-head">
+            <h2 class="cream-title" id="hero-wifi-name">Connecting to ESP32…</h2>
+            <div class="cream-sub" id="hero-conn-sub">Waiting for live status &amp; readings</div>
+          </div>
+
+          <div class="cream-metrics">
+            <div>
+              <div class="cream-metric-val" id="hero-temp-val">—<span>°C</span></div>
+              <div class="cream-metric-lbl" id="hero-temp-age">Temperature</div>
+            </div>
+            <div>
+              <div class="cream-metric-val" id="hero-hum-val">—<span>%RH</span></div>
+              <div class="cream-metric-lbl" id="hero-hum-age">Humidity</div>
+            </div>
+          </div>
+
+          <div class="cream-actions">
+            <div class="cream-pill-group">
+              <button type="button" class="cream-pill-btn active-sub" onclick="fetchStatus(); fetchReadings();">Reload</button>
+              <button type="button" class="cream-pill-btn" onclick="confirmCloudReboot()">Reboot</button>
+            </div>
+            <button type="button" class="cream-primary-btn" onclick="sendCloudCommand({ action: 'refreshStatus' }, 'Requesting live health refresh…', 'home-actions')">Refresh Live</button>
+          </div>
+
+          <div class="inline-cmd-slot" data-cmd-slot="home-actions"></div>
+        </div>
+      </section>
+
+      <!-- Scroll Down: Device Health & Details (Minimal on first look, tap to expand!) -->
+      <div class="section-stack">
+        <div class="card expandable-card" id="card-home-health" onclick="toggleCardExpand(event, this)">
+          <div class="card-head-toggle">
+            <h2>Device &amp; Health</h2>
+            <div class="card-head-meta">
+              <span class="minimal-pill-hint">Tap for details</span>
+              <span class="expand-chevron" aria-hidden="true">&#9662;</span>
+            </div>
+          </div>
+
+          <div class="health-pills-strip" id="home-health-minimal">
+            <span class="mini-health-chip"><span class="mhd"></span>Loading status…</span>
+          </div>
+          <div class="cloud-cmd-bar" id="cloud-cmd-status"></div>
+          <div class="dash-msg" id="dash-msg">Loading device status…</div>
+
+          <div class="card-detail-drawer">
+            <div class="card-detail-content">
+              <div class="card-detail-inner-pad">
+                <div class="field-row" id="device-status-row" style="display:none;">
+                  <label>Connection</label>
+                  <div class="device-status" id="device-status"></div>
+                </div>
+                <div class="cloud-health-list" id="cloud-health-list"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="swipe-hint-bar">Swipe left for Graphs · Tap Home again for full details</div>
+    </div>
+
+    <!-- ==================== 2. GRAPHS ==================== -->
+    <div id="view-graphs" class="tab-view">
+      <div class="section-stack">
+        <div class="card">
+          <div class="card-head-toggle" style="margin-bottom:14px;">
+            <h2>Live Readings &amp; Graphs</h2>
+            <div class="card-head-meta">
+              <button type="button" class="minimal-pill-hint" style="min-height:28px;cursor:pointer;" onclick="toggleSectionDetailed('graphs')">More options</button>
+            </div>
+          </div>
+
+          <div class="readings-top">
+            <div class="stat temp" id="stat-temp">
+              <div class="bar"></div>
+              <div class="label">Temperature</div>
+              <div class="value" id="temp-value">—<span class="unit">°C</span></div>
+              <div class="age" id="temp-age">no data yet</div>
+            </div>
+            <div class="stat hum" id="stat-hum">
+              <div class="bar"></div>
+              <div class="label">Humidity</div>
+              <div class="value" id="hum-value">—<span class="unit">%RH</span></div>
+              <div class="age" id="hum-age">no data yet</div>
+            </div>
+          </div>
+
+          <div class="field-row" style="margin-top:12px;">
+            <label for="range-select">Time range</label>
+            <select id="range-select">
+              <option value="30">Last 30 readings</option>
+              <option value="1h">Last hour</option>
+              <option value="24h" selected>Last 24 hours</option>
+              <option value="today">Today</option>
+              <option value="3d">Last few days</option>
+              <option value="2w">Last few weeks</option>
+              <option value="3mo">Last few months</option>
+              <option value="1y">Last year</option>
+              <option value="all">All time</option>
+            </select>
+          </div>
+
+          <div class="anomaly-banner" id="anomaly-banner" style="display:none;" role="region" aria-label="Sudden spike review">
+            <div class="anomaly-head">
+              <div class="anomaly-title" id="anomaly-title">&#9888; Sudden sensor spikes detected</div>
+              <div class="anomaly-actions">
+                <button type="button" class="btn-danger" onclick="deleteAllPendingAnomalies()">Delete All Flagged</button>
+              </div>
+            </div>
+            <div class="anomaly-list" id="anomaly-list"></div>
+            <div class="vault-status" id="anomaly-status"></div>
+          </div>
+
+          <div class="chart-wrap">
+            <div class="chart-head">
+              <span class="chart-caption" id="chart-caption">—</span>
+              <span class="chart-loading" id="chart-loading">loading earlier readings…</span>
+            </div>
+            <div class="charts-stack">
+              <div class="chart-box">
+                <div class="chart-panel-label temp"><span class="dot"></span>Temperature<span class="readout idle" id="temp-readout">Tap or drag graph to inspect exact reading</span></div>
+                <div class="chart-stats-bar" id="temp-stats"><span>Min <b>—</b></span><span>Avg <b>—</b></span><span>Max <b>—</b></span></div>
+                <div class="chart-canvas-box"><canvas id="rt-chart-temp"></canvas></div>
+              </div>
+              <div class="chart-box">
+                <div class="chart-panel-label hum"><span class="dot"></span>Humidity<span class="readout idle" id="hum-readout">Tap or drag graph to inspect exact reading</span></div>
+                <div class="chart-stats-bar" id="hum-stats"><span>Min <b>—</b></span><span>Avg <b>—</b></span><span>Max <b>—</b></span></div>
+                <div class="chart-canvas-box"><canvas id="rt-chart-hum"></canvas></div>
+              </div>
+              <div class="empty-state" id="chart-empty">No readings fetched yet. Tap "Refresh now".</div>
+            </div>
+          </div>
+
+          <div class="controls-row">
+            <button type="button" class="btn-ghost" onclick="fetchReadings()">Refresh now</button>
+            <button type="button" class="btn-ghost" onclick="resetView()">Reset zoom</button>
+          </div>
+        </div>
+
+        <!-- Expandable Advanced Graph Options (Minimal on first look!) -->
+        <div class="card expandable-card" id="card-graph-options" onclick="toggleCardExpand(event, this)">
+          <div class="card-head-toggle" style="margin-bottom:4px;">
+            <h2>Graph Options, Weather &amp; Vault</h2>
+            <div class="card-head-meta">
+              <span class="minimal-pill-hint">Tap to expand</span>
+              <span class="expand-chevron" aria-hidden="true">&#9662;</span>
+            </div>
+          </div>
+          <div class="ota-meta">Outdoor weather overlay, gap shading, Firebase host, auto-refresh &amp; Spike Vault.</div>
+
+          <div class="card-detail-drawer">
+            <div class="card-detail-content">
+              <div class="card-detail-inner-pad">
+                <div class="field-row">
+                  <label for="fb-host">Firebase RTDB host</label>
+                  <input type="text" id="fb-host" value="esp32-19dd8-default-rtdb.firebaseio.com" autocomplete="off">
+                </div>
+
+                <div class="field-row weather-row">
+                  <div class="switch" id="weather-switch" onclick="toggleWeather()"><div class="knob"></div></div>
+                  <span>Compare with outdoor weather</span>
+                  <input type="text" id="weather-loc" placeholder="auto (device location) — or lat,lon" autocomplete="off">
+                </div>
+                <div class="chart-hint weather-status" id="weather-status" style="display:none;"></div>
+
+                <label class="gap-toggle-row" for="toggle-gaps">
+                  <input type="checkbox" id="toggle-gaps" checked onchange="toggleGapShading()">
+                  <span>Show offline gap shading &amp; dotted lines</span>
+                </label>
+
+                <div class="chart-hint">Drag to scroll through time · pinch or scroll to zoom · charts stay in sync</div>
+                <div class="chart-hint"><span class="dn-swatch day"></span>day (6am–6pm)<span class="dn-swatch night" style="margin-left:10px;"></span>night — shaded band under each chart's axis</div>
+                <div class="chart-hint"><span class="dn-swatch" style="background:rgba(148,163,184,0.65);"></span>faint dashed line — outdoor reading via Open-Meteo, nearest hour</div>
+
+                <details class="vault-details" id="anomaly-vault">
+                  <summary id="vault-summary">Spike Quarantine Vault (0 saved)</summary>
+                  <div class="vault-meta">Sudden single-instant glitches (&ge;6&deg;C or &ge;20%RH spike, or out-of-range readings) are quarantined here before deletion and archived locally even after deleting from Firebase.</div>
+                  <div class="field-row">
+                    <label for="fb-auth-secret">Firebase DB secret (optional — only needed if your RTDB rules require auth for DELETE)</label>
+                    <input type="password" id="fb-auth-secret" placeholder="Leave blank if RTDB allows direct writes" autocomplete="off" onchange="saveFbAuthSecret()">
+                  </div>
+                  <div class="controls-row" style="margin-top:8px;">
+                    <button type="button" class="btn-ghost" onclick="exportAnomalyVault()">Download Vault JSON</button>
+                    <button type="button" class="btn-ghost" onclick="clearResolvedVault()">Clear Deleted History</button>
+                  </div>
+                  <div class="anomaly-list" id="vault-list" style="margin-top:10px;"></div>
+                </details>
+
+                <div class="refresh-row">
+                  <div class="switch" id="auto-switch" onclick="toggleAuto()"><div class="knob"></div></div>
+                  <span>Auto-refresh every</span>
+                  <input type="number" id="refresh-secs" value="15" min="3" step="1" inputmode="numeric">
+                  <span>sec</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 3. CONTROLS (WEBSITE SETTINGS) ==================== -->
+    <div id="view-controls" class="tab-view">
+      <div class="section-stack">
+
+        <!-- Power Mode -->
+        <div class="card expandable-card" id="card-power-mode" onclick="toggleCardExpand(event, this)">
+          <div class="card-head-toggle">
+            <h2>Power Mode</h2>
+            <div class="card-head-meta">
+              <span class="minimal-pill-hint" id="power-minimal-pill">Normal</span>
+              <span class="expand-chevron" aria-hidden="true">&#9662;</span>
+            </div>
+          </div>
+          <div class="power-grid" id="cloud-power-grid">
+            <button type="button" class="power-opt" data-pm="normal" onclick="selectPowerMode('normal')">
+              <span class="power-opt-title">Normal</span>
+              <span class="power-opt-sub">240 MHz · 60s</span>
+            </button>
+            <button type="button" class="power-opt" data-pm="low" onclick="selectPowerMode('low')">
+              <span class="power-opt-title">Low Save</span>
+              <span class="power-opt-sub">80 MHz · 120s</span>
+            </button>
+            <button type="button" class="power-opt" data-pm="medium" onclick="selectPowerMode('medium')">
+              <span class="power-opt-title">Medium Save</span>
+              <span class="power-opt-sub">80 MHz · 300s</span>
+            </button>
+            <button type="button" class="power-opt" data-pm="high" onclick="selectPowerMode('high')">
+              <span class="power-opt-title">High Save</span>
+              <span class="power-opt-sub">Duty-cycled · 600s</span>
+            </button>
           </div>
           <div class="controls-row">
-            <button type="button" class="btn-primary" onclick="cloudAddWifi()">Save WiFi to ESP32</button>
+            <button type="button" class="btn-primary" id="btn-apply-power" onclick="applyStagedPowerMode()">Apply Power Mode</button>
+          </div>
+          <div class="inline-cmd-slot" data-cmd-slot="power-mode"></div>
+
+          <div class="card-detail-drawer">
+            <div class="card-detail-content">
+              <div class="card-detail-inner-pad">
+                <div class="ota-meta" id="cloud-power-meta">Switches the ESP32 over Firebase — works from any network or mobile data. High Power Save turns WiFi off for 30m and wakes for 60s windows.</div>
+              </div>
+            </div>
           </div>
         </div>
-      </details>
-    </div>
 
-    <div class="card ota-card" id="card-ota">
-      <h2>Firmware / OTA (Cloud Flash)</h2>
-      <div class="ota-meta" id="ota-meta">Checking latest build from <code>firmware/version.json</code>…</div>
-      <div class="ota-meta" id="cloud-ota-status" style="margin-top:6px;"></div>
-      <div class="controls-row">
-        <button type="button" class="btn-primary" id="btn-cloud-ota" onclick="cloudFlashLatestOta()" disabled>Flash Latest Over Cloud</button>
-        <button type="button" class="btn-ghost" id="btn-flash-esp" onclick="openEspOta()" disabled>Local /update</button>
-        <button type="button" class="btn-ghost" id="btn-copy-bin" onclick="copyBinUrl()" disabled>Copy .bin URL</button>
-        <button type="button" class="btn-ghost" onclick="fetchFirmwareInfo()">Check build</button>
-      </div>
+        <!-- WiFi Networks -->
+        <div class="card expandable-card" id="card-wifi-ctrl" onclick="toggleCardExpand(event, this)">
+          <div class="card-head-toggle">
+            <h2>WiFi Networks</h2>
+            <div class="card-head-meta">
+              <span class="minimal-pill-hint" id="wifi-minimal-pill">Synced</span>
+              <span class="expand-chevron" aria-hidden="true">&#9662;</span>
+            </div>
+          </div>
+          <div class="ota-meta" id="cloud-wifi-meta">Tap to manage saved networks or add a new WiFi SSID.</div>
+          <div class="inline-cmd-slot" data-cmd-slot="wifi-control"></div>
 
-      <details class="ota-details">
-        <summary>Push new room_logger.ino to Firmware Repo (triggers build.yml)</summary>
-        <div class="ota-form">
-          <div class="field-row">
-            <label for="gh-fw-repo">Firmware repo (owner/repo)</label>
-            <input type="text" id="gh-fw-repo" placeholder="e.g. yourname/room-logger-firmware" autocomplete="off">
+          <div class="card-detail-drawer">
+            <div class="card-detail-content">
+              <div class="card-detail-inner-pad">
+                <div class="wifi-list" id="cloud-wifi-list"></div>
+                <details class="ota-details">
+                  <summary>Add or update a WiFi network</summary>
+                  <div class="ota-form">
+                    <div class="field-row">
+                      <label for="cw-ssid">WiFi Name (SSID)</label>
+                      <input type="text" id="cw-ssid" placeholder="e.g. MyHotspot" autocomplete="off">
+                    </div>
+                    <div class="field-row">
+                      <label for="cw-pass">Password (leave blank for open WiFi)</label>
+                      <input type="password" id="cw-pass" placeholder="WiFi password" autocomplete="off">
+                    </div>
+                    <div class="controls-row">
+                      <button type="button" class="btn-primary" onclick="cloudAddWifi()">Apply &amp; Save WiFi</button>
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </div>
           </div>
-          <div class="field-row">
-            <label for="gh-fw-path">Path in repo</label>
-            <input type="text" id="gh-fw-path" value="room_logger/room_logger.ino" autocomplete="off">
+        </div>
+
+        <!-- Firmware / OTA -->
+        <div class="card ota-card expandable-card" id="card-ota" onclick="toggleCardExpand(event, this)">
+          <div class="card-head-toggle">
+            <h2>Firmware / OTA</h2>
+            <div class="card-head-meta">
+              <span class="minimal-pill-hint">Cloud Flash</span>
+              <span class="expand-chevron" aria-hidden="true">&#9662;</span>
+            </div>
           </div>
-          <div class="field-row">
-            <label for="gh-fw-token">GitHub PAT (Contents: Read &amp; Write on firmware repo — saved only on this device)</label>
-            <input type="password" id="gh-fw-token" placeholder="github_pat_..." autocomplete="off">
-          </div>
-          <div class="field-row">
-            <label for="gh-ino-file">Select room_logger.ino</label>
-            <input type="file" id="gh-ino-file" accept=".ino,.txt,.cpp">
-          </div>
+          <div class="ota-meta" id="ota-meta">Checking latest build from <code>firmware/version.json</code>…</div>
+          <div class="ota-meta" id="cloud-ota-status" style="margin-top:6px;"></div>
           <div class="controls-row">
-            <button class="btn-ghost" id="btn-push-ino" onclick="pushInoToGithub()">Push &amp; Compile on GitHub</button>
+            <button type="button" class="btn-primary" id="btn-cloud-ota" onclick="cloudFlashLatestOta()" disabled>Apply &amp; Flash Latest</button>
+            <button type="button" class="btn-ghost" onclick="fetchFirmwareInfo()">Check build</button>
           </div>
-          <div class="dash-msg" id="ota-push-msg"></div>
+          <div class="inline-cmd-slot" data-cmd-slot="ota-control"></div>
+
+          <div class="card-detail-drawer">
+            <div class="card-detail-content">
+              <div class="card-detail-inner-pad">
+                <div class="controls-row" style="margin-top:0;">
+                  <button type="button" class="btn-ghost" id="btn-flash-esp" onclick="openEspOta()" disabled>Local /update</button>
+                  <button type="button" class="btn-ghost" id="btn-copy-bin" onclick="copyBinUrl()" disabled>Copy .bin URL</button>
+                </div>
+                <details class="ota-details">
+                  <summary>Push new room_logger.ino to Firmware Repo (triggers build.yml)</summary>
+                  <div class="ota-form">
+                    <div class="field-row">
+                      <label for="gh-fw-repo">Firmware repo (owner/repo)</label>
+                      <input type="text" id="gh-fw-repo" placeholder="e.g. yourname/room-logger-firmware" autocomplete="off">
+                    </div>
+                    <div class="field-row">
+                      <label for="gh-fw-path">Path in repo</label>
+                      <input type="text" id="gh-fw-path" value="room_logger/room_logger.ino" autocomplete="off">
+                    </div>
+                    <div class="field-row">
+                      <label for="gh-fw-token">GitHub PAT (Contents: Read &amp; Write — saved only on this device)</label>
+                      <input type="password" id="gh-fw-token" placeholder="github_pat_..." autocomplete="off">
+                    </div>
+                    <div class="field-row">
+                      <label for="gh-ino-file">Select room_logger.ino</label>
+                      <input type="file" id="gh-ino-file" accept=".ino,.txt,.cpp">
+                    </div>
+                    <div class="controls-row">
+                      <button type="button" class="btn-ghost" id="btn-push-ino" onclick="pushInoToGithub()">Push &amp; Compile on GitHub</button>
+                    </div>
+                    <div class="dash-msg" id="ota-push-msg"></div>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </div>
         </div>
-      </details>
+
+        <!-- Local ESP32 Website Links -->
+        <div class="card expandable-card" id="card-lan-links" onclick="toggleCardExpand(event, this)">
+          <div class="card-head-toggle" style="margin-bottom:4px;">
+            <h2>ESP32 Local Website</h2>
+            <div class="card-head-meta">
+              <span class="minimal-pill-hint">LAN Pages</span>
+              <span class="expand-chevron" aria-hidden="true">&#9662;</span>
+            </div>
+          </div>
+          <div class="ota-meta">Direct links to the ESP32's built-in admin pages when on the same WiFi/hotspot.</div>
+          <div class="card-detail-drawer">
+            <div class="card-detail-content">
+              <div class="card-detail-inner-pad">
+                <details class="ota-details" id="local-links-details" open style="margin-top:0;padding-top:0;border-top:none;">
+                  <summary style="display:none;">Local LAN website links</summary>
+                  <div class="dash-links" id="dash-links"></div>
+                </details>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- App Settings & Theme Picker -->
+        <div class="card expandable-card" id="card-app-settings" onclick="toggleCardExpand(event, this)">
+          <div class="card-head-toggle" style="margin-bottom:4px;">
+            <h2>App Theme &amp; Updates</h2>
+            <div class="card-head-meta">
+              <span class="minimal-pill-hint">v3.7.0</span>
+              <span class="expand-chevron" aria-hidden="true">&#9662;</span>
+            </div>
+          </div>
+          <div class="ota-meta" id="app-ver-meta">Running <b>v3.7.0</b> · checking GitHub for updates…</div>
+          <div class="card-detail-drawer">
+            <div class="card-detail-content">
+              <div class="card-detail-inner-pad">
+                <label>Appearance</label>
+                <div class="theme-picker" role="group" aria-label="App theme">
+                  <button type="button" class="theme-option" data-theme-choice="kinetic" aria-pressed="true" onclick="applyTheme('kinetic')">
+                    <span>
+                      <span class="theme-option-title">Kinetic</span>
+                      <span class="theme-option-sub">Halftone · Motion · Cream</span>
+                    </span>
+                    <span class="theme-swatches" aria-hidden="true">
+                      <span class="theme-swatch" style="background:#0A0D12"></span>
+                      <span class="theme-swatch" style="background:#EFECE5"></span>
+                      <span class="theme-swatch" style="background:#C9985A"></span>
+                    </span>
+                  </button>
+                  <button type="button" class="theme-option" data-theme-choice="obsidian" aria-pressed="false" onclick="applyTheme('obsidian')">
+                    <span>
+                      <span class="theme-option-title">Obsidian</span>
+                      <span class="theme-option-sub">Midnight · Coral · Cyan</span>
+                    </span>
+                    <span class="theme-swatches" aria-hidden="true">
+                      <span class="theme-swatch" style="background:#0B0F14"></span>
+                      <span class="theme-swatch" style="background:#FF8A5B"></span>
+                      <span class="theme-swatch" style="background:#4FC3E8"></span>
+                    </span>
+                  </button>
+                  <button type="button" class="theme-option" data-theme-choice="atelier" aria-pressed="false" onclick="applyTheme('atelier')">
+                    <span>
+                      <span class="theme-option-title">Atelier</span>
+                      <span class="theme-option-sub">Ivory · Espresso · Bronze</span>
+                    </span>
+                    <span class="theme-swatches" aria-hidden="true">
+                      <span class="theme-swatch" style="background:#F3EFE9"></span>
+                      <span class="theme-swatch" style="background:#231D18"></span>
+                      <span class="theme-swatch" style="background:#9E6B43"></span>
+                    </span>
+                  </button>
+                </div>
+                <div class="controls-row">
+                  <button type="button" class="btn-ghost" onclick="checkAppUpdate(true)">Check for App Update</button>
+                  <button type="button" class="btn-ghost" onclick="forceUpdateApp()">Force Refresh App</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
     </div>
 
-    <div class="card ota-card">
-      <h2>App Settings</h2>
-      <label>Appearance</label>
-      <div class="theme-picker" role="group" aria-label="App theme">
-        <button type="button" class="theme-option" data-theme-choice="obsidian" aria-pressed="true" onclick="applyTheme('obsidian')">
-          <span>
-            <span class="theme-option-title">Obsidian</span>
-            <span class="theme-option-sub">Midnight · Coral · Cyan</span>
-          </span>
-          <span class="theme-swatches" aria-hidden="true">
-            <span class="theme-swatch" style="background:#0B0F14"></span>
-            <span class="theme-swatch" style="background:#FF8A5B"></span>
-            <span class="theme-swatch" style="background:#4FC3E8"></span>
-          </span>
-        </button>
-        <button type="button" class="theme-option" data-theme-choice="atelier" aria-pressed="false" onclick="applyTheme('atelier')">
-          <span>
-            <span class="theme-option-title">Atelier</span>
-            <span class="theme-option-sub">Ivory · Espresso · Bronze</span>
-          </span>
-          <span class="theme-swatches" aria-hidden="true">
-            <span class="theme-swatch" style="background:#F3EFE9"></span>
-            <span class="theme-swatch" style="background:#231D18"></span>
-            <span class="theme-swatch" style="background:#9E6B43"></span>
-          </span>
-        </button>
-      </div>
-      <div class="ota-meta" id="app-ver-meta">Running <b>v3.6.0</b> · checking GitHub for updates…</div>
-      <div class="controls-row">
-        <button class="btn-ghost" onclick="checkAppUpdate(true)">Check for App Update</button>
-        <button class="btn-ghost" onclick="forceUpdateApp()">Force Refresh App</button>
+    <!-- ==================== 4. SYSTEM (STORAGE, RAM & DIAGNOSTICS) ==================== -->
+    <div id="view-system" class="tab-view">
+      <div class="section-stack">
+        <div class="card">
+          <div class="card-head-toggle">
+            <h2>ESP32 Storage &amp; RAM</h2>
+            <div class="card-head-meta">
+              <span class="minimal-pill-hint" id="system-minimal-summary">Tap bars for details</span>
+            </div>
+          </div>
+          <div class="ota-meta" id="storage-meta">Tap any bar below (or tap System again) to reveal detailed partitions, queue bytes &amp; heap minimums.</div>
+          <div class="storage-bars" id="cloud-storage-body"></div>
+        </div>
       </div>
     </div>
+
+  </div><!-- /.views-viewport -->
+</div><!-- /.wrap -->
+
+<!-- Image 3 Inspired Floating Pill Bottom Navigation + Quick Refresh FAB -->
+<nav class="bottom-nav-dock" aria-label="Primary navigation">
+  <div class="bottom-pill" role="tablist">
+    <button type="button" class="bnav-btn active" role="tab" aria-selected="true" data-view="dashboard" onclick="handleBottomNavClick('dashboard')">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5L12 3l9 7.5"/><path d="M5.5 9.5V20a1 1 0 0 0 1 1h4v-6h3v6h4a1 1 0 0 0 1-1V9.5"/></svg>
+      <span class="bnav-lbl">Home</span>
+    </button>
+    <button type="button" class="bnav-btn" role="tab" aria-selected="false" data-view="graphs" onclick="handleBottomNavClick('graphs')">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg>
+      <span class="bnav-lbl">Graphs</span>
+    </button>
+    <button type="button" class="bnav-btn" role="tab" aria-selected="false" data-view="controls" onclick="handleBottomNavClick('controls')">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><circle cx="9" cy="7" r="2.2"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="15" cy="17" r="2.2"/></svg>
+      <span class="bnav-lbl">Controls</span>
+    </button>
+    <button type="button" class="bnav-btn" role="tab" aria-selected="false" data-view="system" onclick="handleBottomNavClick('system')">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
+      <span class="bnav-lbl">System</span>
+    </button>
   </div>
-
-  <div id="view-graphs" class="tab-view" style="display:none;">
-  <div class="card">
-    <h2>Live Readings</h2>
-
-    <div class="field-row">
-      <label for="fb-host">Firebase RTDB host</label>
-      <input type="text" id="fb-host" value="esp32-19dd8-default-rtdb.firebaseio.com" autocomplete="off">
-    </div>
-
-    <div class="readings-top">
-      <div class="stat temp" id="stat-temp">
-        <div class="bar"></div>
-        <div class="label">Temperature</div>
-        <div class="value" id="temp-value">—<span class="unit">°C</span></div>
-        <div class="age" id="temp-age">no data yet</div>
-      </div>
-      <div class="stat hum" id="stat-hum">
-        <div class="bar"></div>
-        <div class="label">Humidity</div>
-        <div class="value" id="hum-value">—<span class="unit">%RH</span></div>
-        <div class="age" id="hum-age">no data yet</div>
-      </div>
-    </div>
-
-    <div class="field-row" style="margin-top:14px;">
-      <label for="range-select">Time range</label>
-      <select id="range-select">
-        <option value="30">Last 30 readings</option>
-        <option value="1h">Last hour</option>
-        <option value="24h" selected>Last 24 hours</option>
-        <option value="today">Today</option>
-        <option value="3d">Last few days</option>
-        <option value="2w">Last few weeks</option>
-        <option value="3mo">Last few months</option>
-        <option value="1y">Last year</option>
-        <option value="all">All time</option>
-      </select>
-    </div>
-
-    <div class="field-row weather-row">
-      <div class="switch" id="weather-switch" onclick="toggleWeather()"><div class="knob"></div></div>
-      <span>Compare with outdoor weather</span>
-      <input type="text" id="weather-loc" placeholder="auto (device location) — or lat,lon" autocomplete="off">
-    </div>
-    <div class="chart-hint weather-status" id="weather-status" style="display:none;"></div>
-
-    <label class="gap-toggle-row" for="toggle-gaps">
-      <input type="checkbox" id="toggle-gaps" checked onchange="toggleGapShading()">
-      <span>Show offline gap shading &amp; dotted lines</span>
-    </label>
-
-    <div class="anomaly-banner" id="anomaly-banner" style="display:none;" role="region" aria-label="Sudden spike review">
-      <div class="anomaly-head">
-        <div class="anomaly-title" id="anomaly-title">&#9888; Sudden sensor spikes detected</div>
-        <div class="anomaly-actions">
-          <button type="button" class="btn-danger" onclick="deleteAllPendingAnomalies()">Delete All Flagged</button>
-        </div>
-      </div>
-      <div class="anomaly-list" id="anomaly-list"></div>
-      <div class="vault-status" id="anomaly-status"></div>
-    </div>
-
-    <div class="chart-wrap">
-      <div class="chart-head">
-        <span class="chart-caption" id="chart-caption">—</span>
-        <span class="chart-loading" id="chart-loading">loading earlier readings…</span>
-      </div>
-      <div class="charts-stack">
-        <div class="chart-box">
-          <div class="chart-panel-label temp"><span class="dot"></span>Temperature<span class="readout idle" id="temp-readout">Tap or drag graph to inspect exact reading</span></div>
-          <div class="chart-stats-bar" id="temp-stats"><span>Min <b>—</b></span><span>Avg <b>—</b></span><span>Max <b>—</b></span></div>
-          <div class="chart-canvas-box"><canvas id="rt-chart-temp"></canvas></div>
-        </div>
-        <div class="chart-box">
-          <div class="chart-panel-label hum"><span class="dot"></span>Humidity<span class="readout idle" id="hum-readout">Tap or drag graph to inspect exact reading</span></div>
-          <div class="chart-stats-bar" id="hum-stats"><span>Min <b>—</b></span><span>Avg <b>—</b></span><span>Max <b>—</b></span></div>
-          <div class="chart-canvas-box"><canvas id="rt-chart-hum"></canvas></div>
-        </div>
-        <div class="empty-state" id="chart-empty">No readings fetched yet. Tap "Refresh now".</div>
-      </div>
-      <div class="chart-hint">Drag to scroll through time · pinch or scroll to zoom · charts stay in sync</div>
-      <div class="chart-hint"><span class="dn-swatch day"></span>day (6am–6pm)<span class="dn-swatch night" style="margin-left:10px;"></span>night — shaded band under each chart's axis</div>
-      <div class="chart-hint"><span class="dn-swatch" style="background:rgba(148,163,184,0.65);"></span>faint dashed line — outdoor reading via Open-Meteo, nearest hour (enable above)</div>
-    </div>
-
-    <div class="controls-row">
-      <button class="btn-ghost" onclick="fetchReadings()">Refresh now</button>
-      <button class="btn-ghost" onclick="resetView()">Reset zoom</button>
-    </div>
-
-    <details class="vault-details" id="anomaly-vault">
-      <summary id="vault-summary">Spike Quarantine Vault (0 saved)</summary>
-      <div class="vault-meta">Sudden single-instant glitches (&ge;6&deg;C or &ge;20%RH spike, or out-of-range readings) are quarantined here before deletion and archived locally even after deleting from Firebase.</div>
-      <div class="field-row">
-        <label for="fb-auth-secret">Firebase DB secret (optional — only needed if your RTDB rules require auth for DELETE)</label>
-        <input type="password" id="fb-auth-secret" placeholder="Leave blank if RTDB allows direct writes" autocomplete="off" onchange="saveFbAuthSecret()">
-      </div>
-      <div class="controls-row" style="margin-top:8px;">
-        <button type="button" class="btn-ghost" onclick="exportAnomalyVault()">Download Vault JSON</button>
-        <button type="button" class="btn-ghost" onclick="clearResolvedVault()">Clear Deleted History</button>
-      </div>
-      <div class="anomaly-list" id="vault-list" style="margin-top:10px;"></div>
-    </details>
-
-    <div class="refresh-row">
-      <div class="switch" id="auto-switch" onclick="toggleAuto()"><div class="knob"></div></div>
-      <span>Auto-refresh every</span>
-      <input type="number" id="refresh-secs" value="15" min="3" step="1" inputmode="numeric">
-      <span>sec</span>
-    </div>
-  </div>
-  </div>
-
-</div>
+  <button type="button" class="bnav-fab" id="bnav-refresh-fab" onclick="triggerFabRefresh()" aria-label="Refresh live data" title="Refresh live data">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+  </button>
+</nav>
 
 <script>
-  // Single source of truth for the version — the badge in the header reads
-  // from this on load. Still update the visible badge's fallback text too
-  // (see comment near the top of the file) so it's correct even if someone
-  // views the HTML without JS running.
-  const APP_VERSION = '3.6.0';
+  const APP_VERSION = '3.7.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
-  // ---------- tabs ----------
-  // Three views, one visible at a time; switching away and back just
-  // toggles display, so Graphs' loaded chart data/zoom state is untouched
-  // by visiting the other two tabs. Switching TO dashboard/terminal fires
-  // an immediate fetch for that tab so it never opens looking stale on
-  // first click; Graphs keeps its own existing fetch/auto-refresh timing.
-  function showView(name){
-    ['dashboard', 'graphs'].forEach(function(v){
-      document.getElementById('view-' + v).style.display = (v === name) ? '' : 'none';
+  const VIEW_ORDER = ['dashboard', 'graphs', 'controls', 'system'];
+  let currentViewName = 'dashboard';
+  let heroDialMode = 'temp'; // 'temp' | 'hum'
+  let uiToastTimer = null;
+
+  function showToast(msg){
+    const el = document.getElementById('ui-toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(uiToastTimer);
+    uiToastTimer = setTimeout(() => el.classList.remove('show'), 1900);
+  }
+
+  // ---------- Minimal vs Super-Detailed Toggle (Card Tap OR Same-Tab Re-Tap) ----------
+  function isInteractiveTarget(target){
+    if (!target) return false;
+    return !!target.closest('button, input, select, textarea, a, summary, label, .switch, canvas, .power-opt, .cmd-stepper');
+  }
+
+  function toggleCardExpand(evt, cardEl){
+    if (evt && isInteractiveTarget(evt.target)) return;
+    if (!cardEl) return;
+    cardEl.classList.toggle('is-expanded');
+  }
+
+  function toggleInnerDetail(evt, blockEl){
+    if (evt && isInteractiveTarget(evt.target)) return;
+    if (!blockEl) return;
+    blockEl.classList.toggle('is-expanded');
+  }
+
+  function toggleSectionDetailed(viewName){
+    const viewEl = document.getElementById('view-' + viewName);
+    if (!viewEl) return;
+    const expandables = viewEl.querySelectorAll('.expandable-card, .expandable-inner');
+    if (!expandables.length) return;
+    const anyCollapsed = Array.from(expandables).some(el => !el.classList.contains('is-expanded'));
+    expandables.forEach(el => el.classList.toggle('is-expanded', anyCollapsed));
+    showToast(anyCollapsed ? 'Detailed view expanded' : 'Minimal view restored');
+  }
+
+  function handleBottomNavClick(name){
+    if (name === currentViewName){
+      toggleSectionDetailed(name);
+      return;
+    }
+    const oldIdx = VIEW_ORDER.indexOf(currentViewName);
+    const newIdx = VIEW_ORDER.indexOf(name);
+    const dir = newIdx > oldIdx ? 'right' : 'left';
+    showView(name, dir);
+  }
+
+  function showView(name, slideDir){
+    if (!VIEW_ORDER.includes(name)) name = 'dashboard';
+    const prev = currentViewName;
+    currentViewName = name;
+
+    VIEW_ORDER.forEach(function(v){
+      const el = document.getElementById('view-' + v);
+      if (!el) return;
+      el.classList.remove('active-view', 'slide-from-right', 'slide-from-left', 'fade-pop');
+      if (v === name){
+        el.classList.add('active-view');
+        if (slideDir === 'right') el.classList.add('slide-from-right');
+        else if (slideDir === 'left') el.classList.add('slide-from-left');
+        else if (prev !== name) el.classList.add('fade-pop');
+      }
     });
-    document.querySelectorAll('.tab-btn').forEach(function(btn){
+
+    document.querySelectorAll('.bnav-btn').forEach(function(btn){
       const isActive = btn.getAttribute('data-view') === name;
       btn.classList.toggle('active', isActive);
       btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
     });
-    if (name === 'dashboard'){ fetchStatus(); fetchFirmwareInfo(); }
+
+    if (name === 'dashboard' || name === 'controls' || name === 'system'){
+      fetchStatus();
+      if (name === 'controls') fetchFirmwareInfo();
+    }
     if (name === 'graphs'){
-      // Charts initialized while hidden can have 0x0 size; resize cleanly on reveal.
-      if (chartTemp){ chartTemp.resize(); chartTemp.update('none'); }
-      if (chartHum){ chartHum.resize(); chartHum.update('none'); }
+      setTimeout(() => {
+        if (chartTemp){ chartTemp.resize(); chartTemp.update('none'); }
+        if (chartHum){ chartHum.resize(); chartHum.update('none'); }
+      }, 40);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function triggerFabRefresh(){
+    const fab = document.getElementById('bnav-refresh-fab');
+    if (fab){
+      fab.classList.add('spinning');
+      setTimeout(() => fab.classList.remove('spinning'), 950);
+    }
+    fetchReadings();
+    fetchStatus();
+    if (currentViewName === 'controls') fetchFirmwareInfo();
+    showToast('Refreshing live data…');
+  }
+
+  // ---------- Image-2 Radial Tick Gauge SVG & Live Hero Overview Sync ----------
+  function renderHeroGaugeSvg(pct, accentColor){
+    const svg = document.getElementById('hero-gauge-svg');
+    if (!svg) return;
+    const totalTicks = 44;
+    const activeTicks = Math.max(2, Math.min(totalTicks, Math.round((pct / 100) * totalTicks)));
+    const cx = 110, cy = 110, rOuter = 96;
+    let markup = '';
+    for (let i = 0; i < totalTicks; i++){
+      const angleDeg = -90 + (i * (360 / totalTicks));
+      const rad = (angleDeg * Math.PI) / 180;
+      const isActive = i < activeTicks;
+      const distFromTip = activeTicks - 1 - i;
+      const isAccentBar = isActive && distFromTip >= 0 && distFromTip < 6;
+      const len = isAccentBar ? (18 + (5 - distFromTip) * 2.2) : (isActive ? 13 : 11);
+      const rInner = rOuter - len;
+      const x1 = cx + rInner * Math.cos(rad);
+      const y1 = cy + rInner * Math.sin(rad);
+      const x2 = cx + rOuter * Math.cos(rad);
+      const y2 = cy + rOuter * Math.sin(rad);
+      const sw = isAccentBar ? 3.2 : (isActive ? 1.8 : 1.15);
+      const stroke = isAccentBar ? '#F7F5F0' : (isActive ? accentColor : 'rgba(244,242,238,0.22)');
+      const op = isAccentBar ? (0.65 + (5 - distFromTip) * 0.07) : (isActive ? 0.78 : 0.45);
+      markup += '<line x1="' + x1.toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + x2.toFixed(1) + '" y2="' + y2.toFixed(1) +
+        '" stroke="' + stroke + '" stroke-width="' + sw + '" stroke-linecap="round" opacity="' + op.toFixed(2) + '"/>';
+    }
+    svg.innerHTML = markup;
+  }
+
+  function cycleHeroDial(forceMode){
+    const center = document.getElementById('hero-gauge-center');
+    heroDialMode = forceMode || (heroDialMode === 'temp' ? 'hum' : 'temp');
+    if (center){
+      center.classList.add('switching');
+      setTimeout(() => {
+        updateHeroOverview();
+        center.classList.remove('switching');
+      }, 150);
+    } else {
+      updateHeroOverview();
     }
   }
+
+  function updateHeroConnDot(state){
+    const badge = document.getElementById('hero-online-badge');
+    if (!badge) return;
+    if (!lastFetchedStatus){
+      badge.className = 'hero-badge ' + state;
+      const txt = document.getElementById('hero-online-text');
+      if (txt) txt.textContent = state === 'online' ? 'ONLINE' : (state === 'stale' ? 'STALE' : 'OFFLINE');
+    }
+  }
+
+  function updateHeroAgeText(ageText){
+    const tAge = document.getElementById('hero-temp-age');
+    const hAge = document.getElementById('hero-hum-age');
+    if (tAge) tAge.textContent = 'Temperature · ' + ageText.split('·')[0].trim();
+    if (hAge) hAge.textContent = 'Humidity · ' + ageText.split('·')[0].trim();
+  }
+
+  function updateHeroOverview(){
+    const latest = (typeof latestEntry === 'function') ? latestEntry() : null;
+    const status = lastFetchedStatus;
+
+    const tempValEl = document.getElementById('hero-temp-val');
+    const humValEl = document.getElementById('hero-hum-val');
+    if (latest){
+      if (tempValEl) tempValEl.innerHTML = latest.temp.toFixed(1) + '<span>°C</span>';
+      if (humValEl) humValEl.innerHTML = latest.hum.toFixed(1) + '<span>%RH</span>';
+    }
+
+    const gaugeVal = document.getElementById('hero-gauge-val');
+    const gaugeSub = document.getElementById('hero-gauge-sub');
+    const dotT = document.getElementById('dial-dot-temp');
+    const dotH = document.getElementById('dial-dot-hum');
+    if (dotT) dotT.classList.toggle('active', heroDialMode === 'temp');
+    if (dotH) dotH.classList.toggle('active', heroDialMode === 'hum');
+
+    if (heroDialMode === 'temp'){
+      const t = latest ? latest.temp : null;
+      if (gaugeVal) gaugeVal.innerHTML = (t !== null ? t.toFixed(1) : '—') + '<span class="unit-sup">°C</span>';
+      if (gaugeSub) gaugeSub.textContent = 'Room Temp';
+      const pct = t !== null ? Math.max(6, Math.min(100, ((t - 10) / 35) * 100)) : 28;
+      renderHeroGaugeSvg(pct, '#F5A66B');
+    } else {
+      const h = latest ? latest.hum : null;
+      if (gaugeVal) gaugeVal.innerHTML = (h !== null ? Math.round(h) : '—') + '<span class="unit-sup">%</span>';
+      if (gaugeSub) gaugeSub.textContent = 'Humidity';
+      const pct = h !== null ? Math.max(6, Math.min(100, h)) : 46;
+      renderHeroGaugeSvg(pct, '#7DC4E4');
+    }
+
+    const wifiEl = document.getElementById('hero-wifi-name');
+    const subEl = document.getElementById('hero-conn-sub');
+    const badge = document.getElementById('hero-online-badge');
+    const badgeTxt = document.getElementById('hero-online-text');
+    const pwrBadge = document.getElementById('hero-power-badge');
+
+    if (status && status.ip){
+      const mode = (typeof status.powerMode === 'string' && status.powerMode) ? status.powerMode.toLowerCase() : 'normal';
+      const lastSeenSec = Number(status.lastSeen || 0);
+      const heartbeatMs = lastSeenSec > 1e9 ? lastSeenSec * 1000 : 0;
+      const readingMs = (typeof latestReadingEpoch === 'number' && latestReadingEpoch > 1e12) ? latestReadingEpoch : 0;
+      const bestSeenMs = Math.max(heartbeatMs, readingMs);
+      const ageMs = bestSeenMs ? Math.max(0, Date.now() - bestSeenMs) : Infinity;
+      const offlineWindowMs = mode === 'high' ? 35*60*1000 : mode === 'medium' ? 7*60*1000 : mode === 'low' ? 4*60*1000 : 2.5*60*1000;
+      const validIp = isSafeHostOrIp(status.ip) && status.ip !== '0.0.0.0';
+      const isOnline = validIp && status.internetOk !== false && (ageMs <= offlineWindowMs);
+
+      if (wifiEl) wifiEl.textContent = status.ssid || 'Room Logger';
+      if (subEl){
+        subEl.textContent = isOnline
+          ? (status.ip + ' · active ' + timeAgo(ageMs))
+          : (bestSeenMs ? ('Offline · last seen ' + timeAgo(ageMs)) : 'Device offline');
+      }
+      if (badge) badge.className = 'hero-badge ' + (isOnline ? 'online' : 'offline');
+      if (badgeTxt) badgeTxt.textContent = isOnline ? 'ONLINE' : 'OFFLINE';
+      if (pwrBadge) pwrBadge.textContent = mode.charAt(0).toUpperCase() + mode.slice(1) + (mode === 'normal' ? ' Power' : ' Save');
+    }
+  }
+
+  function renderMinimalSummaries(status){
+    const strip = document.getElementById('home-health-minimal');
+    const h = status && status.health;
+    if (strip){
+      if (!h){
+        strip.innerHTML = '<span class="mini-health-chip warn"><span class="mhd"></span>Update FW for live health</span>';
+      } else {
+        const chips = [];
+        if (h.firebase){
+          const cls = !h.firebase.attempted ? 'warn' : (h.firebase.ok ? 'ok' : 'err');
+          chips.push('<span class="mini-health-chip ' + cls + '"><span class="mhd"></span>Firebase ' + (h.firebase.ok ? 'OK' : 'Check') + '</span>');
+        }
+        if (h.rtc){
+          const cls = !h.rtc.present ? 'err' : (!h.rtc.timeValid ? 'warn' : 'ok');
+          chips.push('<span class="mini-health-chip ' + cls + '"><span class="mhd"></span>RTC ' + (h.rtc.present && h.rtc.timeValid ? 'Synced' : 'Check') + '</span>');
+        }
+        if (h.dht){
+          const cls = (!h.dht.everRead || h.dht.stale) ? 'err' : 'ok';
+          chips.push('<span class="mini-health-chip ' + cls + '"><span class="mhd"></span>DHT22 ' + (cls === 'ok' ? 'OK' : 'Stale') + '</span>');
+        }
+        if (h.power){
+          const pm = h.power.mode || 'normal';
+          chips.push('<span class="mini-health-chip ' + (pm === 'normal' ? 'ok' : 'warn') + '"><span class="mhd"></span>' + pm.charAt(0).toUpperCase() + pm.slice(1) + '</span>');
+        }
+        strip.innerHTML = chips.join('');
+      }
+    }
+    const pmPill = document.getElementById('power-minimal-pill');
+    if (pmPill && status && status.powerMode){
+      const m = String(status.powerMode);
+      pmPill.textContent = m.charAt(0).toUpperCase() + m.slice(1);
+    }
+    const wifiPill = document.getElementById('wifi-minimal-pill');
+    if (wifiPill && status){
+      const cnt = status.wifi && Array.isArray(status.wifi.networks) ? status.wifi.networks.length : 0;
+      wifiPill.textContent = (status.ssid ? status.ssid : 'WiFi') + (cnt ? (' · ' + cnt + ' saved') : '');
+    }
+  }
+
+  // ---------- Cool Left/Right Swipe Gestures + Dial Swipe + Pull-to-Refresh ----------
+  (function initGestures(){
+    const viewport = document.getElementById('views-viewport');
+    const ptrEl = document.getElementById('ptr-indicator');
+    let sx = 0, sy = 0, swiping = false, lockedAxis = null, pulling = false, pullDist = 0;
+
+    function shouldIgnoreTabSwipe(target){
+      if (!target) return true;
+      return !!target.closest('.chart-canvas-box, canvas, input, select, textarea, .hero-dial-wrap, [data-no-tab-swipe]');
+    }
+
+    document.addEventListener('touchstart', function(e){
+      if (e.touches.length !== 1) return;
+      sx = e.touches[0].clientX;
+      sy = e.touches[0].clientY;
+      lockedAxis = null;
+      swiping = !shouldIgnoreTabSwipe(e.target);
+      pulling = (window.scrollY <= 2) && !e.target.closest('.chart-canvas-box, canvas');
+      pullDist = 0;
+    }, { passive: true });
+
+    document.addEventListener('touchmove', function(e){
+      if (e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - sx;
+      const dy = e.touches[0].clientY - sy;
+
+      if (!lockedAxis && (Math.abs(dx) > 10 || Math.abs(dy) > 10)){
+        lockedAxis = Math.abs(dx) > Math.abs(dy) * 1.25 ? 'x' : 'y';
+      }
+
+      if (lockedAxis === 'x' && swiping && viewport){
+        const curIdx = VIEW_ORDER.indexOf(currentViewName);
+        let damped = dx * 0.24;
+        if ((curIdx === 0 && dx > 0) || (curIdx === VIEW_ORDER.length - 1 && dx < 0)){
+          damped = dx * 0.09; // rubber-band edge resistance
+        }
+        viewport.classList.add('dragging');
+        viewport.style.transform = 'translate3d(' + damped.toFixed(1) + 'px, 0, 0)';
+      } else if (lockedAxis === 'y' && pulling && dy > 0 && window.scrollY <= 2){
+        pullDist = Math.min(90, dy * 0.45);
+        if (ptrEl && pullDist > 16){
+          ptrEl.classList.add('visible');
+          ptrEl.style.transform = 'translate(-50%, ' + Math.min(26, pullDist - 36).toFixed(0) + 'px)';
+          ptrEl.textContent = pullDist > 58 ? 'Release to refresh' : 'Pull to refresh…';
+        }
+      }
+    }, { passive: true });
+
+    document.addEventListener('touchend', function(e){
+      if (viewport){
+        viewport.classList.remove('dragging');
+        viewport.style.transform = '';
+      }
+      if (ptrEl){
+        ptrEl.classList.remove('visible');
+        ptrEl.style.transform = 'translate(-50%, -60px)';
+      }
+      if (pulling && pullDist > 58){
+        triggerFabRefresh();
+      }
+      if (lockedAxis === 'x' && swiping && e.changedTouches && e.changedTouches.length){
+        const dx = e.changedTouches[0].clientX - sx;
+        if (Math.abs(dx) >= 54){
+          const idx = VIEW_ORDER.indexOf(currentViewName);
+          if (dx < 0 && idx < VIEW_ORDER.length - 1){
+            showView(VIEW_ORDER[idx + 1], 'right');
+          } else if (dx > 0 && idx > 0){
+            showView(VIEW_ORDER[idx - 1], 'left');
+          }
+        }
+      }
+      swiping = false;
+      pulling = false;
+      lockedAxis = null;
+    }, { passive: true });
+
+    // Dedicated horizontal swipe on Hero Dial to swap Temp <-> Humidity
+    const dialWrap = document.getElementById('hero-dial-wrap');
+    if (dialWrap){
+      let dsx = 0, dsy = 0;
+      dialWrap.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1){ dsx = e.touches[0].clientX; dsy = e.touches[0].clientY; }
+      }, { passive: true });
+      dialWrap.addEventListener('touchend', (e) => {
+        if (!e.changedTouches || !e.changedTouches.length) return;
+        const dx = e.changedTouches[0].clientX - dsx;
+        const dy = e.changedTouches[0].clientY - dsy;
+        if (Math.abs(dx) > 36 && Math.abs(dx) > Math.abs(dy) * 1.2){
+          cycleHeroDial();
+        }
+      }, { passive: true });
+    }
+
+    // Desktop keyboard left/right arrow tab switching
+    document.addEventListener('keydown', function(e){
+      if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+      if (e.key === 'ArrowRight'){
+        const idx = VIEW_ORDER.indexOf(currentViewName);
+        if (idx < VIEW_ORDER.length - 1) showView(VIEW_ORDER[idx + 1], 'right');
+      } else if (e.key === 'ArrowLeft'){
+        const idx = VIEW_ORDER.indexOf(currentViewName);
+        if (idx > 0) showView(VIEW_ORDER[idx - 1], 'left');
+      }
+    });
+  })();
+
+  // Initial Hero Gauge render before first network response
+  renderHeroGaugeSvg(42, '#F5A66B');
 
   // ---------- constants ----------
   const PAGE_SIZE = 200;          // initial fetch size
@@ -2072,6 +3496,7 @@
     if (state === 'online') label.textContent = 'firebase reachable';
     else if (state === 'stale') label.textContent = 'no recent readings';
     else label.textContent = detail || 'firebase unreachable';
+    if (typeof updateHeroConnDot === 'function') updateHeroConnDot(state);
   }
 
   // ---------- time anchoring ----------
@@ -2645,6 +4070,7 @@
       }
       renderCloudPanels(status);
       updateOtaButtons();
+      updateHeroOverview();
       return;
     }
 
@@ -2658,15 +4084,18 @@
     renderDeviceLinks(status.ip);
     renderCloudPanels(status);
     updateOtaButtons();
+    updateHeroOverview();
     dashMsg.textContent = '';
   }
 
-  // ---------- Native Firebase Cloud Control Bridge (v3.5.0) ----------
+  // ---------- Native Firebase Cloud Control Bridge (v3.7.0 — Inline Contextual 4-Step Dropdown) ----------
   let pendingCmdId = '';
   let pendingCmdStartMs = 0;
   let pendingCmdLabel = '';
   let cmdPollTimer = null;
   let cmdClockTimer = null;
+  let cmdAutoHideTimer = null;
+  let activeCmdSlotKey = 'home-actions';
 
   function setCloudCmdStatus(msg, cls){
     const el = document.getElementById('cloud-cmd-status');
@@ -2675,18 +4104,49 @@
     el.className = 'cloud-cmd-bar' + (cls ? (' ' + cls) : '');
   }
 
+  function resolveCmdSlotEl(slotKey){
+    if (slotKey){
+      const found = document.querySelector('.inline-cmd-slot[data-cmd-slot="' + slotKey + '"]');
+      if (found) return found;
+    }
+    return document.querySelector('.inline-cmd-slot[data-cmd-slot="home-actions"]') || document.getElementById('cmd-stepper-fallback-host');
+  }
+
+  function mountStepperIntoSlot(slotKey){
+    const box = document.getElementById('cmd-stepper');
+    const slot = resolveCmdSlotEl(slotKey);
+    if (!box || !slot) return;
+    if (box.parentElement !== slot){
+      slot.appendChild(box);
+    }
+    activeCmdSlotKey = slotKey || 'home-actions';
+  }
+
+  function dismissCmdStepper(){
+    if (cmdAutoHideTimer){ clearTimeout(cmdAutoHideTimer); cmdAutoHideTimer = null; }
+    const box = document.getElementById('cmd-stepper');
+    if (box){
+      box.classList.remove('show', 'is-done', 'is-err');
+    }
+  }
+
   function updateCmdStepper(stage, detailMsg){
     const box = document.getElementById('cmd-stepper');
     const titleEl = document.getElementById('cmd-stepper-title');
     const timeEl = document.getElementById('cmd-stepper-time');
     const footEl = document.getElementById('cmd-stepper-foot');
+    const closeBtn = document.getElementById('cmd-stepper-close');
     if (!box) return;
+    if (cmdAutoHideTimer){ clearTimeout(cmdAutoHideTimer); cmdAutoHideTimer = null; }
+
+    box.classList.remove('is-done', 'is-err');
     box.classList.add('show');
-    if (titleEl) titleEl.textContent = pendingCmdLabel || 'Cloud Command';
+    if (titleEl) titleEl.textContent = pendingCmdLabel || 'Applying Change';
     if (timeEl && pendingCmdStartMs){
       timeEl.textContent = ((Date.now() - pendingCmdStartMs) / 1000).toFixed(1) + 's';
     }
     if (footEl) footEl.textContent = detailMsg || '';
+    if (closeBtn) closeBtn.style.display = (stage === 'error' || stage === 'send_error') ? 'inline-flex' : 'none';
 
     const s = [
       document.getElementById('cstep-1'),
@@ -2702,19 +4162,25 @@
     };
 
     if (stage === 'sending'){
-      setSt(s[0], 'active', '…'); setSt(s[1], '', '2'); setSt(s[2], '', '3'); setSt(s[3], '', '4');
+      setSt(s[0], 'active', '1'); setSt(s[1], '', '2'); setSt(s[2], '', '3'); setSt(s[3], '', '4');
     } else if (stage === 'sent'){
-      setSt(s[0], 'done', '✓'); setSt(s[1], 'active', '…'); setSt(s[2], '', '3'); setSt(s[3], '', '4');
+      setSt(s[0], 'done', '✓'); setSt(s[1], 'active', '2'); setSt(s[2], '', '3'); setSt(s[3], '', '4');
     } else if (stage === 'received'){
-      setSt(s[0], 'done', '✓'); setSt(s[1], 'done', '✓'); setSt(s[2], 'active', '…'); setSt(s[3], '', '4');
+      setSt(s[0], 'done', '✓'); setSt(s[1], 'done', '✓'); setSt(s[2], 'active', '3'); setSt(s[3], '', '4');
     } else if (stage === 'completed'){
       setSt(s[0], 'done', '✓'); setSt(s[1], 'done', '✓'); setSt(s[2], 'done', '✓'); setSt(s[3], 'done', '✓');
+      box.classList.add('is-done');
       if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
+      cmdAutoHideTimer = setTimeout(() => {
+        dismissCmdStepper();
+      }, 2200);
     } else if (stage === 'error'){
       setSt(s[0], 'done', '✓'); setSt(s[1], 'done', '✓'); setSt(s[2], 'err', '!'); setSt(s[3], 'err', '✕');
+      box.classList.add('is-err');
       if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
     } else if (stage === 'send_error'){
       setSt(s[0], 'err', '!'); setSt(s[1], '', '2'); setSt(s[2], '', '3'); setSt(s[3], '', '4');
+      box.classList.add('is-err');
       if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
     }
   }
@@ -2728,9 +4194,11 @@
 
   function renderStorageCard(st){
     const body = document.getElementById('cloud-storage-body');
+    const sumEl = document.getElementById('system-minimal-summary');
     if (!body) return;
     if (!st){
-      body.innerHTML = '<div class="ota-meta">Flash v3.6.0 firmware to see live Flash, LittleFS, Queue, and RAM usage.</div>';
+      body.innerHTML = '<div class="ota-meta">Flash v3.6.0+ firmware to see live Flash, LittleFS, Queue, and RAM usage.</div>';
+      if (sumEl) sumEl.textContent = 'Waiting for telemetry…';
       return;
     }
     const appPct = st.otaSlotKb ? Math.min(100, Math.round((st.sketchKb / st.otaSlotKb) * 100)) : 0;
@@ -2743,35 +4211,46 @@
     const ramUsed  = Math.max(0, ramTotal - (st.heapFreeKb || 0));
     const ramPct   = ramTotal ? Math.min(100, Math.round((ramUsed / ramTotal) * 100)) : 0;
 
+    if (sumEl){
+      sumEl.textContent = 'Flash ' + appPct + '% · FS ' + fsPct + '% · RAM ' + ramPct + '%';
+    }
+
     body.innerHTML =
-      '<div class="storage-block">' +
-        '<div class="storage-row-head"><span>Firmware App Slot (×2 A/B on ' + (st.flashKb || 4096) + ' KB Flash)</span>' +
-        '<span class="storage-row-val">' + st.sketchKb + ' / ' + st.otaSlotKb + ' KB (' + appPct + '%)</span></div>' +
+      '<div class="storage-block expandable-inner" onclick="toggleInnerDetail(event, this)">' +
+        '<div class="storage-row-head"><span>Firmware Flash</span>' +
+        '<span class="storage-row-val">' + appPct + '% · ' + st.sketchKb + '/' + st.otaSlotKb + ' KB</span></div>' +
         '<div class="storage-track"><div class="storage-fill" style="width:' + appPct + '%"></div></div>' +
-        '<div class="storage-sub-grid">' +
-          '<div class="storage-mini"><div class="storage-mini-label">Active Firmware</div><div class="storage-mini-val">' + st.sketchKb + ' KB</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">OTA Headroom</div><div class="storage-mini-val">' + appFree + ' KB free</div></div>' +
-        '</div>' +
+        '<div class="inner-detail-drawer"><div class="inner-detail-content">' +
+          '<div class="storage-sub-grid">' +
+            '<div class="storage-mini"><div class="storage-mini-label">Active Firmware</div><div class="storage-mini-val">' + st.sketchKb + ' KB</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">OTA Headroom</div><div class="storage-mini-val">' + appFree + ' KB free</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Total Flash</div><div class="storage-mini-val">' + (st.flashKb || 4096) + ' KB (A/B)</div></div>' +
+          '</div>' +
+        '</div></div>' +
       '</div>' +
-      '<div class="storage-block">' +
-        '<div class="storage-row-head"><span>LittleFS Data Partition</span>' +
-        '<span class="storage-row-val">' + fmtBytes(fsUsed) + ' / ' + fmtBytes(fsTotal) + ' (' + fsPct + '%)</span></div>' +
+      '<div class="storage-block expandable-inner" onclick="toggleInnerDetail(event, this)">' +
+        '<div class="storage-row-head"><span>LittleFS Storage</span>' +
+        '<span class="storage-row-val">' + fsPct + '% · ' + fmtBytes(fsUsed) + '/' + fmtBytes(fsTotal) + '</span></div>' +
         '<div class="storage-track"><div class="storage-fill fs" style="width:' + fsPct + '%"></div></div>' +
-        '<div class="storage-sub-grid">' +
-          '<div class="storage-mini"><div class="storage-mini-label">Offline Queue (/pending.txt)</div><div class="storage-mini-val">' + fmtBytes(st.pendingBytes) + ' (' + (st.pendingCount || 0) + ' rows)</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">Saved WiFi (/wifi.txt)</div><div class="storage-mini-val">' + fmtBytes(st.wifiBytes) + '</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">FS Overhead / Other</div><div class="storage-mini-val">' + fmtBytes(otherFs) + '</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">Queue Safety Cap</div><div class="storage-mini-val">' + fmtBytes(st.queueCapBytes) + '</div></div>' +
-        '</div>' +
+        '<div class="inner-detail-drawer"><div class="inner-detail-content">' +
+          '<div class="storage-sub-grid">' +
+            '<div class="storage-mini"><div class="storage-mini-label">Offline Queue (/pending.txt)</div><div class="storage-mini-val">' + fmtBytes(st.pendingBytes) + ' (' + (st.pendingCount || 0) + ' rows)</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Saved WiFi (/wifi.txt)</div><div class="storage-mini-val">' + fmtBytes(st.wifiBytes) + '</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">FS Overhead / Other</div><div class="storage-mini-val">' + fmtBytes(otherFs) + '</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Queue Safety Cap</div><div class="storage-mini-val">' + fmtBytes(st.queueCapBytes) + '</div></div>' +
+          '</div>' +
+        '</div></div>' +
       '</div>' +
-      '<div class="storage-block">' +
+      '<div class="storage-block expandable-inner" onclick="toggleInnerDetail(event, this)">' +
         '<div class="storage-row-head"><span>Live RAM (Heap)</span>' +
-        '<span class="storage-row-val">' + ramUsed + ' / ' + ramTotal + ' KB (' + ramPct + '%)</span></div>' +
+        '<span class="storage-row-val">' + ramPct + '% · ' + ramUsed + '/' + ramTotal + ' KB</span></div>' +
         '<div class="storage-track"><div class="storage-fill ram" style="width:' + ramPct + '%"></div></div>' +
-        '<div class="storage-sub-grid">' +
-          '<div class="storage-mini"><div class="storage-mini-label">Free RAM Now</div><div class="storage-mini-val">' + (st.heapFreeKb || 0) + ' KB</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">Lowest Free (Boot Min)</div><div class="storage-mini-val">' + (st.heapMinFreeKb || 0) + ' KB</div></div>' +
-        '</div>' +
+        '<div class="inner-detail-drawer"><div class="inner-detail-content">' +
+          '<div class="storage-sub-grid">' +
+            '<div class="storage-mini"><div class="storage-mini-label">Free RAM Now</div><div class="storage-mini-val">' + (st.heapFreeKb || 0) + ' KB</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Lowest Free (Boot Min)</div><div class="storage-mini-val">' + (st.heapMinFreeKb || 0) + ' KB</div></div>' +
+          '</div>' +
+        '</div></div>' +
       '</div>';
   }
 
@@ -2861,6 +4340,7 @@
     }
 
     renderStorageCard(status && status.storage);
+    renderMinimalSummaries(status);
 
     if (pendingCmdId && status && String(status.lastCmdId || '') === pendingCmdId){
       const stg = String(status.lastCmdStage || 'completed');
@@ -2881,7 +4361,14 @@
     }
   }
 
-  async function sendCloudCommand(payloadObj, waitingMsg){
+  async function sendCloudCommand(payloadObj, waitingMsg, slotKey){
+    const inferredSlot = slotKey || (
+      payloadObj && payloadObj.action === 'setPowerMode' ? 'power-mode' :
+      payloadObj && (payloadObj.action === 'addWifi' || payloadObj.action === 'removeWifi' || payloadObj.action === 'setPreferredWifi') ? 'wifi-control' :
+      payloadObj && payloadObj.action === 'otaUrl' ? 'ota-control' :
+      'home-actions'
+    );
+    mountStepperIntoSlot(inferredSlot);
     const host = getHost();
     if (!host){
       setCloudCmdStatus('Set Firebase RTDB host on the Graphs tab first.', 'err');
@@ -2940,8 +4427,26 @@
     }
   }
 
+  let stagedPowerMode = null;
+  function selectPowerMode(mode){
+    stagedPowerMode = mode;
+    document.querySelectorAll('#cloud-power-grid .power-opt').forEach(btn => {
+      btn.classList.toggle('staged', btn.dataset.pm === mode);
+    });
+    const applyBtn = document.getElementById('btn-apply-power');
+    if (applyBtn){
+      const label = mode.charAt(0).toUpperCase() + mode.slice(1);
+      applyBtn.textContent = 'Apply ' + label + ' Mode';
+      applyBtn.disabled = false;
+    }
+  }
+  function applyStagedPowerMode(){
+    const mode = stagedPowerMode || lastKnownPowerMode || 'normal';
+    cloudSetPowerMode(mode);
+  }
   function cloudSetPowerMode(mode){
-    sendCloudCommand({ action: 'setPowerMode', mode: mode }, 'Switching ESP32 to ' + mode + ' mode…');
+    stagedPowerMode = mode;
+    sendCloudCommand({ action: 'setPowerMode', mode: mode }, 'Switching ESP32 to ' + mode + ' mode…', 'power-mode');
   }
 
   function cloudAddWifi(){
@@ -3636,6 +5141,16 @@
   }
 
   const THEME_CHART_PALETTES = {
+    kinetic: {
+      themeColor: '#07090D',
+      temp: '#F5A66B', tempBg: 'rgba(245,166,107,0.12)',
+      hum: '#7DC4E4', humBg: 'rgba(125,196,228,0.10)',
+      outdoor: 'rgba(226,232,240,0.52)', outdoorBg: 'rgba(226,232,240,0.05)',
+      grid: 'rgba(255,255,255,0.07)', xTicks: 'rgba(235,233,228,0.58)',
+      gapFill: 'rgba(255,255,255,0.06)', gapStroke: 'rgba(255,255,255,0.22)',
+      dayFill: 'rgba(245,198,125,0.22)', nightFill: 'rgba(125,162,228,0.24)',
+      dayText: 'rgba(255,248,235,0.88)', nightText: 'rgba(235,242,255,0.88)'
+    },
     obsidian: {
       themeColor: '#0B0F14',
       temp: '#FF8A5B', tempBg: 'rgba(255,138,91,0.08)',
@@ -3659,10 +5174,12 @@
   };
 
   function getActiveTheme(){
-    return document.documentElement.getAttribute('data-theme') === 'atelier' ? 'atelier' : 'obsidian';
+    const t = document.documentElement.getAttribute('data-theme');
+    if (t === 'atelier' || t === 'obsidian' || t === 'kinetic') return t;
+    return 'kinetic';
   }
   function getChartThemePalette(){
-    return THEME_CHART_PALETTES[getActiveTheme()] || THEME_CHART_PALETTES.obsidian;
+    return THEME_CHART_PALETTES[getActiveTheme()] || THEME_CHART_PALETTES.kinetic;
   }
 
   function updateChartsTheme(){
@@ -3690,12 +5207,8 @@
   }
 
   function applyTheme(theme){
-    const next = (theme === 'atelier') ? 'atelier' : 'obsidian';
-    if (next === 'atelier'){
-      document.documentElement.setAttribute('data-theme', 'atelier');
-    } else {
-      document.documentElement.removeAttribute('data-theme');
-    }
+    const next = (theme === 'atelier' || theme === 'obsidian' || theme === 'kinetic') ? theme : 'kinetic';
+    document.documentElement.setAttribute('data-theme', next);
     try { localStorage.setItem('rl_theme', next); } catch(e) {}
     const meta = document.getElementById('meta-theme-color');
     if (meta) meta.setAttribute('content', THEME_CHART_PALETTES[next].themeColor);
@@ -3703,12 +5216,16 @@
       btn.setAttribute('aria-pressed', btn.dataset.themeChoice === next ? 'true' : 'false');
     });
     const lbl = document.getElementById('theme-toggle-label');
-    if (lbl) lbl.textContent = (next === 'atelier') ? 'Obsidian' : 'Atelier';
+    if (lbl) lbl.textContent = next === 'kinetic' ? 'Kinetic' : (next === 'atelier' ? 'Atelier' : 'Obsidian');
     updateChartsTheme();
   }
 
   function toggleTheme(){
-    applyTheme(getActiveTheme() === 'atelier' ? 'obsidian' : 'atelier');
+    const order = ['kinetic', 'obsidian', 'atelier'];
+    const cur = getActiveTheme();
+    const next = order[(order.indexOf(cur) + 1) % order.length];
+    applyTheme(next);
+    showToast('Theme: ' + next.charAt(0).toUpperCase() + next.slice(1));
   }
 
   // Smart mobile touch router (v3.4.4):
@@ -4261,6 +5778,7 @@
     latestReadingEpoch = latest.epochMs;
     updateAgeText();
     renderStatusUi();
+    updateHeroOverview();
 
     ['stat-temp', 'stat-hum'].forEach(id => {
       const el = document.getElementById(id);
@@ -4274,6 +5792,7 @@
     const text = timeAgo(Date.now() - latestReadingEpoch) + ' · ' + formatClock(latestReadingEpoch);
     document.getElementById('temp-age').textContent = text;
     document.getElementById('hum-age').textContent = text;
+    updateHeroAgeText(text);
   }
   setInterval(updateAgeText, 5000);
 
