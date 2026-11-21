@@ -1415,6 +1415,132 @@
     }
   }
 
+
+  /* ---------- Native Cloud Control Cards (v3.5.0) ---------- */
+  .cloud-health-list {
+    display: flex; flex-direction: column; gap: 8px; margin-top: 12px;
+  }
+  .health-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 11px 14px;
+  }
+  .health-name { font-family: var(--sans); font-size: 13px; font-weight: 600; color: var(--text); }
+  .health-detail { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+  .power-grid {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 10px;
+  }
+  @media (max-width: 440px) { .power-grid { grid-template-columns: 1fr; } }
+  .power-opt {
+    display: flex; flex-direction: column; align-items: flex-start; text-align: left;
+    min-height: 62px; padding: 12px 14px; border-radius: 14px;
+    background: var(--panel-2); border: 1.5px solid var(--border); color: var(--text);
+    cursor: pointer; width: 100%;
+    transition: transform 100ms ease-out, border-color 150ms ease, background-color 150ms ease;
+  }
+  .power-opt:hover { border-color: var(--muted); }
+  .power-opt:active { transform: scale(0.98); }
+  .power-opt.active { border-color: var(--temp); box-shadow: 0 0 0 1px var(--temp); }
+  .power-opt-title { font-family: var(--sans); font-size: 13px; font-weight: 600; color: var(--text); }
+  .power-opt-sub { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 3px; line-height: 1.35; }
+  .wifi-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .wifi-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px 12px;
+  }
+  .wifi-ssid { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .wifi-sub { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+  .wifi-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .wifi-actions button { min-height: 34px; padding: 5px 10px; font-size: 11px; }
+  .cloud-cmd-bar {
+    font-family: var(--mono); font-size: 11.5px; color: var(--ok);
+    margin-top: 10px; line-height: 1.5; min-height: 16px;
+  }
+  .cloud-cmd-bar.warn { color: var(--warn); }
+  .cloud-cmd-bar.err { color: var(--err); }
+  [data-theme="atelier"] .health-row,
+  [data-theme="atelier"] .power-opt,
+  [data-theme="atelier"] .wifi-item {
+    border-radius: 16px;
+  }
+  [data-theme="atelier"] .power-opt.active {
+    background: var(--panel);
+    border-color: var(--espresso);
+    box-shadow: 0 0 0 1px var(--espresso);
+  }
+
+
+  /* ---------- 4-Stage Command Assurance Stepper & ESP32 Storage Card (v3.6.0) ---------- */
+  .cmd-stepper {
+    display: none; margin-top: 12px; padding: 12px 14px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px;
+  }
+  .cmd-stepper.show { display: block; }
+  .cmd-stepper-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-family: var(--mono); font-size: 11px; color: var(--text); margin-bottom: 10px;
+  }
+  .cmd-steps {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+  }
+  .cmd-step {
+    display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px;
+    padding: 8px 4px; border-radius: 10px; background: var(--panel);
+    border: 1px solid var(--border); font-family: var(--mono); font-size: 10px; color: var(--muted-2);
+    transition: border-color 180ms ease, color 180ms ease, background-color 180ms ease;
+  }
+  .cmd-step-dot {
+    width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 10px; font-weight: 700; background: var(--panel-2); color: var(--muted);
+    border: 1px solid var(--border);
+  }
+  .cmd-step.active { border-color: var(--warn); color: var(--text); }
+  .cmd-step.active .cmd-step-dot { background: var(--warn); color: #111; border-color: var(--warn); }
+  .cmd-step.done { border-color: var(--ok); color: var(--text); }
+  .cmd-step.done .cmd-step-dot { background: var(--ok); color: #fff; border-color: var(--ok); }
+  .cmd-step.err { border-color: var(--err); color: var(--err); }
+  .cmd-step.err .cmd-step-dot { background: var(--err); color: #fff; border-color: var(--err); }
+  .cmd-stepper-foot {
+    font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.45;
+  }
+
+  .storage-bars { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+  .storage-block {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 12px 14px;
+  }
+  .storage-row-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    font-family: var(--sans); font-size: 12.5px; font-weight: 600; color: var(--text);
+  }
+  .storage-row-val {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .storage-track {
+    width: 100%; height: 8px; border-radius: 9999px; background: var(--panel);
+    border: 1px solid var(--border); overflow: hidden; margin-top: 8px;
+  }
+  .storage-fill {
+    height: 100%; border-radius: 9999px; background: var(--temp);
+    transition: width 300ms ease-out;
+  }
+  .storage-fill.fs { background: var(--hum); }
+  .storage-fill.ram { background: var(--ok); }
+  .storage-sub-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    gap: 8px; margin-top: 10px;
+  }
+  .storage-mini {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 10px; font-family: var(--mono);
+  }
+  .storage-mini-label { font-size: 10px; color: var(--muted); }
+  .storage-mini-val { font-size: 12px; font-weight: 600; color: var(--text); margin-top: 2px; font-variant-numeric: tabular-nums; }
+  [data-theme="atelier"] .cmd-stepper,
+  [data-theme="atelier"] .storage-block { border-radius: 16px; }
+
 </style>
 </head>
 <body>
@@ -1431,7 +1557,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.4.4</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.6.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -1451,28 +1577,102 @@
 
   <div id="view-dashboard" class="tab-view">
     <div class="card">
-      <h2>Device</h2>
+      <h2>Device &amp; Health</h2>
 
       <div class="field-row" id="device-status-row" style="display:none;">
-        <label>Status</label>
+        <label>Connection</label>
         <div class="device-status" id="device-status"></div>
       </div>
 
-      <div class="dash-links" id="dash-links"></div>
+      <div class="cloud-health-list" id="cloud-health-list"></div>
+      <div class="cmd-stepper" id="cmd-stepper" role="status" aria-live="polite">
+        <div class="cmd-stepper-head">
+          <span id="cmd-stepper-title">Cloud Command</span>
+          <span id="cmd-stepper-time">0.0s</span>
+        </div>
+        <div class="cmd-steps">
+          <div class="cmd-step" id="cstep-1"><span class="cmd-step-dot">1</span><span>Firebase</span></div>
+          <div class="cmd-step" id="cstep-2"><span class="cmd-step-dot">2</span><span>ESP Got</span></div>
+          <div class="cmd-step" id="cstep-3"><span class="cmd-step-dot">3</span><span>Applied</span></div>
+          <div class="cmd-step" id="cstep-4"><span class="cmd-step-dot">4</span><span>Done</span></div>
+        </div>
+        <div class="cmd-stepper-foot" id="cmd-stepper-foot"></div>
+      </div>
+      <div class="cloud-cmd-bar" id="cloud-cmd-status"></div>
       <div class="dash-msg" id="dash-msg">Loading device status…</div>
 
       <div class="controls-row">
-        <button class="btn-ghost" onclick="fetchStatus()">Refresh</button>
+        <button type="button" class="btn-primary" onclick="sendCloudCommand({ action: 'refreshStatus' }, 'Requesting live health refresh…')">Refresh Live</button>
+        <button type="button" class="btn-ghost" onclick="fetchStatus()">Reload Status</button>
+        <button type="button" class="btn-ghost" onclick="confirmCloudReboot()">Reboot ESP32</button>
+      </div>
+
+      <details class="ota-details" id="local-links-details">
+        <summary>Local LAN website links (only when on the ESP32's own hotspot)</summary>
+        <div class="dash-links" id="dash-links"></div>
+      </details>
+    </div>
+
+    <div class="card ota-card">
+      <h2>ESP32 Storage &amp; Memory</h2>
+      <div class="ota-meta" id="storage-meta">Live breakdown of flash, LittleFS queue, WiFi config, and RAM.</div>
+      <div class="storage-bars" id="cloud-storage-body"></div>
+    </div>
+
+    <div class="card ota-card">
+      <h2>Power Mode (Cloud Control)</h2>
+      <div class="ota-meta" id="cloud-power-meta">Switches the ESP32 over Firebase — works from any network or mobile data.</div>
+      <div class="power-grid" id="cloud-power-grid">
+        <button type="button" class="power-opt" data-pm="normal" onclick="cloudSetPowerMode('normal')">
+          <span class="power-opt-title">Normal</span>
+          <span class="power-opt-sub">240 MHz · WiFi always on · read 60s</span>
+        </button>
+        <button type="button" class="power-opt" data-pm="low" onclick="cloudSetPowerMode('low')">
+          <span class="power-opt-title">Low Power Save</span>
+          <span class="power-opt-sub">80 MHz · min modem PS · read 120s</span>
+        </button>
+        <button type="button" class="power-opt" data-pm="medium" onclick="cloudSetPowerMode('medium')">
+          <span class="power-opt-title">Medium Power Save</span>
+          <span class="power-opt-sub">80 MHz · max modem PS · read 300s</span>
+        </button>
+        <button type="button" class="power-opt" data-pm="high" onclick="cloudSetPowerMode('high')">
+          <span class="power-opt-title">High Power Save</span>
+          <span class="power-opt-sub">80 MHz · WiFi off 30m / 60s window · read 600s</span>
+        </button>
       </div>
     </div>
 
+    <div class="card ota-card">
+      <h2>WiFi Networks (Cloud Control)</h2>
+      <div class="ota-meta" id="cloud-wifi-meta">Saved networks synced from the ESP32 (passwords stay private on the device).</div>
+      <div class="wifi-list" id="cloud-wifi-list"></div>
+      <details class="ota-details">
+        <summary>Add or update a WiFi network</summary>
+        <div class="ota-form">
+          <div class="field-row">
+            <label for="cw-ssid">WiFi Name (SSID)</label>
+            <input type="text" id="cw-ssid" placeholder="e.g. MyHotspot" autocomplete="off">
+          </div>
+          <div class="field-row">
+            <label for="cw-pass">Password (leave blank for open WiFi)</label>
+            <input type="password" id="cw-pass" placeholder="WiFi password" autocomplete="off">
+          </div>
+          <div class="controls-row">
+            <button type="button" class="btn-primary" onclick="cloudAddWifi()">Save WiFi to ESP32</button>
+          </div>
+        </div>
+      </details>
+    </div>
+
     <div class="card ota-card" id="card-ota">
-      <h2>Firmware / OTA</h2>
+      <h2>Firmware / OTA (Cloud Flash)</h2>
       <div class="ota-meta" id="ota-meta">Checking latest build from <code>firmware/version.json</code>…</div>
+      <div class="ota-meta" id="cloud-ota-status" style="margin-top:6px;"></div>
       <div class="controls-row">
-        <button class="btn-primary" id="btn-flash-esp" onclick="openEspOta()" disabled>Open ESP32 /update (Manual Flash)</button>
-        <button class="btn-ghost" id="btn-copy-bin" onclick="copyBinUrl()" disabled>Copy .bin URL</button>
-        <button class="btn-ghost" onclick="fetchFirmwareInfo()">Check build</button>
+        <button type="button" class="btn-primary" id="btn-cloud-ota" onclick="cloudFlashLatestOta()" disabled>Flash Latest Over Cloud</button>
+        <button type="button" class="btn-ghost" id="btn-flash-esp" onclick="openEspOta()" disabled>Local /update</button>
+        <button type="button" class="btn-ghost" id="btn-copy-bin" onclick="copyBinUrl()" disabled>Copy .bin URL</button>
+        <button type="button" class="btn-ghost" onclick="fetchFirmwareInfo()">Check build</button>
       </div>
 
       <details class="ota-details">
@@ -1529,7 +1729,7 @@
           </span>
         </button>
       </div>
-      <div class="ota-meta" id="app-ver-meta">Running <b>v3.4.4</b> · checking GitHub for updates…</div>
+      <div class="ota-meta" id="app-ver-meta">Running <b>v3.6.0</b> · checking GitHub for updates…</div>
       <div class="controls-row">
         <button class="btn-ghost" onclick="checkAppUpdate(true)">Check for App Update</button>
         <button class="btn-ghost" onclick="forceUpdateApp()">Force Refresh App</button>
@@ -1657,7 +1857,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '3.4.4';
+  const APP_VERSION = '3.6.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- tabs ----------
@@ -2443,6 +2643,7 @@
       } else {
         dashMsg.textContent = 'Device is currently offline.';
       }
+      renderCloudPanels(status);
       updateOtaButtons();
       return;
     }
@@ -2455,8 +2656,321 @@
       ' · active ' + escapeHtml(timeAgo(ageMs));
     lastKnownDeviceIp = status.ip;
     renderDeviceLinks(status.ip);
+    renderCloudPanels(status);
     updateOtaButtons();
     dashMsg.textContent = '';
+  }
+
+  // ---------- Native Firebase Cloud Control Bridge (v3.5.0) ----------
+  let pendingCmdId = '';
+  let pendingCmdStartMs = 0;
+  let pendingCmdLabel = '';
+  let cmdPollTimer = null;
+  let cmdClockTimer = null;
+
+  function setCloudCmdStatus(msg, cls){
+    const el = document.getElementById('cloud-cmd-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.className = 'cloud-cmd-bar' + (cls ? (' ' + cls) : '');
+  }
+
+  function updateCmdStepper(stage, detailMsg){
+    const box = document.getElementById('cmd-stepper');
+    const titleEl = document.getElementById('cmd-stepper-title');
+    const timeEl = document.getElementById('cmd-stepper-time');
+    const footEl = document.getElementById('cmd-stepper-foot');
+    if (!box) return;
+    box.classList.add('show');
+    if (titleEl) titleEl.textContent = pendingCmdLabel || 'Cloud Command';
+    if (timeEl && pendingCmdStartMs){
+      timeEl.textContent = ((Date.now() - pendingCmdStartMs) / 1000).toFixed(1) + 's';
+    }
+    if (footEl) footEl.textContent = detailMsg || '';
+
+    const s = [
+      document.getElementById('cstep-1'),
+      document.getElementById('cstep-2'),
+      document.getElementById('cstep-3'),
+      document.getElementById('cstep-4')
+    ];
+    const setSt = (el, cls, icon) => {
+      if (!el) return;
+      el.className = 'cmd-step' + (cls ? (' ' + cls) : '');
+      const dot = el.querySelector('.cmd-step-dot');
+      if (dot) dot.textContent = icon;
+    };
+
+    if (stage === 'sending'){
+      setSt(s[0], 'active', '…'); setSt(s[1], '', '2'); setSt(s[2], '', '3'); setSt(s[3], '', '4');
+    } else if (stage === 'sent'){
+      setSt(s[0], 'done', '✓'); setSt(s[1], 'active', '…'); setSt(s[2], '', '3'); setSt(s[3], '', '4');
+    } else if (stage === 'received'){
+      setSt(s[0], 'done', '✓'); setSt(s[1], 'done', '✓'); setSt(s[2], 'active', '…'); setSt(s[3], '', '4');
+    } else if (stage === 'completed'){
+      setSt(s[0], 'done', '✓'); setSt(s[1], 'done', '✓'); setSt(s[2], 'done', '✓'); setSt(s[3], 'done', '✓');
+      if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
+    } else if (stage === 'error'){
+      setSt(s[0], 'done', '✓'); setSt(s[1], 'done', '✓'); setSt(s[2], 'err', '!'); setSt(s[3], 'err', '✕');
+      if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
+    } else if (stage === 'send_error'){
+      setSt(s[0], 'err', '!'); setSt(s[1], '', '2'); setSt(s[2], '', '3'); setSt(s[3], '', '4');
+      if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
+    }
+  }
+
+  function fmtBytes(b){
+    b = Number(b || 0);
+    if (b < 1024) return b + ' B';
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+    return (b / (1024 * 1024)).toFixed(2) + ' MB';
+  }
+
+  function renderStorageCard(st){
+    const body = document.getElementById('cloud-storage-body');
+    if (!body) return;
+    if (!st){
+      body.innerHTML = '<div class="ota-meta">Flash v3.6.0 firmware to see live Flash, LittleFS, Queue, and RAM usage.</div>';
+      return;
+    }
+    const appPct = st.otaSlotKb ? Math.min(100, Math.round((st.sketchKb / st.otaSlotKb) * 100)) : 0;
+    const appFree = Math.max(0, (st.otaSlotKb || 0) - (st.sketchKb || 0));
+    const fsTotal = st.fsTotalBytes || 0;
+    const fsUsed  = st.fsUsedBytes || 0;
+    const fsPct   = fsTotal ? Math.min(100, Math.round((fsUsed / fsTotal) * 100)) : 0;
+    const otherFs = Math.max(0, fsUsed - (st.pendingBytes || 0) - (st.wifiBytes || 0));
+    const ramTotal = st.heapTotalKb || 0;
+    const ramUsed  = Math.max(0, ramTotal - (st.heapFreeKb || 0));
+    const ramPct   = ramTotal ? Math.min(100, Math.round((ramUsed / ramTotal) * 100)) : 0;
+
+    body.innerHTML =
+      '<div class="storage-block">' +
+        '<div class="storage-row-head"><span>Firmware App Slot (×2 A/B on ' + (st.flashKb || 4096) + ' KB Flash)</span>' +
+        '<span class="storage-row-val">' + st.sketchKb + ' / ' + st.otaSlotKb + ' KB (' + appPct + '%)</span></div>' +
+        '<div class="storage-track"><div class="storage-fill" style="width:' + appPct + '%"></div></div>' +
+        '<div class="storage-sub-grid">' +
+          '<div class="storage-mini"><div class="storage-mini-label">Active Firmware</div><div class="storage-mini-val">' + st.sketchKb + ' KB</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">OTA Headroom</div><div class="storage-mini-val">' + appFree + ' KB free</div></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="storage-block">' +
+        '<div class="storage-row-head"><span>LittleFS Data Partition</span>' +
+        '<span class="storage-row-val">' + fmtBytes(fsUsed) + ' / ' + fmtBytes(fsTotal) + ' (' + fsPct + '%)</span></div>' +
+        '<div class="storage-track"><div class="storage-fill fs" style="width:' + fsPct + '%"></div></div>' +
+        '<div class="storage-sub-grid">' +
+          '<div class="storage-mini"><div class="storage-mini-label">Offline Queue (/pending.txt)</div><div class="storage-mini-val">' + fmtBytes(st.pendingBytes) + ' (' + (st.pendingCount || 0) + ' rows)</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">Saved WiFi (/wifi.txt)</div><div class="storage-mini-val">' + fmtBytes(st.wifiBytes) + '</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">FS Overhead / Other</div><div class="storage-mini-val">' + fmtBytes(otherFs) + '</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">Queue Safety Cap</div><div class="storage-mini-val">' + fmtBytes(st.queueCapBytes) + '</div></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="storage-block">' +
+        '<div class="storage-row-head"><span>Live RAM (Heap)</span>' +
+        '<span class="storage-row-val">' + ramUsed + ' / ' + ramTotal + ' KB (' + ramPct + '%)</span></div>' +
+        '<div class="storage-track"><div class="storage-fill ram" style="width:' + ramPct + '%"></div></div>' +
+        '<div class="storage-sub-grid">' +
+          '<div class="storage-mini"><div class="storage-mini-label">Free RAM Now</div><div class="storage-mini-val">' + (st.heapFreeKb || 0) + ' KB</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">Lowest Free (Boot Min)</div><div class="storage-mini-val">' + (st.heapMinFreeKb || 0) + ' KB</div></div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  function renderCloudPanels(status){
+    const healthEl = document.getElementById('cloud-health-list');
+    if (healthEl){
+      const h = status && status.health;
+      if (!h){
+        healthEl.innerHTML = '<div class="health-row"><div><div class="health-name">Cloud Health</div><div class="health-detail">Flash the latest room_logger.ino once to stream live health &amp; cloud commands here.</div></div><span class="status-pill warn">Update FW</span></div>';
+      } else {
+        const rows = [];
+        if (h.firebase){
+          const fbCls = !h.firebase.attempted ? 'warn' : (h.firebase.ok ? 'ok' : 'err');
+          const fbBadge = !h.firebase.attempted ? 'No data' : (h.firebase.ok ? 'OK' : 'Failing');
+          const fbDet = !h.firebase.attempted ? 'No upload attempted yet this boot.'
+            : ((h.firebase.ok ? 'Last upload succeeded ' : 'Last attempt failed ') + h.firebase.secondsAgo + 's ago.');
+          rows.push(['Cloud — Firebase', fbDet, fbBadge, fbCls]);
+        }
+        if (h.rtc){
+          const diag = h.rtc.diag ? (' (' + h.rtc.diag + ')') : '';
+          const rCls = !h.rtc.present ? 'err' : (!h.rtc.timeValid ? 'warn' : 'ok');
+          const rBadge = !h.rtc.present ? 'Not found' : (!h.rtc.timeValid ? 'Unset' : 'OK');
+          const rDet = !h.rtc.present ? ('No RTC detected on I2C' + diag)
+            : (!h.rtc.timeValid ? ('Present, clock unset' + diag) : ('Present & keeping time' + diag));
+          rows.push(['RTC (clock)', rDet, rBadge, rCls]);
+        }
+        if (h.dht){
+          const dCls = (!h.dht.everRead || h.dht.stale) ? 'err' : 'ok';
+          const dBadge = !h.dht.everRead ? 'No data' : (h.dht.stale ? 'Stale' : 'OK');
+          const dDet = !h.dht.everRead ? 'No successful reading yet this boot.'
+            : (h.dht.temp + '°C / ' + h.dht.hum + '% (' + h.dht.secondsAgo + 's ago)');
+          rows.push(['DHT22 (sensor)', dDet, dBadge, dCls]);
+        }
+        if (h.power){
+          const pm = h.power.mode || 'normal';
+          const pDet = h.power.cpuMhz + ' MHz · read every ' + Math.round((h.power.readIntervalMs || 60000) / 1000) + 's';
+          rows.push(['Power mode', pDet, pm.charAt(0).toUpperCase() + pm.slice(1), pm === 'normal' ? 'ok' : 'warn']);
+        }
+        if (h.ota){
+          const okSlot = (h.ota.slotKb || 0) >= 1500;
+          rows.push(['OTA partition slot', 'App ' + h.ota.sketchKb + ' KB / ' + h.ota.slotKb + ' KB slot', h.ota.slotKb + ' KB', okSlot ? 'ok' : 'warn']);
+        }
+        healthEl.innerHTML = rows.map(r =>
+          '<div class="health-row"><div><div class="health-name">' + escapeHtml(r[0]) +
+          '</div><div class="health-detail">' + escapeHtml(r[1]) +
+          '</div></div><span class="status-pill ' + r[3] + '">' + escapeHtml(r[2]) + '</span></div>'
+        ).join('');
+      }
+    }
+
+    const activeMode = (status && status.powerMode ? String(status.powerMode).toLowerCase() : 'normal');
+    document.querySelectorAll('#cloud-power-grid .power-opt').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.pm === activeMode);
+    });
+
+    const wifiEl = document.getElementById('cloud-wifi-list');
+    if (wifiEl){
+      const w = status && status.wifi;
+      if (!w || !Array.isArray(w.networks)){
+        wifiEl.innerHTML = '<div class="ota-meta">Waiting for firmware v3.5+ status sync…</div>';
+      } else if (!w.networks.length){
+        wifiEl.innerHTML = '<div class="ota-meta">No saved networks reported.</div>';
+      } else {
+        const pref = w.preferred || '';
+        const curSsid = status.ssid || '';
+        wifiEl.innerHTML = w.networks.map(net => {
+          const isCur = net.ssid === curSsid;
+          const isPref = net.ssid === pref;
+          const pills = (isCur ? '<span class="status-pill ok">Connected</span>' : '') +
+                        (isPref ? '<span class="status-pill warn">Preferred</span>' : '');
+          const sub = net.ip ? ('Static IP: ' + net.ip) : 'DHCP';
+          const prefBtn = isPref
+            ? '<button type="button" class="btn-ghost" onclick="cloudSetPreferredWifi(\'\')">Clear Pref</button>'
+            : '<button type="button" class="btn-ghost" onclick="cloudSetPreferredWifi(\'' + escapeHtml(net.ssid).replace(/'/g, '&#39;') + '\')">Set Preferred</button>';
+          const remBtn = w.networks.length > 1
+            ? '<button type="button" class="btn-ghost" onclick="cloudRemoveWifi(\'' + escapeHtml(net.ssid).replace(/'/g, '&#39;') + '\')">Remove</button>' : '';
+          return '<div class="wifi-item"><div><div class="wifi-ssid">' + escapeHtml(net.ssid) + pills +
+                 '</div><div class="wifi-sub">' + escapeHtml(sub) + '</div></div>' +
+                 '<div class="wifi-actions">' + prefBtn + remBtn + '</div></div>';
+        }).join('');
+      }
+    }
+
+    const otaStEl = document.getElementById('cloud-ota-status');
+    if (otaStEl && status && status.ota && status.ota.msg){
+      otaStEl.innerHTML = 'ESP32 OTA status: <b>' + escapeHtml(status.ota.state || 'idle') + '</b> — ' + escapeHtml(status.ota.msg);
+    }
+
+    renderStorageCard(status && status.storage);
+
+    if (pendingCmdId && status && String(status.lastCmdId || '') === pendingCmdId){
+      const stg = String(status.lastCmdStage || 'completed');
+      if (stg === 'received'){
+        updateCmdStepper('received', 'ESP32 received command — applying changes now…');
+        setCloudCmdStatus('ESP32 received command — applying…', 'warn');
+      } else if (stg === 'error'){
+        updateCmdStepper('error', 'ESP32 reported error: ' + (status.lastCmdResult || 'Failed'));
+        setCloudCmdStatus('✕ ESP32: ' + (status.lastCmdResult || 'Failed'), 'err');
+        pendingCmdId = '';
+        if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
+      } else {
+        updateCmdStepper('completed', 'Confirmed by ESP32: ' + (status.lastCmdResult || 'Done'));
+        setCloudCmdStatus('✓ ' + (status.lastCmdResult || 'Done'), '');
+        pendingCmdId = '';
+        if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
+      }
+    }
+  }
+
+  async function sendCloudCommand(payloadObj, waitingMsg){
+    const host = getHost();
+    if (!host){
+      setCloudCmdStatus('Set Firebase RTDB host on the Graphs tab first.', 'err');
+      return false;
+    }
+    const id = String(Date.now());
+    const body = Object.assign({ id: id }, payloadObj);
+    pendingCmdId = id;
+    pendingCmdStartMs = Date.now();
+    pendingCmdLabel = waitingMsg || ('Action: ' + (payloadObj.action || 'command'));
+    updateCmdStepper('sending', 'Uploading command to Firebase…');
+    setCloudCmdStatus('', '');
+
+    if (cmdClockTimer) clearInterval(cmdClockTimer);
+    cmdClockTimer = setInterval(() => {
+      const tEl = document.getElementById('cmd-stepper-time');
+      if (tEl && pendingCmdStartMs) tEl.textContent = ((Date.now() - pendingCmdStartMs) / 1000).toFixed(1) + 's';
+    }, 250);
+
+    try {
+      const url = 'https://' + host + '/cmd.json' + getFbAuthParam();
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        cache: 'no-store'
+      });
+      if (!res.ok){
+        const errMsg = 'Upload to Firebase failed (HTTP ' + res.status + '). Add Firebase DB secret in Graphs → Spike Vault if needed.';
+        updateCmdStepper('send_error', errMsg);
+        setCloudCmdStatus(errMsg, 'err');
+        pendingCmdId = '';
+        return false;
+      }
+      updateCmdStepper('sent', 'Uploaded to Firebase — waiting for ESP32 to pick it up (~5s)…');
+      if (cmdPollTimer) clearInterval(cmdPollTimer);
+      let polls = 0;
+      cmdPollTimer = setInterval(() => {
+        polls++;
+        fetchStatus();
+        if (polls >= 20){
+          clearInterval(cmdPollTimer);
+          cmdPollTimer = null;
+          if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
+          if (pendingCmdId){
+            updateCmdStepper('sent', 'Still queued in Firebase — ESP32 will apply it on its next wake/poll window.');
+          }
+        }
+      }, 1500);
+      return true;
+    } catch(err){
+      updateCmdStepper('send_error', 'Network error: ' + err.message);
+      setCloudCmdStatus('Command error: ' + err.message, 'err');
+      pendingCmdId = '';
+      return false;
+    }
+  }
+
+  function cloudSetPowerMode(mode){
+    sendCloudCommand({ action: 'setPowerMode', mode: mode }, 'Switching ESP32 to ' + mode + ' mode…');
+  }
+
+  function cloudAddWifi(){
+    const ssid = (document.getElementById('cw-ssid').value || '').trim();
+    const pass = document.getElementById('cw-pass').value || '';
+    if (!ssid){ setCloudCmdStatus('Enter a WiFi SSID first.', 'err'); return; }
+    sendCloudCommand({ action: 'addWifi', ssid: ssid, password: pass }, 'Saving WiFi "' + ssid + '" to ESP32…');
+    document.getElementById('cw-ssid').value = '';
+    document.getElementById('cw-pass').value = '';
+  }
+
+  function cloudRemoveWifi(ssid){
+    if (!confirm('Remove saved WiFi "' + ssid + '" from the ESP32?')) return;
+    sendCloudCommand({ action: 'removeWifi', ssid: ssid }, 'Removing "' + ssid + '"…');
+  }
+
+  function cloudSetPreferredWifi(ssid){
+    sendCloudCommand({ action: 'setPreferredWifi', ssid: ssid }, ssid ? ('Setting Preferred WiFi to "' + ssid + '"…') : 'Clearing Preferred WiFi…');
+  }
+
+  function cloudFlashLatestOta(){
+    if (!latestBinUrl) return;
+    if (!confirm('Tell the ESP32 to download and flash the latest firmware over the cloud now?')) return;
+    sendCloudCommand({ action: 'otaUrl', url: latestBinUrl }, 'Triggering remote Cloud OTA flash (~20–30s)…');
+  }
+
+  function confirmCloudReboot(){
+    if (!confirm('Reboot the ESP32 remotely now?')) return;
+    sendCloudCommand({ action: 'reboot' }, 'Sending reboot command to ESP32…');
   }
 
   async function fetchStatus(){
@@ -3834,9 +4348,11 @@
   // ---------- Firmware / OTA (2-repo GitHub Actions integration) ----------
   function updateOtaButtons(){
     const flashBtn = document.getElementById('btn-flash-esp');
+    const cloudBtn = document.getElementById('btn-cloud-ota');
     const copyBtn = document.getElementById('btn-copy-bin');
     if (copyBtn) copyBtn.disabled = !latestBinUrl;
     if (flashBtn) flashBtn.disabled = !(latestBinUrl && lastKnownDeviceIp);
+    if (cloudBtn) cloudBtn.disabled = !latestBinUrl;
   }
 
   async function fetchFirmwareInfo(){
