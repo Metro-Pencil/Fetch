@@ -112,6 +112,14 @@ const char* powerModeName(PowerMode mode);
 const char* powerModeLabel(PowerMode mode);
 void applyWifiRadioProfileLocked(PowerMode mode);
 void applyPowerMode(PowerMode newMode, bool publishStatus);
+String buildHealthJson();
+WifiSaveResult addOrUpdateWifiNetwork(const String& ssid, const String& password,
+                                      const String& ipStr, const String& gwStr,
+                                      const String& snStr, const String& dnsStr);
+bool removeWifiNetworkByIndex(int index, String& outRemovedSsid);
+bool savePreferredWifi(const String& ssid);
+bool performOtaFromUrl(const String& url, String& errOut);
+bool publishStatusToFirebase();
 String jsonEscape(const String& s);
 bool isValidSsid(const String& ssid);
 bool checkInternetReachable();
@@ -188,7 +196,7 @@ const unsigned long HIGH_POWER_SLEEP_MS       = 1800000UL;    // 30 min WiFi-off
 const unsigned long HIGH_POWER_WAKE_WINDOW_MS = 60000UL;      // 60 s WiFi-on sync & web-UI window in High Power Saving
 const int           DRAIN_BATCH_SIZE        = 5;            // upload at most this many queued readings per attempt
 const unsigned long MIN_VALID_EPOCH         = 1600000000UL; // sanity floor for "is the system clock actually set" (RTC or NTP)
-const size_t        MAX_QUEUE_BYTES         = 120000;       // ~120 KB safety cap (fits comfortably in 190 KB min_spiffs LittleFS)
+const size_t        MAX_QUEUE_BYTES         = 500000;       // ~500 KB safety cap (~15+ days at 1/min inside 640 KB LittleFS)
 // ---------------- Button timing (ms) ----------------
 const unsigned long DEBOUNCE_MS            = 50;
 const unsigned long LONG_PRESS_MS          = 1000; // hold-to-power-save
@@ -1419,6 +1427,12 @@ void connectWiFi() {
 String lastConnectedSSID = "";
 String lastPublishedIp = "";
 volatile bool forceWifiSetupReset = false;
+volatile bool restartWebServerRequested = false;
+String lastProcessedCmdId = "";
+String lastCmdResult = "";
+String lastCmdStage = "idle";
+String cloudOtaState = "idle";
+String cloudOtaMsg = "";
 bool staticIpWasActive = false;
 
 bool onNetworkConnected() {
@@ -1493,6 +1507,7 @@ bool onNetworkConnected() {
   }
 
   lastPublishedIp = WiFi.localIP().toString();
+  restartWebServerRequested = true;
   return true;
 }
 
@@ -1564,6 +1579,57 @@ bool checkInternetReachable() {
   return ok;
 }
 
+String buildStorageJson() {
+  unsigned long flashKb   = (unsigned long)(ESP.getFlashChipSize() / 1024UL);
+  unsigned long sketchKb  = (unsigned long)(ESP.getSketchSize() / 1024UL);
+  unsigned long otaSlotKb = (unsigned long)(ESP.getFreeSketchSpace() / 1024UL);
+  unsigned long fsTotalB  = fsReady ? (unsigned long)LittleFS.totalBytes() : 0UL;
+  unsigned long fsUsedB   = fsReady ? (unsigned long)LittleFS.usedBytes()  : 0UL;
+  unsigned long pendB     = 0UL;
+  unsigned long pendLines = 0UL;
+  unsigned long wifiB     = 0UL;
+
+  if (fsReady) {
+    if (LittleFS.exists(QUEUE_FILE)) {
+      File f = LittleFS.open(QUEUE_FILE, "r");
+      if (f) {
+        pendB = (unsigned long)f.size();
+        while (f.available()) {
+          if (f.read() == '\n') pendLines++;
+        }
+        f.close();
+      }
+    }
+    if (LittleFS.exists(WIFI_FILE)) {
+      File wf = LittleFS.open(WIFI_FILE, "r");
+      if (wf) {
+        wifiB = (unsigned long)wf.size();
+        wf.close();
+      }
+    }
+  }
+
+  unsigned long heapTotalKb = (unsigned long)(ESP.getHeapSize() / 1024UL);
+  unsigned long heapFreeKb  = (unsigned long)(ESP.getFreeHeap() / 1024UL);
+  unsigned long heapMinKb   = (unsigned long)(ESP.getMinFreeHeap() / 1024UL);
+
+  String j = "{";
+  j += "\"flashKb\":" + String(flashKb) + ",";
+  j += "\"sketchKb\":" + String(sketchKb) + ",";
+  j += "\"otaSlotKb\":" + String(otaSlotKb) + ",";
+  j += "\"fsTotalBytes\":" + String(fsTotalB) + ",";
+  j += "\"fsUsedBytes\":" + String(fsUsedB) + ",";
+  j += "\"queueCapBytes\":" + String((unsigned long)MAX_QUEUE_BYTES) + ",";
+  j += "\"pendingBytes\":" + String(pendB) + ",";
+  j += "\"pendingCount\":" + String(pendLines) + ",";
+  j += "\"wifiBytes\":" + String(wifiB) + ",";
+  j += "\"heapTotalKb\":" + String(heapTotalKb) + ",";
+  j += "\"heapFreeKb\":" + String(heapFreeKb) + ",";
+  j += "\"heapMinFreeKb\":" + String(heapMinKb);
+  j += "}";
+  return j;
+}
+
 bool publishStatusToFirebase() {
   if (WiFi.status() != WL_CONNECTED) return false;
   IPAddress ip = WiFi.localIP();
@@ -1582,12 +1648,41 @@ bool publishStatusToFirebase() {
   time_t nowSec = time(nullptr);
   unsigned long lastSeen = ((unsigned long)nowSec >= MIN_VALID_EPOCH) ? (unsigned long)nowSec : 0;
 
+  String wifiListJson = "[";
+  String prefCopy = "";
+  if (wifiNetworksMutex == NULL || xSemaphoreTake(wifiNetworksMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+    prefCopy = preferredWifiSsid;
+    for (size_t i = 0; i < wifiNetworks.size(); i++) {
+      if (i > 0) wifiListJson += ",";
+      bool hasStatic = (wifiNetworks[i].staticIP != IPAddress(0, 0, 0, 0));
+      wifiListJson += "{\"ssid\":\"" + jsonEscape(wifiNetworks[i].ssid) +
+                      "\",\"ip\":\"" + (hasStatic ? wifiNetworks[i].staticIP.toString() : String("")) + "\"}";
+    }
+    if (wifiNetworksMutex != NULL) xSemaphoreGive(wifiNetworksMutex);
+  }
+  wifiListJson += "]";
+
+  String otaUrlCopy = "";
+  if (settingsMutex == NULL || xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+    otaUrlCopy = currentOtaBinUrl;
+    if (settingsMutex != NULL) xSemaphoreGive(settingsMutex);
+  }
+
   String payload = "{\"ip\":\"" + ip.toString() +
                     "\",\"ssid\":\"" + jsonEscape(WiFi.SSID()) +
                     "\",\"fsOk\":" + (fsReady ? "true" : "false") +
                     ",\"internetOk\":true" +
                     ",\"lastSeen\":" + String(lastSeen) +
-                    ",\"powerMode\":\"" + String(powerModeName(powerMode)) + "\"}";
+                    ",\"powerMode\":\"" + String(powerModeName(powerMode)) +
+                    "\",\"lastCmdId\":\"" + jsonEscape(lastProcessedCmdId) +
+                    "\",\"lastCmdStage\":\"" + jsonEscape(lastCmdStage) +
+                    "\",\"lastCmdResult\":\"" + jsonEscape(lastCmdResult) +
+                    "\",\"ota\":{\"state\":\"" + jsonEscape(cloudOtaState) +
+                    "\",\"msg\":\"" + jsonEscape(cloudOtaMsg) +
+                    "\",\"url\":\"" + jsonEscape(otaUrlCopy) +
+                    "\"},\"wifi\":{\"preferred\":\"" + jsonEscape(prefCopy) +
+                    "\",\"networks\":" + wifiListJson +
+                    "},\"health\":" + buildHealthJson() + ",\"storage\":" + buildStorageJson() + "}";
 
   if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
     Serial.println("Failed to publish status to Firebase (TLS busy)");
@@ -1619,6 +1714,212 @@ bool publishStatusToFirebase() {
   Serial.println("Failed to publish status to Firebase (HTTP " + String(code) + ")");
   return false;
 }
+
+// Extracts a string or bare primitive value for `"key":...` from a flat JSON object.
+String jsonExtractField(const String& json, const char* key) {
+  String pat = String("\"") + key + "\"";
+  int pos = json.indexOf(pat);
+  if (pos < 0) return "";
+  pos = json.indexOf(':', pos + pat.length());
+  if (pos < 0) return "";
+  pos++;
+  while (pos < (int)json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) pos++;
+  if (pos >= (int)json.length()) return "";
+  if (json[pos] == '"') {
+    pos++;
+    String out;
+    while (pos < (int)json.length()) {
+      char c = json[pos++];
+      if (c == '\\' && pos < (int)json.length()) {
+        char n = json[pos++];
+        if (n == 'n') out += '\n';
+        else if (n == 'r') out += '\r';
+        else if (n == 't') out += '\t';
+        else out += n;
+      } else if (c == '"') {
+        break;
+      } else {
+        out += c;
+      }
+    }
+    return out;
+  }
+  int end = pos;
+  while (end < (int)json.length() && json[end] != ',' && json[end] != '}' && json[end] != ' ' && json[end] != '\r' && json[end] != '\n') end++;
+  String raw = json.substring(pos, end);
+  if (raw == "null") return "";
+  return raw;
+}
+
+void pollAndHandleFirebaseCommand() {
+  if (otaInProgress || WiFi.status() != WL_CONNECTED) return;
+  if (WiFi.localIP() == IPAddress(0, 0, 0, 0)) return;
+
+  String fbHost, fbAuth;
+  if (xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(500)) != pdTRUE) return;
+  fbHost = currentFirebaseHost;
+  fbAuth = currentFirebaseAuth;
+  xSemaphoreGive(settingsMutex);
+  if (fbHost.length() == 0) return;
+
+  String url = "https://" + fbHost + "/cmd.json";
+  if (fbAuth.length() > 0) url += "?auth=" + fbAuth;
+
+  if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(3000)) != pdTRUE) return;
+  String body = "";
+  int code = -1;
+  {
+    WiFiClientSecure client;
+    configureSecureClient(client);
+    client.setTimeout(6);
+    HTTPClient http;
+    http.setConnectTimeout(5000);
+    http.setTimeout(6000);
+    if (http.begin(client, url)) {
+      code = http.GET();
+      if (code == 200) body = http.getString();
+      http.end();
+    }
+  }
+  if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+
+  body.trim();
+  if (code != 200 || body.length() < 4 || body == "null") return;
+
+  String cmdId  = jsonExtractField(body, "id");
+  String action = jsonExtractField(body, "action");
+  if (action.length() == 0 || (cmdId.length() > 0 && cmdId == lastProcessedCmdId)) return;
+
+  // Clear /cmd.json immediately so a reboot or retry never executes the same command twice.
+  if (tlsMutex == NULL || xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(5000)) == pdTRUE) {
+    WiFiClientSecure client;
+    configureSecureClient(client);
+    client.setTimeout(6);
+    HTTPClient http;
+    http.setConnectTimeout(5000);
+    http.setTimeout(6000);
+    if (http.begin(client, url)) {
+      http.sendRequest("DELETE");
+      http.end();
+    }
+    if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+  }
+
+  lastProcessedCmdId = cmdId.length() > 0 ? cmdId : String(millis());
+  lastCmdStage = "received";
+  lastCmdResult = "ESP32 received '" + action + "' -- applying...";
+  Serial.println("[CloudCmd] Executing action=" + action + " id=" + lastProcessedCmdId);
+  publishStatusToFirebase(); // Stage 2 ACK: ESP32 received command
+
+  if (action == "setPowerMode") {
+    String m = jsonExtractField(body, "mode");
+    m.toLowerCase();
+    PowerMode target = POWER_NORMAL;
+    bool valid = true;
+    if (m == "normal") target = POWER_NORMAL;
+    else if (m == "low") target = POWER_LOW;
+    else if (m == "medium") target = POWER_MEDIUM;
+    else if (m == "high") target = POWER_HIGH;
+    else valid = false;
+    if (valid) {
+      applyPowerMode(target, false);
+      lastCmdStage = "completed";
+      lastCmdResult = "Power mode set to " + String(powerModeName(target));
+    } else {
+      lastCmdStage = "error";
+      lastCmdResult = "Invalid power mode: " + m;
+    }
+    publishStatusToFirebase();
+  } else if (action == "addWifi") {
+    String ssid = jsonExtractField(body, "ssid");
+    String pass = jsonExtractField(body, "password");
+    String ipS  = jsonExtractField(body, "ip");
+    String gwS  = jsonExtractField(body, "gateway");
+    String snS  = jsonExtractField(body, "subnet");
+    String dnsS = jsonExtractField(body, "dns");
+    WifiSaveResult r = addOrUpdateWifiNetwork(ssid, pass, ipS, gwS, snS, dnsS);
+    if (r == WIFI_SAVE_ADDED) { lastCmdStage = "completed"; lastCmdResult = "Added WiFi '" + ssid + "'"; }
+    else if (r == WIFI_SAVE_UPDATED) { lastCmdStage = "completed"; lastCmdResult = "Updated WiFi '" + ssid + "' (reboot to apply password/IP)"; }
+    else if (r == WIFI_SAVE_LIMIT_REACHED) { lastCmdStage = "error"; lastCmdResult = "WiFi list is full"; }
+    else { lastCmdStage = "error"; lastCmdResult = "Invalid WiFi settings for '" + ssid + "'"; }
+    publishStatusToFirebase();
+  } else if (action == "removeWifi") {
+    String targetSsid = jsonExtractField(body, "ssid");
+    int idx = -1;
+    if (wifiNetworksMutex == NULL || xSemaphoreTake(wifiNetworksMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      for (size_t i = 0; i < wifiNetworks.size(); i++) {
+        if (wifiNetworks[i].ssid == targetSsid) { idx = (int)i; break; }
+      }
+      if (wifiNetworksMutex != NULL) xSemaphoreGive(wifiNetworksMutex);
+    }
+    String removed;
+    if (idx >= 0 && removeWifiNetworkByIndex(idx, removed)) {
+      lastCmdStage = "completed";
+      lastCmdResult = "Removed WiFi '" + removed + "'";
+    } else {
+      lastCmdStage = "error";
+      lastCmdResult = "WiFi '" + targetSsid + "' not found";
+    }
+    publishStatusToFirebase();
+  } else if (action == "setPreferredWifi") {
+    String pref = jsonExtractField(body, "ssid");
+    if (savePreferredWifi(pref)) {
+      lastCmdStage = "completed";
+      lastCmdResult = pref.length() ? ("Preferred WiFi set to '" + pref + "'") : "Preferred WiFi cleared";
+    } else {
+      lastCmdStage = "error";
+      lastCmdResult = "Failed to save Preferred WiFi";
+    }
+    publishStatusToFirebase();
+  } else if (action == "otaUrl") {
+    String otaUrl = jsonExtractField(body, "url");
+    if (!otaUrl.startsWith("https://") && !otaUrl.startsWith("http://")) {
+      cloudOtaState = "error";
+      cloudOtaMsg = "Invalid OTA URL";
+      lastCmdResult = cloudOtaMsg;
+      publishStatusToFirebase();
+      return;
+    }
+    cloudOtaState = "running";
+    cloudOtaMsg = "Downloading & flashing firmware...";
+    lastCmdResult = cloudOtaMsg;
+    publishStatusToFirebase();
+
+    String err;
+    bool ok = performOtaFromUrl(otaUrl, err);
+    if (ok) {
+      cloudOtaState = "ok";
+      cloudOtaMsg = "Flash complete -- rebooting now";
+      lastCmdStage = "completed";
+      lastCmdResult = cloudOtaMsg;
+      publishStatusToFirebase();
+      digitalWrite(LED_PIN, HIGH);
+      delay(5000);
+      ESP.restart();
+    } else {
+      cloudOtaState = "error";
+      cloudOtaMsg = "OTA failed: " + err;
+      lastCmdStage = "error";
+      lastCmdResult = cloudOtaMsg;
+      publishStatusToFirebase();
+    }
+  } else if (action == "reboot") {
+    lastCmdStage = "completed";
+    lastCmdResult = "Rebooting ESP32...";
+    publishStatusToFirebase();
+    delay(400);
+    ESP.restart();
+  } else if (action == "refreshStatus") {
+    lastCmdStage = "completed";
+    lastCmdResult = "Health & storage refreshed";
+    publishStatusToFirebase();
+  } else {
+    lastCmdStage = "error";
+    lastCmdResult = "Unknown command: " + action;
+    publishStatusToFirebase();
+  }
+}
+
 
 // Sends one reading to Firebase. Returns the HTTP status code (200 = success;
 // <=0 = transport/connection failure). Returning the code, not just a bool,
@@ -3098,6 +3399,7 @@ void wifiMaintenanceTask(void* param) {
   unsigned long lastPreferredScanMs = 0;
   int consecutiveNetFailures = 0;
   int consecutiveDisconnectTries = 0;
+  unsigned long lastCmdPollMs = 0;
 
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -3105,6 +3407,12 @@ void wifiMaintenanceTask(void* param) {
     if (otaInProgress) continue;
 
     unsigned long now = millis();
+
+    // Poll Firebase /cmd.json every 5s for instant remote Dashboard commands.
+    if (WiFi.status() == WL_CONNECTED && (now - lastCmdPollMs >= 5000UL)) {
+      lastCmdPollMs = now;
+      pollAndHandleFirebaseCommand();
+    }
 
     // Handle async status publish / High Power Saving sleep handoff requested from Core 1.
     if (statusPublishRequested) {
@@ -3858,6 +4166,12 @@ void setup() {
 }
 
 void loop() {
+  if (restartWebServerRequested) {
+    restartWebServerRequested = false;
+    server.stop();
+    server.begin();
+    Serial.println("WebServer socket refreshed for current WiFi interface.");
+  }
   server.handleClient();
   handleButton();
   retryRtcIfNeeded();
