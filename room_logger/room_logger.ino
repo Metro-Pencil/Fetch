@@ -1600,8 +1600,8 @@ String buildStorageJson() {
         f.close();
       }
     }
-    if (LittleFS.exists(WIFI_FILE)) {
-      File wf = LittleFS.open(WIFI_FILE, "r");
+    if (LittleFS.exists(WIFI_CONFIG_FILE)) {
+      File wf = LittleFS.open(WIFI_CONFIG_FILE, "r");
       if (wf) {
         wifiB = (unsigned long)wf.size();
         wf.close();
