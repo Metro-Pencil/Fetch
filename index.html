@@ -706,9 +706,9 @@
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:68%;
     text-align:right;font-variant-numeric:tabular-nums;
   }
-  .chart-canvas-box{position:relative;height:420px;touch-action:none;}
+  .chart-canvas-box{position:relative;height:420px;touch-action:pan-y;}
   @media (min-width:600px){ .chart-canvas-box{height:540px;} }
-  .chart-canvas-box canvas{touch-action:none;}
+  .chart-canvas-box canvas{touch-action:pan-y;}
   .chart-stats-bar{
     display:flex;align-items:center;gap:12px;flex-wrap:wrap;
     margin:-2px 0 8px;font-family:var(--mono);font-size:10.5px;
@@ -1431,7 +1431,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.4.3</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px;vertical-align:middle;margin-left:6px;">v3.4.4</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -1529,7 +1529,7 @@
           </span>
         </button>
       </div>
-      <div class="ota-meta" id="app-ver-meta">Running <b>v3.4.3</b> · checking GitHub for updates…</div>
+      <div class="ota-meta" id="app-ver-meta">Running <b>v3.4.4</b> · checking GitHub for updates…</div>
       <div class="controls-row">
         <button class="btn-ghost" onclick="checkAppUpdate(true)">Check for App Update</button>
         <button class="btn-ghost" onclick="forceUpdateApp()">Force Refresh App</button>
@@ -1657,7 +1657,7 @@
   // from this on load. Still update the visible badge's fallback text too
   // (see comment near the top of the file) so it's correct even if someone
   // views the HTML without JS running.
-  const APP_VERSION = '3.4.3';
+  const APP_VERSION = '3.4.4';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   // ---------- tabs ----------
@@ -2256,7 +2256,7 @@
   }
 
   function getValidSorted(){
-    const raw = getSorted().filter(e => typeof e.epochMs === 'number');
+    const raw = getSorted().filter(e => typeof e.epochMs === 'number').sort((a, b) => a.epochMs - b.epochMs);
     scanAnomalies(raw);
     return raw.filter(e => {
       const rk = String(e.rawKey !== undefined ? e.rawKey : e.key);
@@ -3197,11 +3197,103 @@
     applyTheme(getActiveTheme() === 'atelier' ? 'obsidian' : 'atelier');
   }
 
+  // Smart mobile touch router (v3.4.4):
+  // - Inside chart.chartArea (plot box): full XY pan & pinch zoom (locks page scroll).
+  // - Outside chart.chartArea (axes/margins/day-night strip):
+  //     * Vertical drag  -> scrolls the PAGE vertically (blocks graph pan)
+  //     * Horizontal drag -> pans the GRAPH horizontally on X only (blocks page scroll)
+  function attachSmartChartTouch(chart){
+    const canvas = chart && chart.canvas;
+    if (!canvas || canvas._smartTouchBound) return;
+    canvas._smartTouchBound = true;
+
+    let mode = null; // 'inside' | 'outside-pending' | 'outside-v' | 'outside-h'
+    let startX = 0, startY = 0, lastX = 0;
+
+    function isInsidePlot(touch){
+      const rect = canvas.getBoundingClientRect();
+      const x = touch.clientX - rect.left;
+      const y = touch.clientY - rect.top;
+      const ca = chart.chartArea;
+      if (!ca) return true;
+      return x >= ca.left && x <= ca.right && y >= ca.top && y <= ca.bottom;
+    }
+
+    canvas.addEventListener('touchstart', function(e){
+      if (e.touches.length !== 1){
+        // Multi-touch pinch zoom always goes to Chart.js
+        mode = 'inside';
+        return;
+      }
+      const t = e.touches[0];
+      startX = lastX = t.clientX;
+      startY = t.clientY;
+      if (isInsidePlot(t)){
+        mode = 'inside';
+      } else {
+        mode = 'outside-pending';
+        // Keep Hammer/Chart.js from grabbing touches that start on the axis gutters
+        e.stopImmediatePropagation();
+      }
+    }, { capture: true, passive: false });
+
+    canvas.addEventListener('touchmove', function(e){
+      if (e.touches.length !== 1 || mode === 'inside'){
+        // Inside plot box or pinch-zooming: prevent page scroll so XY pan/zoom works cleanly
+        if (e.cancelable) e.preventDefault();
+        return;
+      }
+      const t = e.touches[0];
+      const dxTotal = t.clientX - startX;
+      const dyTotal = t.clientY - startY;
+
+      if (mode === 'outside-pending'){
+        if (Math.hypot(dxTotal, dyTotal) < 8){
+          e.stopImmediatePropagation();
+          return;
+        }
+        mode = (Math.abs(dyTotal) >= Math.abs(dxTotal)) ? 'outside-v' : 'outside-h';
+      }
+
+      if (mode === 'outside-v'){
+        // Vertical motion outside plot box -> native vertical page scroll, never pan graph
+        e.stopImmediatePropagation();
+        return;
+      }
+
+      if (mode === 'outside-h'){
+        // Horizontal motion outside plot box -> pan graph X-axis only, never scroll page
+        if (e.cancelable) e.preventDefault();
+        e.stopImmediatePropagation();
+        const stepX = t.clientX - lastX;
+        lastX = t.clientX;
+        if (stepX !== 0 && typeof chart.pan === 'function'){
+          chart.pan({ x: stepX, y: 0 }, undefined, 'none');
+          syncOtherChart({ chart });
+        }
+      }
+    }, { capture: true, passive: false });
+
+    function onTouchDone(e){
+      if (mode === 'outside-h'){
+        e.stopImmediatePropagation();
+        onViewChanged({ chart });
+      } else if (mode === 'outside-v' || mode === 'outside-pending'){
+        e.stopImmediatePropagation();
+      }
+      mode = null;
+    }
+    canvas.addEventListener('touchend', onTouchDone, { capture: true, passive: true });
+    canvas.addEventListener('touchcancel', onTouchDone, { capture: true, passive: true });
+  }
+
   function ensureChart(){
     if (chartTemp && chartHum) return;
     const pal = getChartThemePalette();
     chartTemp = buildSeriesChart('rt-chart-temp', pal.temp, pal.tempBg, 'Temperature', '°C', true, 'temp-readout');
     chartHum = buildSeriesChart('rt-chart-hum', pal.hum, pal.humBg, 'Humidity', '%RH', true, 'hum-readout');
+    attachSmartChartTouch(chartTemp);
+    attachSmartChartTouch(chartHum);
     updateChartsTheme();
   }
 
