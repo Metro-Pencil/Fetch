@@ -562,7 +562,7 @@
     --sans:'Inter', system-ui, sans-serif;
   }
   *,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-  html,body{margin:0;padding:0;overflow-x:hidden;overscroll-behavior-y:contain;}
+  html,body{margin:0;padding:0;overflow-x:clip;}
   body{
     background:
       radial-gradient(ellipse 900px 500px at 15% -10%, #14202b 0%, transparent 60%),
@@ -1647,7 +1647,6 @@
     border-radius: 24px;
     padding: 18px;
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-    contain: layout style;
   }
   [data-theme="kinetic"] .card h2 {
     font-family: var(--display);
@@ -2410,7 +2409,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.7.1</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.7.2</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -2818,11 +2817,11 @@
           <div class="card-head-toggle" style="margin-bottom:4px;">
             <h2>App Theme &amp; Updates</h2>
             <div class="card-head-meta">
-              <span class="minimal-pill-hint">v3.7.1</span>
+              <span class="minimal-pill-hint">v3.7.2</span>
               <span class="expand-chevron" aria-hidden="true">&#9662;</span>
             </div>
           </div>
-          <div class="ota-meta" id="app-ver-meta">Running <b>v3.7.1</b> · checking GitHub for updates…</div>
+          <div class="ota-meta" id="app-ver-meta">Running <b>v3.7.2</b> · checking GitHub for updates…</div>
           <div class="card-detail-drawer">
             <div class="card-detail-content">
               <div class="card-detail-inner-pad">
@@ -2919,7 +2918,7 @@
 </nav>
 
 <script>
-  const APP_VERSION = '3.7.1';
+  const APP_VERSION = '3.7.2';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   const VIEW_ORDER = ['dashboard', 'graphs', 'controls', 'system'];
