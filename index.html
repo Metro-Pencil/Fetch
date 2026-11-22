@@ -2362,6 +2362,29 @@
     .cream-actions { flex-direction: column; align-items: stretch; }
   }
 
+
+  /* ---------- Battery Run & Telemetry Card (v3.8.0) ---------- */
+  .telem-top-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .telem-pack-row {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 10px;
+  }
+  .telem-pack-row input[type=number] {
+    width: 82px; min-height: 36px; padding: 5px 8px; font-size: 12px;
+  }
+  .telem-reset-list {
+    display: flex; flex-direction: column; gap: 6px; margin-top: 8px;
+  }
+  .telem-reset-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 7px 10px; border-radius: 10px; background: var(--panel);
+    border: 1px solid var(--border); font-family: var(--mono); font-size: 11px; color: var(--text);
+  }
+  .telem-reset-item span:last-child { color: var(--muted); font-size: 10.5px; }
+
 </style>
 </head>
 <body>
@@ -2409,7 +2432,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.7.2</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.8.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -2817,11 +2840,11 @@
           <div class="card-head-toggle" style="margin-bottom:4px;">
             <h2>App Theme &amp; Updates</h2>
             <div class="card-head-meta">
-              <span class="minimal-pill-hint">v3.7.2</span>
+              <span class="minimal-pill-hint">v3.8.0</span>
               <span class="expand-chevron" aria-hidden="true">&#9662;</span>
             </div>
           </div>
-          <div class="ota-meta" id="app-ver-meta">Running <b>v3.7.2</b> · checking GitHub for updates…</div>
+          <div class="ota-meta" id="app-ver-meta">Running <b>v3.8.0</b> · checking GitHub for updates…</div>
           <div class="card-detail-drawer">
             <div class="card-detail-content">
               <div class="card-detail-inner-pad">
@@ -2878,6 +2901,26 @@
       <div class="section-stack">
         <div class="card">
           <div class="card-head-toggle">
+            <h2>Battery Run &amp; Telemetry</h2>
+            <div class="card-head-meta">
+              <span class="status-pill" id="telem-state-pill">Off</span>
+            </div>
+          </div>
+          <div class="ota-meta" id="telem-meta">Turn tracking ON when running on battery and OFF while charging. Stats persist across power modes &amp; brownouts.</div>
+          <div class="controls-row" style="margin-top:10px;">
+            <button type="button" class="btn-primary" id="btn-telem-toggle" onclick="cloudToggleTelemetry()">Start Battery Tracking</button>
+            <button type="button" class="btn-ghost" onclick="cloudResetTelemetry()">Reset Run</button>
+          </div>
+          <div class="storage-bars" id="cloud-telemetry-body" style="margin-top:12px;"></div>
+          <div class="telem-pack-row">
+            <label for="pack-mah-input" style="margin:0;">Battery pack (mAh @ 3.7V):</label>
+            <input type="number" id="pack-mah-input" min="300" max="20000" step="100" value="2400" onchange="savePackMah()">
+            <span id="pack-usable-hint">~1440 mAh @ 5.12V</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head-toggle">
             <h2>ESP32 Storage &amp; RAM</h2>
             <div class="card-head-meta">
               <span class="minimal-pill-hint" id="system-minimal-summary">Tap bars for details</span>
@@ -2918,7 +2961,7 @@
 </nav>
 
 <script>
-  const APP_VERSION = '3.7.2';
+  const APP_VERSION = '3.8.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   const VIEW_ORDER = ['dashboard', 'graphs', 'controls', 'system'];
@@ -4193,6 +4236,137 @@
     return (b / (1024 * 1024)).toFixed(2) + ' MB';
   }
 
+  // ---------- Battery Run & Telemetry UI (v3.8.0) ----------
+  const PACK_MAH_LS = 'rl_pack_mah';
+  let lastTelemEnabled = false;
+
+  function getPackMah(){
+    try {
+      const v = Number(localStorage.getItem(PACK_MAH_LS));
+      if (v >= 300 && v <= 20000) return v;
+    } catch(e) {}
+    return 2400; // 2x 1200 mAh Hongli parallel default
+  }
+
+  function savePackMah(){
+    const el = document.getElementById('pack-mah-input');
+    if (!el) return;
+    const v = Math.max(300, Math.min(20000, Number(el.value) || 2400));
+    el.value = v;
+    try { localStorage.setItem(PACK_MAH_LS, String(v)); } catch(e) {}
+    if (lastFetchedStatus) renderTelemetryCard(lastFetchedStatus.telemetry, lastFetchedStatus.powerMode);
+  }
+
+  function fmtDurShort(sec){
+    sec = Math.max(0, Math.floor(Number(sec || 0)));
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    if (d > 0) return d + 'd ' + h + 'h ' + m + 'm';
+    if (h > 0) return h + 'h ' + m + 'm';
+    if (m > 0) return m + 'm ' + s + 's';
+    return s + 's';
+  }
+
+  function renderTelemetryCard(t, activePowerMode){
+    const body = document.getElementById('cloud-telemetry-body');
+    const pill = document.getElementById('telem-state-pill');
+    const btn  = document.getElementById('btn-telem-toggle');
+    const hint = document.getElementById('pack-usable-hint');
+    const inp  = document.getElementById('pack-mah-input');
+    const packMah = getPackMah();
+    if (inp && document.activeElement !== inp) inp.value = packMah;
+    // 3.7V -> 5.12V via MT3608 (~83% efficiency)
+    const usable5vMah = Math.round(packMah * (3.7 / 5.12) * 0.83);
+    if (hint) hint.textContent = '~' + usable5vMah + ' mAh usable @ 5.12V';
+    if (!body) return;
+
+    if (!t){
+      if (pill){ pill.textContent = 'Update FW'; pill.className = 'status-pill warn'; }
+      body.innerHTML = '<div class="ota-meta">Flash v3.8.0 firmware to enable uptime, crash log, WiFi connect duration, and battery-run tracking.</div>';
+      return;
+    }
+
+    lastTelemEnabled = !!t.enabled;
+    if (pill){
+      pill.textContent = t.enabled ? 'Tracking ON' : 'Paused';
+      pill.className = 'status-pill ' + (t.enabled ? 'ok' : 'warn');
+    }
+    if (btn){
+      btn.textContent = t.enabled ? 'Pause Tracking (Charging)' : 'Start Battery Tracking';
+    }
+
+    // Estimated mA draw @ 5.12V rail per power mode
+    const MA = { normal: 130, low: 72, medium: 57, high: 38 };
+    const usedMah =
+      ((t.normalSec || 0) / 3600) * MA.normal +
+      ((t.lowSec    || 0) / 3600) * MA.low +
+      ((t.mediumSec || 0) / 3600) * MA.medium +
+      ((t.highSec   || 0) / 3600) * MA.high;
+    const pctLeft = Math.max(0, Math.min(100, Math.round((1 - usedMah / Math.max(1, usable5vMah)) * 100)));
+    const avgMa = (t.sessionUptimeSec > 0) ? (usedMah / (t.sessionUptimeSec / 3600)) : 0;
+    const curMode = String(activePowerMode || 'normal').toLowerCase();
+    const curDraw = MA[curMode] || MA.normal;
+    const remHours = Math.max(0, (usable5vMah - usedMah) / curDraw);
+
+    const wifiTotal = (t.wifiConnSec || 0) + (t.wifiDiscSec || 0);
+    const wifiPct = wifiTotal > 0 ? Math.round(((t.wifiConnSec || 0) / wifiTotal) * 100) : 100;
+    const avgConnStr = t.avgWifiConnMs ? ((t.avgWifiConnMs / 1000).toFixed(1) + 's') : '—';
+
+    let resetRowsHtml = '';
+    if (t.resetLog){
+      const items = String(t.resetLog).split('|').filter(Boolean);
+      resetRowsHtml = '<div class="telem-reset-list">' + items.map(entry => {
+        const parts = entry.split('@');
+        const reason = parts[0] || 'Unknown';
+        const ep = Number(parts[1] || 0);
+        const when = ep > 1600000000 ? formatFull(ep * 1000, true) : 'pre-NTP';
+        return '<div class="telem-reset-item"><span>' + escapeHtml(reason) + '</span><span>' + escapeHtml(when) + '</span></div>';
+      }).join('') + '</div>';
+    }
+
+    body.innerHTML =
+      '<div class="storage-block">' +
+        '<div class="storage-row-head"><span>Estimated Battery Remaining</span>' +
+        '<span class="storage-row-val">' + pctLeft + '% · ~' + remHours.toFixed(1) + 'h left (' + curMode + ')</span></div>' +
+        '<div class="storage-track"><div class="storage-fill ram" style="width:' + pctLeft + '%"></div></div>' +
+        '<div class="storage-sub-grid">' +
+          '<div class="storage-mini"><div class="storage-mini-label">Tracked Run Uptime</div><div class="storage-mini-val">' + fmtDurShort(t.sessionUptimeSec) + '</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">Current Boot Uptime</div><div class="storage-mini-val">' + fmtDurShort(t.bootUptimeSec) + '</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">Est. Used / Avg Draw</div><div class="storage-mini-val">' + Math.round(usedMah) + ' mAh · ' + (avgMa ? Math.round(avgMa) + ' mA' : '—') + '</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">Boots / Crashes</div><div class="storage-mini-val">' + (t.bootCount || 0) + ' / ' + (t.crashCount || 0) + ' (' + escapeHtml(t.lastReset || '—') + ')</div></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="storage-block">' +
+        '<div class="storage-row-head"><span>Time by Power Mode &amp; WiFi</span>' +
+        '<span class="storage-row-val">WiFi up ' + wifiPct + '% · avg join ' + avgConnStr + '</span></div>' +
+        '<div class="storage-sub-grid">' +
+          '<div class="storage-mini"><div class="storage-mini-label">Normal (240 MHz)</div><div class="storage-mini-val">' + fmtDurShort(t.normalSec) + '</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">Low Power</div><div class="storage-mini-val">' + fmtDurShort(t.lowSec) + '</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">Medium Power</div><div class="storage-mini-val">' + fmtDurShort(t.mediumSec) + '</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">High Power</div><div class="storage-mini-val">' + fmtDurShort(t.highSec) + '</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">WiFi Connected</div><div class="storage-mini-val">' + fmtDurShort(t.wifiConnSec) + ' (' + (t.wifiReconnects || 0) + ' joins)</div></div>' +
+          '<div class="storage-mini"><div class="storage-mini-label">WiFi Disconnected</div><div class="storage-mini-val">' + fmtDurShort(t.wifiDiscSec) + '</div></div>' +
+        '</div>' +
+        (resetRowsHtml ? ('<details class="ota-details" style="margin-top:10px;padding-top:8px;"><summary>Recent Reset &amp; Crash Log</summary>' + resetRowsHtml + '</details>') : '') +
+      '</div>';
+  }
+
+  function cloudToggleTelemetry(){
+    const nextEn = !lastTelemEnabled;
+    sendCloudCommand(
+      { action: 'setTelemetry', enabled: nextEn ? '1' : '0' },
+      nextEn ? 'Turning battery telemetry ON…' : 'Pausing battery telemetry…',
+      document.getElementById('btn-telem-toggle')
+    );
+  }
+
+  function cloudResetTelemetry(){
+    if (!confirm('Reset all battery-run uptime, power-mode, WiFi, and crash counters to 0?')) return;
+    sendCloudCommand({ action: 'resetTelemetry' }, 'Resetting battery-run counters…');
+  }
+
   function renderStorageCard(st){
     const body = document.getElementById('cloud-storage-body');
     const sumEl = document.getElementById('system-minimal-summary');
@@ -4340,6 +4514,7 @@
       otaStEl.innerHTML = 'ESP32 OTA status: <b>' + escapeHtml(status.ota.state || 'idle') + '</b> — ' + escapeHtml(status.ota.msg);
     }
 
+    renderTelemetryCard(status && status.telemetry, status && status.powerMode);
     renderStorageCard(status && status.storage);
     renderMinimalSummaries(status);
 
