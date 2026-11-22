@@ -119,7 +119,8 @@ WifiSaveResult addOrUpdateWifiNetwork(const String& ssid, const String& password
                                       const String& snStr, const String& dnsStr);
 bool removeWifiNetworkByIndex(int index, String& outRemovedSsid);
 bool savePreferredWifi(const String& ssid);
-bool performOtaFromUrl(const String& url, String& errOut);
+void otaStreamLog(const String& msg, bool streamToHttp = true);
+bool performOtaFromUrl(const String& url, String& errOut, bool streamToHttp = false);
 bool publishStatusToFirebase();
 String jsonEscape(const String& s);
 bool isValidSsid(const String& ssid);
@@ -3033,7 +3034,7 @@ void saveOtaBinUrl(const String& url) {
   }
 }
 
-void otaStreamLog(const String& msg, bool streamToHttp = true) {
+void otaStreamLog(const String& msg, bool streamToHttp) {
   Serial.println(msg);
   if (streamToHttp) {
     server.sendContent(msg + "\n");
@@ -3042,7 +3043,7 @@ void otaStreamLog(const String& msg, bool streamToHttp = true) {
 
 // Downloads a compiled .bin from an https:// URL, flashes via Update.h, blinks
 // the blue LED every 200ms, and optionally streams live status lines to Core 1 HTTP.
-bool performOtaFromUrl(const String& url, String& errOut, bool streamToHttp = false) {
+bool performOtaFromUrl(const String& url, String& errOut, bool streamToHttp) {
   if (!url.startsWith("https://") || url.length() > 256 || url.indexOf(' ') >= 0) {
     errOut = "URL must start with https:// and contain no spaces.";
     otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
