@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Room Logger — Dashboard</title>
 
 <!-- PWA: manifest + icons + iOS's separate (non-manifest-based) install tags -->
@@ -537,10 +537,10 @@
   for a real caveat in how deep history can be loaded with this schema.
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="preload" as="image" href="bg-backdrop.jpg">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.2.0/chartjs-plugin-zoom.min.js"></script>
 <style>
 
   :root{
@@ -1513,32 +1513,39 @@
   }
   .storage-row-head {
     display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    flex-wrap: wrap; row-gap: 4px;
     font-family: var(--sans); font-size: 12.5px; font-weight: 600; color: var(--text);
   }
   .storage-row-val {
     font-family: var(--mono); font-size: 11px; color: var(--muted);
-    font-variant-numeric: tabular-nums;
+    font-variant-numeric: tabular-nums; margin-left: auto; text-align: right;
   }
   .storage-track {
     width: 100%; height: 8px; border-radius: 9999px; background: var(--panel);
     border: 1px solid var(--border); overflow: hidden; margin-top: 8px;
   }
   .storage-fill {
-    height: 100%; border-radius: 9999px; background: var(--temp);
-    transition: width 300ms ease-out;
+    height: 100%; width: 100%; border-radius: 9999px; background: var(--temp);
+    transform-origin: left center;
+    transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .storage-fill.fs { background: var(--hum); }
   .storage-fill.ram { background: var(--ok); }
   .storage-sub-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(145px, 100%), 1fr));
     gap: 8px; margin-top: 10px;
   }
   .storage-mini {
     background: var(--panel); border: 1px solid var(--border);
     border-radius: 10px; padding: 8px 10px; font-family: var(--mono);
+    min-width: 0;
   }
+  .storage-mini.span-full { grid-column: 1 / -1; }
   .storage-mini-label { font-size: 10px; color: var(--muted); }
-  .storage-mini-val { font-size: 12px; font-weight: 600; color: var(--text); margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .storage-mini-val {
+    font-size: 12px; font-weight: 600; color: var(--text); margin-top: 2px;
+    font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+  }
   [data-theme="atelier"] .cmd-stepper,
   [data-theme="atelier"] .storage-block { border-radius: 16px; }
 
@@ -1582,23 +1589,18 @@
   [data-theme="obsidian"] .ambient-stage { opacity: 0.18; }
   [data-theme="kinetic"] .ambient-stage { opacity: 1; }
 
-  /* Single GPU-cached static ambient layer (rasterized once, zero per-frame blur stalls) */
+  /* Pre-blurred static ambient layer (zero runtime CSS filter blur stalls) */
   .ambient-layer {
     position: absolute;
-    inset: -10%;
+    inset: 0;
     background-image: url('bg-backdrop.jpg');
     background-size: cover;
     background-position: center;
     contain: strict;
   }
   .ambient-layer.base {
-    filter: blur(14px) saturate(1.35) contrast(1.08) brightness(0.72);
     opacity: 0.92;
     transform: translateZ(0);
-  }
-  .ambient-layer.flow,
-  .ambient-layer.matrix {
-    display: none;
   }
   .ambient-vignette {
     position: absolute;
@@ -1606,23 +1608,6 @@
     background:
       radial-gradient(ellipse 85% 55% at 50% 15%, rgba(8, 10, 14, 0.20) 0%, rgba(6, 8, 11, 0.72) 100%),
       linear-gradient(180deg, rgba(6, 8, 11, 0.28) 0%, rgba(6, 8, 11, 0.58) 55%, rgba(6, 8, 11, 0.86) 100%);
-  }
-
-  @keyframes amDriftA {
-    0%   { transform: translate3d(-6%, -4%, 0) scale(1.16) rotate(0deg); }
-    33%  { transform: translate3d(5%, -7%, 0) scale(1.28) rotate(8deg); }
-    66%  { transform: translate3d(7%, 6%, 0) scale(1.22) rotate(-6deg); }
-    100% { transform: translate3d(-5%, 5%, 0) scale(1.32) rotate(12deg); }
-  }
-  @keyframes amDriftB {
-    0%   { transform: translate3d(7%, 5%, 0) scale(1.26) rotate(180deg); }
-    50%  { transform: translate3d(-8%, 2%, 0) scale(1.38) rotate(155deg); }
-    100% { transform: translate3d(4%, -8%, 0) scale(1.20) rotate(205deg); }
-  }
-  @keyframes amDriftC {
-    0%   { transform: translate3d(-3%, -2%, 0) scale(1.06); }
-    50%  { transform: translate3d(3%, 2%, 0) scale(1.11); }
-    100% { transform: translate3d(-2%, 3%, 0) scale(1.07); }
   }
 
   body {
@@ -1761,7 +1746,6 @@
     overflow: hidden;
     background: rgba(14, 15, 18, 0.56);
     background: rgba(18, 21, 28, 0.88);
-    -webkit-background: rgba(18, 21, 28, 0.88);
     border: 1px solid rgba(255, 255, 255, 0.12);
     box-shadow: 0 22px 54px rgba(0, 0, 0, 0.45);
     margin-bottom: 16px;
@@ -2056,19 +2040,28 @@
     cursor: pointer;
     transition: border-color 200ms ease, transform 180ms ease, box-shadow 220ms ease;
   }
+  .card {
+    contain: layout style;
+  }
   .card-head-toggle {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
+    flex-wrap: wrap;
+    gap: 8px 10px;
     margin-bottom: 12px;
     user-select: none;
   }
   .card-head-meta {
     display: flex;
     align-items: center;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 6px;
     margin-left: auto;
+    flex-shrink: 0;
+  }
+  .card-head-meta .status-pill {
+    margin-left: 0;
   }
   .minimal-pill-hint {
     font-family: var(--mono);
@@ -2168,11 +2161,13 @@
     gap: 4px;
     padding: 6px;
     border-radius: 9999px;
-    background: rgba(13, 14, 17, 0.90);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: rgba(13, 14, 17, 0.94);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    transform: translateZ(0);
+    contain: layout style paint;
     border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   }
   [data-theme="atelier"] .bottom-pill {
     background: rgba(28, 23, 19, 0.94);
@@ -2261,10 +2256,12 @@
      ========================================================================== */
   .views-viewport {
     position: relative;
+    touch-action: pan-y;
     transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .views-viewport.dragging {
     transition: none;
+    will-change: transform;
   }
   .tab-view {
     display: none;
@@ -2315,30 +2312,32 @@
   }
   .ptr-indicator.visible { opacity: 1; }
 
-  /* Subtle floating toast for mode/swipe feedback */
+  /* Subtle floating toast anchored at top so it never collides with update popup */
   .ui-toast {
     position: fixed;
     left: 50%;
-    bottom: calc(82px + env(safe-area-inset-bottom));
-    transform: translate(-50%, 14px);
-    z-index: 96;
+    top: max(14px, env(safe-area-inset-top));
+    transform: translate3d(-50%, -14px, 0);
+    z-index: 105;
     padding: 8px 15px;
     border-radius: 999px;
-    background: rgba(16, 18, 23, 0.92);
+    background: rgba(16, 18, 23, 0.94);
     border: 1px solid rgba(255, 255, 255, 0.15);
     color: #F4F2EE;
     font-family: var(--mono);
     font-size: 11.5px;
-    
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
     opacity: 0;
     pointer-events: none;
-    transition: opacity 200ms ease, transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: opacity 180ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
     white-space: nowrap;
+    max-width: calc(100vw - 24px);
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .ui-toast.show {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translate3d(-50%, 0, 0);
   }
 
   /* Section spacing */
@@ -2363,7 +2362,7 @@
   }
 
 
-  /* ---------- Battery Run & Telemetry Card (v3.8.0) ---------- */
+  /* ---------- Battery Run & Telemetry Card (v3.9.1) ---------- */
   .telem-top-row {
     display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
     margin-bottom: 10px;
@@ -2373,17 +2372,42 @@
     font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 10px;
   }
   .telem-pack-row input[type=number] {
-    width: 82px; min-height: 36px; padding: 5px 8px; font-size: 12px;
+    width: 86px; min-height: 44px; padding: 6px 10px; font-size: 12.5px;
+  }
+  .telem-action-bar {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;
+  }
+  .telem-action-bar button {
+    flex: 1 1 130px; min-height: 44px;
   }
   .telem-reset-list {
     display: flex; flex-direction: column; gap: 6px; margin-top: 8px;
   }
   .telem-reset-item {
-    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
     padding: 7px 10px; border-radius: 10px; background: var(--panel);
     border: 1px solid var(--border); font-family: var(--mono); font-size: 11px; color: var(--text);
   }
   .telem-reset-item span:last-child { color: var(--muted); font-size: 10.5px; }
+  [data-theme="kinetic"] .telem-reset-item {
+    background: rgba(255, 255, 255, 0.045);
+    border-color: rgba(255, 255, 255, 0.10);
+  }
+  [data-theme="atelier"] .telem-reset-item {
+    background: #FFFFFF;
+    border-color: var(--border);
+  }
+
+  /* Responsive overrides placed AFTER all theme blocks so Kinetic/Atelier stay aligned on mobile */
+  @media (max-width: 600px) {
+    .card, [data-theme="atelier"] .card, [data-theme="kinetic"] .card {
+      padding: 16px 12px;
+      border-radius: 18px;
+    }
+    .stat, [data-theme="atelier"] .stat, [data-theme="kinetic"] .stat {
+      padding: 13px 14px;
+    }
+  }
 
 </style>
 </head>
@@ -2391,8 +2415,6 @@
 <!-- Apple Music-style animated halftone backdrop -->
 <div class="ambient-stage" aria-hidden="true">
   <div class="ambient-layer base"></div>
-  <div class="ambient-layer flow"></div>
-  <div class="ambient-layer matrix"></div>
   <div class="ambient-vignette"></div>
 </div>
 
@@ -2432,7 +2454,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.9.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.9.1</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -2840,11 +2862,11 @@
           <div class="card-head-toggle" style="margin-bottom:4px;">
             <h2>App Theme &amp; Updates</h2>
             <div class="card-head-meta">
-              <span class="minimal-pill-hint">v3.9.0</span>
+              <span class="minimal-pill-hint">v3.9.1</span>
               <span class="expand-chevron" aria-hidden="true">&#9662;</span>
             </div>
           </div>
-          <div class="ota-meta" id="app-ver-meta">Running <b>v3.9.0</b> · checking GitHub for updates…</div>
+          <div class="ota-meta" id="app-ver-meta">Running <b>v3.9.1</b> · checking GitHub for updates…</div>
           <div class="card-detail-drawer">
             <div class="card-detail-content">
               <div class="card-detail-inner-pad">
@@ -2897,40 +2919,45 @@
     </div>
 
     <!-- ==================== 4. SYSTEM (STORAGE, RAM & DIAGNOSTICS) ==================== -->
-    <div id="view-system" class="tab-view">
+    <div id="view-system" class="tab-view" role="tabpanel">
       <div class="section-stack">
-        <div class="card">
+        <div class="card expandable-card" id="card-telemetry" onclick="toggleCardExpand(event, this)">
           <div class="card-head-toggle">
             <h2>Battery &amp; WiFi Telemetry</h2>
             <div class="card-head-meta">
               <span class="status-pill" id="telem-batt-pill">Batt Off</span>
               <span class="status-pill" id="telem-wifi-pill">WiFi Off</span>
+              <span class="expand-chevron" aria-hidden="true">&#9662;</span>
             </div>
           </div>
-          <div class="ota-meta" id="telem-meta">Stored in ESP32 NVS &amp; synced to Firebase <code>/status.json</code>. Measure your battery with a multimeter before starting a run for an accurate starting %.</div>
-
-          <div class="telem-pack-row" style="margin-top:12px;">
-            <label for="start-volt-input" style="margin:0;">Start Voltage (V):</label>
-            <input type="number" id="start-volt-input" min="2.8" max="4.35" step="0.01" placeholder="4.20">
-            <button type="button" class="btn-ghost" style="min-height:36px;padding:6px 12px;font-size:11.5px;" onclick="cloudSaveStartVoltage()">Save V</button>
-            <span id="start-volt-soc" style="color:var(--muted);">—</span>
-          </div>
-
-          <div class="controls-row" style="margin-top:10px;">
-            <button type="button" class="btn-primary" id="btn-batt-toggle" onclick="cloudToggleBatteryTrack()">Start Battery Track</button>
-            <button type="button" class="btn-ghost" onclick="cloudResetBatteryTrack()">Reset Battery</button>
-          </div>
-          <div class="controls-row" style="margin-top:8px;">
-            <button type="button" class="btn-primary" id="btn-wifi-toggle" onclick="cloudToggleWifiTrack()">Start WiFi Track</button>
-            <button type="button" class="btn-ghost" onclick="cloudResetWifiTrack()">Reset WiFi</button>
-          </div>
-
+          <div class="ota-meta" id="telem-meta">Tap any bar below for full metrics, or tap the card header for calibration &amp; tracker controls.</div>
           <div class="inline-cmd-slot" data-cmd-slot="telemetry-control"></div>
-          <div class="storage-bars" id="cloud-telemetry-body" style="margin-top:12px;"></div>
-          <div class="telem-pack-row">
-            <label for="pack-mah-input" style="margin:0;">Battery pack (mAh @ 3.7V):</label>
-            <input type="number" id="pack-mah-input" min="300" max="20000" step="100" value="2400" onchange="savePackMah()">
-            <span id="pack-usable-hint">~1440 mAh @ 5.12V</span>
+          <div class="storage-bars" id="cloud-telemetry-body" style="margin-top:10px;"></div>
+
+          <div class="card-detail-drawer">
+            <div class="card-detail-content">
+              <div class="card-detail-inner-pad">
+                <div class="telem-action-bar">
+                  <button type="button" class="btn-primary" id="btn-batt-toggle" onclick="cloudToggleBatteryTrack()">Start Battery</button>
+                  <button type="button" class="btn-ghost" onclick="cloudResetBatteryTrack()">Reset Battery</button>
+                </div>
+                <div class="telem-action-bar">
+                  <button type="button" class="btn-ghost" id="btn-wifi-toggle" onclick="cloudToggleWifiTrack()">Start WiFi</button>
+                  <button type="button" class="btn-ghost" onclick="cloudResetWifiTrack()">Reset WiFi</button>
+                </div>
+                <div class="telem-pack-row">
+                  <label for="start-volt-input" style="margin:0;">Start Voltage (V):</label>
+                  <input type="number" id="start-volt-input" min="2.5" max="4.5" step="0.01" placeholder="4.20">
+                  <button type="button" class="btn-ghost" style="min-height:44px;padding:8px 14px;font-size:12px;" onclick="cloudSaveStartVoltage()">Save V</button>
+                  <span id="start-volt-soc" style="color:var(--muted);">—</span>
+                </div>
+                <div class="telem-pack-row">
+                  <label for="pack-mah-input" style="margin:0;">Battery pack (mAh @ 3.7V):</label>
+                  <input type="number" id="pack-mah-input" min="300" max="20000" step="100" value="2400" onchange="savePackMah()">
+                  <span id="pack-usable-hint">~1440 mAh @ 5.12V</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -2975,8 +3002,11 @@
   </button>
 </nav>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.2.0/chartjs-plugin-zoom.min.js"></script>
 <script>
-  const APP_VERSION = '3.9.0';
+  const APP_VERSION = '3.9.1';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   const VIEW_ORDER = ['dashboard', 'graphs', 'controls', 'system'];
@@ -3056,30 +3086,33 @@
     });
 
     const nowMs = Date.now();
-    if (name === 'dashboard' || name === 'controls' || name === 'system'){
-      if (!window._lastTabStatusMs || (nowMs - window._lastTabStatusMs) > 4000){
-        window._lastTabStatusMs = nowMs;
-        fetchStatus();
+    // Defer network/canvas work until the 180ms slide transition completes to avoid frame drops
+    clearTimeout(window._tabPostSwitchTimer);
+    window._tabPostSwitchTimer = setTimeout(() => {
+      if (name === 'dashboard' || name === 'controls' || name === 'system'){
+        if (!window._lastTabStatusMs || (nowMs - window._lastTabStatusMs) > 4000){
+          window._lastTabStatusMs = nowMs;
+          fetchStatus();
+        }
+        if (name === 'controls' && (!window._lastFwCheckMs || (nowMs - window._lastFwCheckMs) > 15000)){
+          window._lastFwCheckMs = nowMs;
+          fetchFirmwareInfo();
+        }
       }
-      if (name === 'controls' && (!window._lastFwCheckMs || (nowMs - window._lastFwCheckMs) > 15000)){
-        window._lastFwCheckMs = nowMs;
-        fetchFirmwareInfo();
-      }
-    }
-    if (name === 'graphs'){
-      requestAnimationFrame(() => {
+      if (name === 'graphs'){
         if (chartTemp){ chartTemp.resize(); chartTemp.update('none'); }
         if (chartHum){ chartHum.resize(); chartHum.update('none'); }
-      });
-    }
+      }
+    }, 190);
     if (window.scrollY > 0) window.scrollTo(0, 0);
   }
 
   function triggerFabRefresh(){
     const fab = document.getElementById('bnav-refresh-fab');
     if (fab){
+      clearTimeout(window._fabSpinTimer);
       fab.classList.add('spinning');
-      setTimeout(() => fab.classList.remove('spinning'), 950);
+      window._fabSpinTimer = setTimeout(() => fab.classList.remove('spinning'), 950);
     }
     fetchReadings();
     fetchStatus();
@@ -3120,8 +3153,9 @@
     const center = document.getElementById('hero-gauge-center');
     heroDialMode = forceMode || (heroDialMode === 'temp' ? 'hum' : 'temp');
     if (center){
+      clearTimeout(window._dialSwitchTimer);
       center.classList.add('switching');
-      setTimeout(() => {
+      window._dialSwitchTimer = setTimeout(() => {
         updateHeroOverview();
         center.classList.remove('switching');
       }, 150);
@@ -3229,8 +3263,8 @@
           chips.push('<span class="mini-health-chip ' + cls + '"><span class="mhd"></span>DHT22 ' + (cls === 'ok' ? 'OK' : 'Stale') + '</span>');
         }
         if (h.power){
-          const pm = h.power.mode || 'normal';
-          chips.push('<span class="mini-health-chip ' + (pm === 'normal' ? 'ok' : 'warn') + '"><span class="mhd"></span>' + pm.charAt(0).toUpperCase() + pm.slice(1) + '</span>');
+          const pm = String(h.power.mode || 'normal');
+          chips.push('<span class="mini-health-chip ' + (pm === 'normal' ? 'ok' : 'warn') + '"><span class="mhd"></span>' + escapeHtml(pm.charAt(0).toUpperCase() + pm.slice(1)) + '</span>');
         }
         strip.innerHTML = chips.join('');
       }
@@ -3247,15 +3281,42 @@
     }
   }
 
-  // ---------- Cool Left/Right Swipe Gestures + Dial Swipe + Pull-to-Refresh ----------
+  // ---------- Smooth rAF-Batched Left/Right Swipe Gestures + Pull-to-Refresh ----------
   (function initGestures(){
     const viewport = document.getElementById('views-viewport');
     const ptrEl = document.getElementById('ptr-indicator');
     let sx = 0, sy = 0, swiping = false, lockedAxis = null, pulling = false, pullDist = 0;
+    let isDraggingClassOn = false, ptrVisible = false, ptrLastText = '';
+    let gestureRaf = 0, pendingDamped = null, pendingPullY = null, pendingPullReady = false;
 
     function shouldIgnoreTabSwipe(target){
       if (!target) return true;
       return !!target.closest('.chart-canvas-box, canvas, input, select, textarea, .hero-dial-wrap, [data-no-tab-swipe]');
+    }
+
+    function flushGestureFrame(){
+      gestureRaf = 0;
+      if (pendingDamped !== null && viewport){
+        if (!isDraggingClassOn){
+          viewport.classList.add('dragging');
+          isDraggingClassOn = true;
+        }
+        viewport.style.transform = 'translate3d(' + pendingDamped.toFixed(1) + 'px, 0, 0)';
+        pendingDamped = null;
+      }
+      if (pendingPullY !== null && ptrEl){
+        if (!ptrVisible){
+          ptrEl.classList.add('visible');
+          ptrVisible = true;
+        }
+        ptrEl.style.transform = 'translate3d(-50%, ' + pendingPullY.toFixed(0) + 'px, 0)';
+        const txt = pendingPullReady ? 'Release to refresh' : 'Pull to refresh…';
+        if (txt !== ptrLastText){
+          ptrEl.textContent = txt;
+          ptrLastText = txt;
+        }
+        pendingPullY = null;
+      }
     }
 
     document.addEventListener('touchstart', function(e){
@@ -3273,35 +3334,37 @@
       const dx = e.touches[0].clientX - sx;
       const dy = e.touches[0].clientY - sy;
 
-      if (!lockedAxis && (Math.abs(dx) > 16 || Math.abs(dy) > 16)){
-        lockedAxis = Math.abs(dx) > Math.abs(dy) * 1.45 ? 'x' : 'y';
+      if (!lockedAxis && (Math.abs(dx) > 14 || Math.abs(dy) > 14)){
+        lockedAxis = Math.abs(dx) > Math.abs(dy) * 1.4 ? 'x' : 'y';
       }
 
       if (lockedAxis === 'x' && swiping && viewport){
         const curIdx = VIEW_ORDER.indexOf(currentViewName);
-        let damped = dx * 0.18;
+        let damped = dx * 0.20;
         if ((curIdx === 0 && dx > 0) || (curIdx === VIEW_ORDER.length - 1 && dx < 0)){
           damped = dx * 0.06;
         }
-        damped = Math.max(-44, Math.min(44, damped));
-        viewport.classList.add('dragging');
-        viewport.style.transform = 'translate3d(' + damped.toFixed(1) + 'px, 0, 0)';
-      } else if (lockedAxis === 'y' && pulling && dy > 24 && window.scrollY <= 2){
+        pendingDamped = Math.max(-44, Math.min(44, damped));
+        if (!gestureRaf) gestureRaf = requestAnimationFrame(flushGestureFrame);
+      } else if (lockedAxis === 'y' && pulling && dy > 24){
         pullDist = Math.min(90, (dy - 24) * 0.45);
         if (ptrEl && pullDist > 14){
-          ptrEl.classList.add('visible');
-          ptrEl.style.transform = 'translate3d(-50%, ' + Math.min(26, pullDist - 36).toFixed(0) + 'px, 0)';
-          ptrEl.textContent = pullDist > 62 ? 'Release to refresh' : 'Pull to refresh…';
+          pendingPullY = Math.min(26, pullDist - 36);
+          pendingPullReady = pullDist > 62;
+          if (!gestureRaf) gestureRaf = requestAnimationFrame(flushGestureFrame);
         }
       }
     }, { passive: true });
 
     function finishGesture(e, cancelled){
+      if (gestureRaf){ cancelAnimationFrame(gestureRaf); gestureRaf = 0; }
+      pendingDamped = null;
+      pendingPullY = null;
       const didSwipeX = !cancelled && lockedAxis === 'x' && swiping && e.changedTouches && e.changedTouches.length;
       const dx = didSwipeX ? (e.changedTouches[0].clientX - sx) : 0;
       const idx = VIEW_ORDER.indexOf(currentViewName);
       let nextView = null, nextDir = null;
-      if (didSwipeX && Math.abs(dx) >= 64){
+      if (didSwipeX && Math.abs(dx) >= 60){
         if (dx < 0 && idx < VIEW_ORDER.length - 1){ nextView = VIEW_ORDER[idx + 1]; nextDir = 'right'; }
         else if (dx > 0 && idx > 0){ nextView = VIEW_ORDER[idx - 1]; nextDir = 'left'; }
       }
@@ -3309,15 +3372,17 @@
         if (nextView){
           viewport.classList.add('dragging');
           viewport.style.transform = '';
-          requestAnimationFrame(() => viewport.classList.remove('dragging'));
+          requestAnimationFrame(() => { viewport.classList.remove('dragging'); isDraggingClassOn = false; });
         } else {
           viewport.classList.remove('dragging');
+          isDraggingClassOn = false;
           viewport.style.transform = '';
         }
       }
-      if (ptrEl){
+      if (ptrEl && ptrVisible){
         ptrEl.classList.remove('visible');
         ptrEl.style.transform = 'translate3d(-50%, -60px, 0)';
+        ptrVisible = false;
       }
       if (!cancelled && pulling && pullDist > 62){
         triggerFabRefresh();
@@ -3456,7 +3521,7 @@
     }
     return sortedCache;
   }
-  function invalidateSorted(){ sortedCache = null; }
+  function invalidateSorted(){ sortedCache = null; if (typeof invalidateValidSorted === 'function') invalidateValidSorted(); }
 
   // "Latest" means most recent in REAL time (epochMs), not the reading
   // with the biggest raw counter value. Those two usually agree, but not
@@ -3809,14 +3874,15 @@
         const ts = item.epochMs ? formatFull(item.epochMs, true) : ('key ' + item.rawKey);
         const nbT = (item.prevTemp !== null && item.nextTemp !== null)
           ? (' · neighbors ' + item.prevTemp.toFixed(1) + '°C / ' + item.nextTemp.toFixed(1) + '°C') : '';
+        const safeKey = escapeHtml(String(item.rawKey));
         return '<div class="anomaly-item">' +
           '<div class="anomaly-info">' +
-            '<b>' + item.temp.toFixed(1) + '°C · ' + item.hum.toFixed(1) + '%RH</b> <span style="color:var(--muted);">at ' + ts + '</span>' +
-            '<div class="anomaly-sub">' + item.reason + nbT + '</div>' +
+            '<b>' + item.temp.toFixed(1) + '°C · ' + item.hum.toFixed(1) + '%RH</b> <span style="color:var(--muted);">at ' + escapeHtml(ts) + '</span>' +
+            '<div class="anomaly-sub">' + escapeHtml(item.reason) + escapeHtml(nbT) + '</div>' +
           '</div>' +
           '<div class="anomaly-actions">' +
-            '<button type="button" class="btn-danger" onclick="deleteAnomalyFromFirebase(\'' + item.rawKey + '\')">Delete from Firebase</button>' +
-            '<button type="button" class="btn-ghost" onclick="keepAnomaly(\'' + item.rawKey + '\')">Keep</button>' +
+            '<button type="button" class="btn-danger" data-anom-act="delete" data-raw-key="' + safeKey + '">Delete from Firebase</button>' +
+            '<button type="button" class="btn-ghost" data-anom-act="keep" data-raw-key="' + safeKey + '">Keep</button>' +
           '</div>' +
         '</div>';
       }).join('');
@@ -3835,12 +3901,13 @@
         vaultList.innerHTML = all.slice(0, 40).map(item => {
           const ts = item.epochMs ? formatFull(item.epochMs, true) : ('key ' + item.rawKey);
           const badge = item.status === 'deleted' ? 'DELETED' : (item.status === 'kept' ? 'KEPT' : 'PENDING');
+          const safeKey = escapeHtml(String(item.rawKey));
           const restoreBtn = item.status === 'deleted'
-            ? '<button type="button" class="btn-ghost" onclick="restoreAnomalyToFirebase(\'' + item.rawKey + '\')">Restore</button>' : '';
+            ? '<button type="button" class="btn-ghost" data-anom-act="restore" data-raw-key="' + safeKey + '">Restore</button>' : '';
           return '<div class="anomaly-item">' +
             '<div class="anomaly-info">' +
-              '<b>[' + badge + ']</b> ' + item.temp.toFixed(1) + '°C · ' + item.hum.toFixed(1) + '%RH · ' + ts +
-              '<div class="anomaly-sub">' + item.reason + ' (key ' + item.rawKey + ')</div>' +
+              '<b>[' + badge + ']</b> ' + item.temp.toFixed(1) + '°C · ' + item.hum.toFixed(1) + '%RH · ' + escapeHtml(ts) +
+              '<div class="anomaly-sub">' + escapeHtml(item.reason) + ' (key ' + safeKey + ')</div>' +
             '</div>' +
             '<div class="anomaly-actions">' + restoreBtn + '</div>' +
           '</div>';
@@ -3894,7 +3961,7 @@
   }
 
   function keepAnomaly(rawKey){
-    anomalyKept[rawKey] = true;
+    anomalyKept[rawKey] = true; invalidateValidSorted();
     if (anomalyVault[rawKey]) anomalyVault[rawKey].status = 'kept';
     persistAnomalyState();
     renderAnomalyUI();
@@ -3910,7 +3977,7 @@
       const body = JSON.stringify({ temp: item.temp, hum: item.hum, t: Math.round((item.epochMs || 0) / 1000) });
       const res = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      anomalyKept[rawKey] = true;
+      anomalyKept[rawKey] = true; invalidateValidSorted();
       item.status = 'kept';
       entriesByKey.set(Number(rawKey), { key: Number(rawKey), rawKey: rawKey, temp: item.temp, hum: item.hum, epochMs: item.epochMs });
       invalidateSorted();
@@ -3939,17 +4006,58 @@
     renderAnomalyUI();
   }
 
-  function getValidSorted(){
+  let validSortedCache = null;
+  let validSortedDirty = true;
+
+  function invalidateValidSorted(){
+    validSortedCache = null;
+    validSortedDirty = true;
+  }
+
+  function refreshAnomalyScan(){
     const raw = getSorted().filter(e => typeof e.epochMs === 'number').sort((a, b) => a.epochMs - b.epochMs);
     scanAnomalies(raw);
-    return raw.filter(e => {
+    validSortedCache = raw.filter(e => {
       const rk = String(e.rawKey !== undefined ? e.rawKey : e.key);
       return !(anomalyVault[rk] && anomalyVault[rk].status === 'pending');
     });
+    validSortedDirty = false;
+    return validSortedCache;
+  }
+
+  function getValidSorted(){
+    if (!validSortedDirty && validSortedCache) return validSortedCache;
+    return refreshAnomalyScan();
+  }
+
+  // Delegated click handlers for anomaly list, vault list, and cloud WiFi list (safe against quotes/XSS)
+  document.addEventListener('click', function(ev){
+    const anomBtn = ev.target && ev.target.closest('[data-anom-act]');
+    if (anomBtn){
+      const act = anomBtn.getAttribute('data-anom-act');
+      const rk = anomBtn.getAttribute('data-raw-key') || '';
+      if (act === 'delete') deleteAnomalyFromFirebase(rk);
+      else if (act === 'keep') keepAnomaly(rk);
+      else if (act === 'restore') restoreAnomalyToFirebase(rk);
+      return;
+    }
+    const wifiBtn = ev.target && ev.target.closest('[data-wifi-act]');
+    if (wifiBtn){
+      const act = wifiBtn.getAttribute('data-wifi-act');
+      const ssid = wifiBtn.getAttribute('data-ssid') || '';
+      if (act === 'pref') cloudSetPreferredWifi(ssid);
+      else if (act === 'remove') cloudRemoveWifi(ssid);
+    }
+  });
+
+  function appendAuthParam(url){
+    const auth = getFbAuthParam();
+    if (!auth) return url;
+    return url + (url.includes('?') ? ('&' + auth.slice(1)) : auth);
   }
 
   async function fbGet(host, query){
-    const url = 'https://' + host + '/readings.json?' + query;
+    const url = appendAuthParam('https://' + host + '/readings.json?' + query);
     const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
@@ -4111,24 +4219,14 @@
         (bestSeenMs
           ? ' · last seen ' + escapeHtml(timeAgo(ageMs)) + ' on <b>' + escapeHtml(status.ssid || 'unknown') + '</b>'
           : ' · waiting for first reading or heartbeat');
-      document.getElementById('dash-links').innerHTML = '';
       if (validIp){
-        dashMsg.innerHTML =
-          'Device appears offline (no readings or heartbeat recently). ' +
-          '<details class="ota-details" style="margin-top:8px;padding-top:8px;">' +
-          '<summary>Show last-known IP links (' + escapeHtml(status.ip) + ')</summary>' +
-          '<div class="dash-links" style="margin-top:10px;">' +
-          DEVICE_PAGES.map(function(p){
-            return '<a class="link-tile" href="http://' + encodeURI(status.ip) + '/' + p[0] + '" target="_blank" rel="noopener">' +
-              '<div class="link-tile-name">' + escapeHtml(p[1]) + '</div>' +
-              '<div class="link-tile-desc">' + escapeHtml(p[2]) + '</div>' +
-              '</a>';
-          }).join('') +
-          '</div></details>';
+        renderDeviceLinks(status.ip);
+        dashMsg.textContent = 'Device appears offline (last-known IP ' + status.ip + ' links remain available in Controls).';
       } else {
+        renderDeviceLinks('');
         dashMsg.textContent = 'Device is currently offline.';
       }
-      renderCloudPanels(status);
+      renderCloudPanelsIfChanged(status);
       updateOtaButtons();
       updateHeroOverview();
       return;
@@ -4141,8 +4239,11 @@
       fsBadge +
       ' · active ' + escapeHtml(timeAgo(ageMs));
     lastKnownDeviceIp = status.ip;
-    renderDeviceLinks(status.ip);
-    renderCloudPanels(status);
+    if (window._lastRenderedLinkIp !== status.ip){
+      renderDeviceLinks(status.ip);
+      window._lastRenderedLinkIp = status.ip;
+    }
+    renderCloudPanelsIfChanged(status);
     updateOtaButtons();
     updateHeroOverview();
     dashMsg.textContent = '';
@@ -4184,6 +4285,8 @@
 
   function dismissCmdStepper(){
     if (cmdAutoHideTimer){ clearTimeout(cmdAutoHideTimer); cmdAutoHideTimer = null; }
+    if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
+    if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
     const box = document.getElementById('cmd-stepper');
     if (box){
       box.classList.remove('show', 'is-done', 'is-err');
@@ -4253,7 +4356,7 @@
     return (b / (1024 * 1024)).toFixed(2) + ' MB';
   }
 
-  // ---------- Battery Run & Telemetry UI (v3.9.0 — Separate Battery/WiFi + Start Voltage SOC) ----------
+  // ---------- Battery Run & Telemetry UI (v3.9.1 — Separate Battery/WiFi + Start Voltage SOC) ----------
   const PACK_MAH_LS = 'rl_pack_mah';
   let lastBattTrackOn = false;
   let lastWifiTrackOn = false;
@@ -4325,7 +4428,7 @@
     if (!t){
       if (bPill){ bPill.textContent = 'Update FW'; bPill.className = 'status-pill warn'; }
       if (wPill){ wPill.textContent = 'Update FW'; wPill.className = 'status-pill warn'; }
-      body.innerHTML = '<div class="ota-meta">Flash v3.9.0 firmware to enable separate Battery/WiFi tracking &amp; manual start voltage.</div>';
+      body.innerHTML = '<div class="ota-meta">Flash v3.9.1 firmware to enable separate Battery/WiFi tracking &amp; manual start voltage.</div>';
       return;
     }
 
@@ -4340,8 +4443,8 @@
       wPill.textContent = lastWifiTrackOn ? 'WiFi ON' : 'WiFi Off';
       wPill.className = 'status-pill ' + (lastWifiTrackOn ? 'ok' : 'warn');
     }
-    if (bBtn) bBtn.textContent = lastBattTrackOn ? 'Pause Battery (Charging)' : 'Start Battery Track';
-    if (wBtn) wBtn.textContent = lastWifiTrackOn ? 'Pause WiFi Track' : 'Start WiFi Track';
+    if (bBtn) bBtn.textContent = lastBattTrackOn ? 'Pause Battery' : 'Start Battery';
+    if (wBtn) wBtn.textContent = lastWifiTrackOn ? 'Pause WiFi' : 'Start WiFi';
 
     const startV = Number(t.startVolts || 0);
     if (vInp && document.activeElement !== vInp && startV > 0){
@@ -4354,6 +4457,7 @@
 
     const startUsableMah = fullUsable5vMah * (startPct / 100);
     const MA = { normal: 130, low: 72, medium: 57, high: 38 };
+    const modeTotalSec = (t.normalSec || 0) + (t.lowSec || 0) + (t.mediumSec || 0) + (t.highSec || 0);
     const usedMah =
       ((t.normalSec || 0) / 3600) * MA.normal +
       ((t.lowSec    || 0) / 3600) * MA.low +
@@ -4361,13 +4465,14 @@
       ((t.highSec   || 0) / 3600) * MA.high;
     const remMah = Math.max(0, startUsableMah - usedMah);
     const pctLeft = Math.max(0, Math.min(100, Math.round((remMah / Math.max(1, fullUsable5vMah)) * 100)));
-    const avgMa = (t.sessionUptimeSec > 0) ? (usedMah / (t.sessionUptimeSec / 3600)) : 0;
+    const avgMa = (modeTotalSec > 0) ? (usedMah / (modeTotalSec / 3600)) : 0;
     const curMode = String(activePowerMode || 'normal').toLowerCase();
     const curDraw = MA[curMode] || MA.normal;
     const remHours = remMah / curDraw;
 
     const wifiTotal = (t.wifiConnSec || 0) + (t.wifiDiscSec || 0);
-    const wifiPct = wifiTotal > 0 ? Math.round(((t.wifiConnSec || 0) / wifiTotal) * 100) : 100;
+    const wifiPct = wifiTotal > 0 ? Math.max(0, Math.min(100, Math.round(((t.wifiConnSec || 0) / wifiTotal) * 100))) : null;
+    const wifiBarScale = wifiPct !== null ? (wifiPct / 100) : 0;
     const avgConnStr = t.avgWifiConnMs ? ((t.avgWifiConnMs / 1000).toFixed(1) + 's') : '—';
 
     let resetRowsHtml = '';
@@ -4382,57 +4487,78 @@
       }).join('') + '</div>';
     }
 
+    // Preserve user-expanded state & reset log <details> open state across live updates
+    const prevBattOpen = !!body.querySelector('[data-telem-block="batt"].is-expanded');
+    const prevWifiOpen = !!body.querySelector('[data-telem-block="wifi"].is-expanded');
+    const prevResetOpen = !!body.querySelector('details[data-telem-reset][open]');
+
     body.innerHTML =
-      '<div class="storage-block">' +
+      '<div class="storage-block expandable-inner' + (prevBattOpen ? ' is-expanded' : '') + '" data-telem-block="batt" onclick="event.stopPropagation(); toggleInnerDetail(event, this)">' +
         '<div class="storage-row-head"><span>Estimated Battery Remaining</span>' +
-        '<span class="storage-row-val">' + pctLeft + '% · ~' + remHours.toFixed(1) + 'h left (' + curMode + ')</span></div>' +
-        '<div class="storage-track"><div class="storage-fill ram" style="width:' + pctLeft + '%"></div></div>' +
-        '<div class="storage-sub-grid">' +
-          '<div class="storage-mini"><div class="storage-mini-label">Start → Est. Now</div><div class="storage-mini-val">' + (startV > 0 ? (startV.toFixed(2) + 'V (' + startPct + '%)') : '100%') + ' → ' + pctLeft + '%</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">Tracked Run Uptime</div><div class="storage-mini-val">' + fmtDurShort(t.sessionUptimeSec) + '</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">Current Boot Uptime</div><div class="storage-mini-val">' + fmtDurShort(t.bootUptimeSec) + '</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">Est. Used / Avg Draw</div><div class="storage-mini-val">' + Math.round(usedMah) + ' mAh · ' + (avgMa ? Math.round(avgMa) + ' mA' : '—') + '</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">Normal / Low</div><div class="storage-mini-val">' + fmtDurShort(t.normalSec) + ' / ' + fmtDurShort(t.lowSec) + '</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">Medium / High</div><div class="storage-mini-val">' + fmtDurShort(t.mediumSec) + ' / ' + fmtDurShort(t.highSec) + '</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">Boots / Crashes</div><div class="storage-mini-val">' + (t.bootCount || 0) + ' / ' + (t.crashCount || 0) + ' (' + escapeHtml(t.lastReset || '—') + ')</div></div>' +
-        '</div>' +
+        '<span class="storage-row-val">' + pctLeft + '% · ~' + remHours.toFixed(1) + 'h left (' + escapeHtml(curMode) + ')</span></div>' +
+        '<div class="storage-track"><div class="storage-fill ram" style="transform:scaleX(' + (pctLeft / 100).toFixed(3) + ')"></div></div>' +
+        '<div class="inner-detail-drawer"><div class="inner-detail-content">' +
+          '<div class="storage-sub-grid">' +
+            '<div class="storage-mini"><div class="storage-mini-label">Start → Est. Now</div><div class="storage-mini-val">' + (startV > 0 ? (startV.toFixed(2) + 'V (' + startPct + '%)') : '100%') + ' → ' + pctLeft + '%</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Tracked Run Uptime</div><div class="storage-mini-val">' + fmtDurShort(t.sessionUptimeSec) + '</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Current Boot Uptime</div><div class="storage-mini-val">' + fmtDurShort(t.bootUptimeSec) + '</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Est. Used / Avg Draw</div><div class="storage-mini-val">' + Math.round(usedMah) + ' mAh · ' + (avgMa ? Math.round(avgMa) + ' mA' : '—') + '</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Normal / Low</div><div class="storage-mini-val">' + fmtDurShort(t.normalSec) + ' / ' + fmtDurShort(t.lowSec) + '</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Medium / High</div><div class="storage-mini-val">' + fmtDurShort(t.mediumSec) + ' / ' + fmtDurShort(t.highSec) + '</div></div>' +
+            '<div class="storage-mini span-full"><div class="storage-mini-label">Boots / Crashes</div><div class="storage-mini-val">' + (Number(t.bootCount) || 0) + ' / ' + (Number(t.crashCount) || 0) + ' (' + escapeHtml(t.lastReset || '—') + ')</div></div>' +
+          '</div>' +
+          (resetRowsHtml ? ('<details class="ota-details" data-telem-reset' + (prevResetOpen ? ' open' : '') + ' style="margin-top:10px;padding-top:8px;" onclick="event.stopPropagation()"><summary>Recent Reset &amp; Crash Log</summary>' + resetRowsHtml + '</details>') : '') +
+        '</div></div>' +
       '</div>' +
-      '<div class="storage-block">' +
+      '<div class="storage-block expandable-inner' + (prevWifiOpen ? ' is-expanded' : '') + '" data-telem-block="wifi" onclick="event.stopPropagation(); toggleInnerDetail(event, this)">' +
         '<div class="storage-row-head"><span>WiFi Connection Telemetry</span>' +
-        '<span class="storage-row-val">Up ' + wifiPct + '% · avg join ' + avgConnStr + '</span></div>' +
-        '<div class="storage-sub-grid">' +
-          '<div class="storage-mini"><div class="storage-mini-label">WiFi Connected</div><div class="storage-mini-val">' + fmtDurShort(t.wifiConnSec) + '</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">WiFi Disconnected</div><div class="storage-mini-val">' + fmtDurShort(t.wifiDiscSec) + '</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">Total Joins</div><div class="storage-mini-val">' + (t.wifiReconnects || 0) + '</div></div>' +
-          '<div class="storage-mini"><div class="storage-mini-label">Avg Join Speed</div><div class="storage-mini-val">' + avgConnStr + '</div></div>' +
-        '</div>' +
-        (resetRowsHtml ? ('<details class="ota-details" style="margin-top:10px;padding-top:8px;"><summary>Recent Reset &amp; Crash Log</summary>' + resetRowsHtml + '</details>') : '') +
+        '<span class="storage-row-val">' + (wifiPct !== null ? ('Up ' + wifiPct + '%') : 'No data') + ' · avg join ' + avgConnStr + '</span></div>' +
+        '<div class="storage-track"><div class="storage-fill fs" style="transform:scaleX(' + wifiBarScale.toFixed(3) + ')"></div></div>' +
+        '<div class="inner-detail-drawer"><div class="inner-detail-content">' +
+          '<div class="storage-sub-grid">' +
+            '<div class="storage-mini"><div class="storage-mini-label">WiFi Connected</div><div class="storage-mini-val">' + fmtDurShort(t.wifiConnSec) + '</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">WiFi Disconnected</div><div class="storage-mini-val">' + fmtDurShort(t.wifiDiscSec) + '</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Total Joins</div><div class="storage-mini-val">' + (Number(t.wifiReconnects) || 0) + '</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Avg Join Speed</div><div class="storage-mini-val">' + avgConnStr + '</div></div>' +
+          '</div>' +
+        '</div></div>' +
       '</div>';
+  }
+
+  function parseValidatedStartVoltage(required){
+    const vStr = (document.getElementById('start-volt-input')?.value || '').trim();
+    if (!vStr) return required ? null : '';
+    const v = Number(vStr);
+    if (!Number.isFinite(v) || v < 2.5 || v > 4.5){
+      showToast('Voltage must be between 2.50 and 4.50 V');
+      return null;
+    }
+    return v.toFixed(2);
   }
 
   function cloudToggleBatteryTrack(){
     const nextEn = !lastBattTrackOn;
-    const vStr = (document.getElementById('start-volt-input')?.value || '').trim();
     const payload = { action: 'setBatteryTrack', enabled: nextEn ? '1' : '0' };
-    if (vStr) payload.startVolts = vStr;
+    if (nextEn){
+      const v = parseValidatedStartVoltage(false);
+      if (v === null) return;
+      if (v) payload.startVolts = v;
+    }
     sendCloudCommand(payload, nextEn ? 'Starting battery run tracking…' : 'Pausing battery run tracking…', 'telemetry-control');
   }
 
   function cloudSaveStartVoltage(){
-    const vStr = (document.getElementById('start-volt-input')?.value || '').trim();
-    const v = Number(vStr);
-    if (!vStr || !Number.isFinite(v) || v < 2.5 || v > 4.5){
-      alert('Enter a valid single-cell Li-ion voltage between 2.50 and 4.50 V (e.g. 4.18).');
-      return;
-    }
-    sendCloudCommand({ action: 'setStartVoltage', startVolts: v.toFixed(2) }, 'Saving start voltage (' + v.toFixed(2) + 'V)…', 'telemetry-control');
+    const v = parseValidatedStartVoltage(true);
+    if (!v) return;
+    sendCloudCommand({ action: 'setStartVoltage', startVolts: v }, 'Saving start voltage (' + v + 'V)…', 'telemetry-control');
   }
 
   function cloudResetBatteryTrack(){
     if (!confirm('Reset battery uptime, power-mode time, and boot/crash counters to 0?')) return;
-    const vStr = (document.getElementById('start-volt-input')?.value || '').trim();
+    const v = parseValidatedStartVoltage(false);
+    if (v === null) return;
     const payload = { action: 'resetBatteryTrack' };
-    if (vStr) payload.startVolts = vStr;
+    if (v) payload.startVolts = v;
     sendCloudCommand(payload, 'Resetting battery run counters…', 'telemetry-control');
   }
 
@@ -4469,43 +4595,71 @@
       sumEl.textContent = 'Flash ' + appPct + '% · FS ' + fsPct + '% · RAM ' + ramPct + '%';
     }
 
+    const expFlash = !!body.querySelector('[data-st-block="flash"].is-expanded');
+    const expFs    = !!body.querySelector('[data-st-block="fs"].is-expanded');
+    const expRam   = !!body.querySelector('[data-st-block="ram"].is-expanded');
+    const maxAllocTile = st.heapMaxAllocKb !== undefined
+      ? '<div class="storage-mini"><div class="storage-mini-label">Max Contiguous Block</div><div class="storage-mini-val">' + Number(st.heapMaxAllocKb) + ' KB</div></div>'
+      : '';
+
     body.innerHTML =
-      '<div class="storage-block expandable-inner" onclick="toggleInnerDetail(event, this)">' +
+      '<div class="storage-block expandable-inner' + (expFlash ? ' is-expanded' : '') + '" data-st-block="flash" onclick="toggleInnerDetail(event, this)">' +
         '<div class="storage-row-head"><span>Firmware Flash</span>' +
-        '<span class="storage-row-val">' + appPct + '% · ' + st.sketchKb + '/' + st.otaSlotKb + ' KB</span></div>' +
-        '<div class="storage-track"><div class="storage-fill" style="width:' + appPct + '%"></div></div>' +
+        '<span class="storage-row-val">' + appPct + '% · ' + Number(st.sketchKb || 0) + '/' + Number(st.otaSlotKb || 0) + ' KB</span></div>' +
+        '<div class="storage-track"><div class="storage-fill" style="transform:scaleX(' + (appPct / 100).toFixed(3) + ')"></div></div>' +
         '<div class="inner-detail-drawer"><div class="inner-detail-content">' +
           '<div class="storage-sub-grid">' +
-            '<div class="storage-mini"><div class="storage-mini-label">Active Firmware</div><div class="storage-mini-val">' + st.sketchKb + ' KB</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Active Firmware</div><div class="storage-mini-val">' + Number(st.sketchKb || 0) + ' KB</div></div>' +
             '<div class="storage-mini"><div class="storage-mini-label">OTA Headroom</div><div class="storage-mini-val">' + appFree + ' KB free</div></div>' +
-            '<div class="storage-mini"><div class="storage-mini-label">Total Flash</div><div class="storage-mini-val">' + (st.flashKb || 4096) + ' KB (A/B)</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Total Flash</div><div class="storage-mini-val">' + (Number(st.flashKb) || 4096) + ' KB (A/B)</div></div>' +
           '</div>' +
         '</div></div>' +
       '</div>' +
-      '<div class="storage-block expandable-inner" onclick="toggleInnerDetail(event, this)">' +
+      '<div class="storage-block expandable-inner' + (expFs ? ' is-expanded' : '') + '" data-st-block="fs" onclick="toggleInnerDetail(event, this)">' +
         '<div class="storage-row-head"><span>LittleFS Storage</span>' +
         '<span class="storage-row-val">' + fsPct + '% · ' + fmtBytes(fsUsed) + '/' + fmtBytes(fsTotal) + '</span></div>' +
-        '<div class="storage-track"><div class="storage-fill fs" style="width:' + fsPct + '%"></div></div>' +
+        '<div class="storage-track"><div class="storage-fill fs" style="transform:scaleX(' + (fsPct / 100).toFixed(3) + ')"></div></div>' +
         '<div class="inner-detail-drawer"><div class="inner-detail-content">' +
           '<div class="storage-sub-grid">' +
-            '<div class="storage-mini"><div class="storage-mini-label">Offline Queue (/pending.txt)</div><div class="storage-mini-val">' + fmtBytes(st.pendingBytes) + ' (' + (st.pendingCount || 0) + ' rows)</div></div>' +
-            '<div class="storage-mini"><div class="storage-mini-label">Saved WiFi (/wifi.txt)</div><div class="storage-mini-val">' + fmtBytes(st.wifiBytes) + '</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Offline Queue (/pending.txt)</div><div class="storage-mini-val">' + fmtBytes(st.pendingBytes) + ' (' + (Number(st.pendingCount) || 0) + ' rows)</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Saved WiFi (/wifi_networks.txt)</div><div class="storage-mini-val">' + fmtBytes(st.wifiBytes) + '</div></div>' +
             '<div class="storage-mini"><div class="storage-mini-label">FS Overhead / Other</div><div class="storage-mini-val">' + fmtBytes(otherFs) + '</div></div>' +
             '<div class="storage-mini"><div class="storage-mini-label">Queue Safety Cap</div><div class="storage-mini-val">' + fmtBytes(st.queueCapBytes) + '</div></div>' +
           '</div>' +
         '</div></div>' +
       '</div>' +
-      '<div class="storage-block expandable-inner" onclick="toggleInnerDetail(event, this)">' +
+      '<div class="storage-block expandable-inner' + (expRam ? ' is-expanded' : '') + '" data-st-block="ram" onclick="toggleInnerDetail(event, this)">' +
         '<div class="storage-row-head"><span>Live RAM (Heap)</span>' +
         '<span class="storage-row-val">' + ramPct + '% · ' + ramUsed + '/' + ramTotal + ' KB</span></div>' +
-        '<div class="storage-track"><div class="storage-fill ram" style="width:' + ramPct + '%"></div></div>' +
+        '<div class="storage-track"><div class="storage-fill ram" style="transform:scaleX(' + (ramPct / 100).toFixed(3) + ')"></div></div>' +
         '<div class="inner-detail-drawer"><div class="inner-detail-content">' +
           '<div class="storage-sub-grid">' +
-            '<div class="storage-mini"><div class="storage-mini-label">Free RAM Now</div><div class="storage-mini-val">' + (st.heapFreeKb || 0) + ' KB</div></div>' +
-            '<div class="storage-mini"><div class="storage-mini-label">Lowest Free (Boot Min)</div><div class="storage-mini-val">' + (st.heapMinFreeKb || 0) + ' KB</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Free RAM Now</div><div class="storage-mini-val">' + (Number(st.heapFreeKb) || 0) + ' KB</div></div>' +
+            '<div class="storage-mini"><div class="storage-mini-label">Lowest Free (Boot Min)</div><div class="storage-mini-val">' + (Number(st.heapMinFreeKb) || 0) + ' KB</div></div>' +
+            maxAllocTile +
           '</div>' +
         '</div></div>' +
       '</div>';
+  }
+
+  let lastCloudPanelSig = '';
+  function renderCloudPanelsIfChanged(status){
+    const sig = JSON.stringify({
+      health: status && status.health,
+      wifi: status && status.wifi,
+      ota: status && status.ota,
+      telemetry: status && status.telemetry,
+      storage: status && status.storage,
+      powerMode: status && status.powerMode,
+      ssid: status && status.ssid,
+      lastCmdId: status && status.lastCmdId,
+      lastCmdStage: status && status.lastCmdStage,
+      lastCmdResult: status && status.lastCmdResult,
+      packMah: getPackMah()
+    });
+    if (sig === lastCloudPanelSig) return;
+    lastCloudPanelSig = sig;
+    renderCloudPanels(status);
   }
 
   function renderCloudPanels(status){
@@ -4576,11 +4730,12 @@
           const pills = (isCur ? '<span class="status-pill ok">Connected</span>' : '') +
                         (isPref ? '<span class="status-pill warn">Preferred</span>' : '');
           const sub = net.ip ? ('Static IP: ' + net.ip) : 'DHCP';
+          const safeSsid = escapeHtml(net.ssid);
           const prefBtn = isPref
-            ? '<button type="button" class="btn-ghost" onclick="cloudSetPreferredWifi(\'\')">Clear Pref</button>'
-            : '<button type="button" class="btn-ghost" onclick="cloudSetPreferredWifi(\'' + escapeHtml(net.ssid).replace(/'/g, '&#39;') + '\')">Set Preferred</button>';
+            ? '<button type="button" class="btn-ghost" data-wifi-act="pref" data-ssid="">Clear Pref</button>'
+            : '<button type="button" class="btn-ghost" data-wifi-act="pref" data-ssid="' + safeSsid + '">Set Preferred</button>';
           const remBtn = w.networks.length > 1
-            ? '<button type="button" class="btn-ghost" onclick="cloudRemoveWifi(\'' + escapeHtml(net.ssid).replace(/'/g, '&#39;') + '\')">Remove</button>' : '';
+            ? '<button type="button" class="btn-ghost" data-wifi-act="remove" data-ssid="' + safeSsid + '">Remove</button>' : '';
           return '<div class="wifi-item"><div><div class="wifi-ssid">' + escapeHtml(net.ssid) + pills +
                  '</div><div class="wifi-sub">' + escapeHtml(sub) + '</div></div>' +
                  '<div class="wifi-actions">' + prefBtn + remBtn + '</div></div>';
@@ -4611,6 +4766,8 @@
         updateCmdStepper('completed', 'Confirmed by ESP32: ' + (status.lastCmdResult || 'Done'));
         setCloudCmdStatus('✓ ' + (status.lastCmdResult || 'Done'), '');
         pendingCmdId = '';
+        stagedPowerMode = null;
+        document.querySelectorAll('#cloud-power-grid .power-opt.staged').forEach(b => b.classList.remove('staged'));
         if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
       }
     }
@@ -4625,9 +4782,12 @@
       'home-actions'
     );
     mountStepperIntoSlot(inferredSlot);
+    if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
+    if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
     const host = getHost();
     if (!host){
       setCloudCmdStatus('Set Firebase RTDB host on the Graphs tab first.', 'err');
+      showToast('Set Firebase RTDB host on Graphs tab first');
       return false;
     }
     const id = String(Date.now());
@@ -4708,7 +4868,7 @@
   function cloudAddWifi(){
     const ssid = (document.getElementById('cw-ssid').value || '').trim();
     const pass = document.getElementById('cw-pass').value || '';
-    if (!ssid){ setCloudCmdStatus('Enter a WiFi SSID first.', 'err'); return; }
+    if (!ssid){ setCloudCmdStatus('Enter a WiFi SSID first.', 'err'); showToast('Enter a WiFi SSID first'); return; }
     sendCloudCommand({ action: 'addWifi', ssid: ssid, password: pass }, 'Saving WiFi "' + ssid + '" to ESP32…');
     document.getElementById('cw-ssid').value = '';
     document.getElementById('cw-pass').value = '';
@@ -4742,7 +4902,7 @@
       return;
     }
     try{
-      const res = await fetch('https://' + host + '/status.json', { cache: 'no-store' });
+      const res = await fetch(appendAuthParam('https://' + host + '/status.json'), { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const status = await res.json();
       if (!status || !status.ip){
@@ -4760,9 +4920,11 @@
   }
 
   // ---------- live fetch (initial load, manual refresh, auto-refresh) ----------
+  let isFetchingReadings = false;
   async function fetchReadings(){
     const host = getHost();
-    if (!host) return;
+    if (!host || isFetchingReadings) return;
+    isFetchingReadings = true;
 
     fetchStatus(); // rides along with every readings poll, doesn't block it
 
@@ -4785,7 +4947,9 @@
       // and can return HTTP 400 without one rather than just running slow
       // (see fetchReadingsPage(), v2.17.0, for the fallback that handles
       // that either way).
-      const { data, limitUsed } = await fetchReadingsPage(host, currentFetchLimit);
+      // Live polls only fetch the newest tail (PAGE_SIZE) once history is loaded, avoiding 50k re-downloads every 15s
+      const pollLimit = entriesByKey.size > 0 ? PAGE_SIZE : currentFetchLimit;
+      const { data, limitUsed } = await fetchReadingsPage(host, pollLimit);
       currentFetchLimit = Math.max(currentFetchLimit, limitUsed);
       const fetched = parseEntries(data);
       if (!fetched.length){
@@ -4886,6 +5050,8 @@
       }
     } catch(err){
       setConnState('offline', 'fetch failed: ' + err.message);
+    } finally {
+      isFetchingReadings = false;
     }
   }
 
@@ -5097,6 +5263,15 @@
   // the line at a null y (spanGaps defaults to false) — and is also
   // returned separately so redrawChart() can pass it to the shading
   // plugin that fills in the gap region visually.
+  function getExpectedIntervalMs(){
+    if (lastKnownPowerMode === 'high') return 600000;
+    if (lastKnownPowerMode === 'medium') return 300000;
+    if (lastKnownPowerMode === 'low') return 120000;
+    return KNOWN_INTERVAL_MS;
+  }
+  function getGapThresholdMs(){
+    return Math.max(5 * getExpectedIntervalMs(), 5 * 60 * 1000);
+  }
   const GAP_THRESHOLD_MS = 5 * KNOWN_INTERVAL_MS; // ~4+ missed readings in a row
 
   function bucketize(sorted, rangeStart, rangeEnd){
@@ -5229,11 +5404,11 @@
       ctx.save();
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
+      const dnPal = getChartThemePalette();
       for (const seg of segs){
         const x1 = Math.max(xScale.getPixelForValue(seg.start), chartArea.left);
         const x2 = Math.min(xScale.getPixelForValue(seg.end), chartArea.right);
         if (x2 <= x1) continue;
-        const dnPal = getChartThemePalette();
         ctx.fillStyle = seg.isDay ? dnPal.dayFill : dnPal.nightFill;
         ctx.fillRect(x1, top, x2 - x1, DAYNIGHT_STRIP_HEIGHT);
         if (x2 - x1 >= 60){ // only label a segment wide enough to hold it
@@ -5279,6 +5454,7 @@
   };
 
   function chartReadoutHandler(readoutElId, unit){
+    let lastSig = '';
     return function(context){
       const el = document.getElementById(readoutElId);
       if (!el) return;
@@ -5289,6 +5465,9 @@
       if (!tm || tm.opacity === 0 || !sensor || sensor.parsed.y === null || sensor.parsed.y === undefined){
         return; // keep last tapped reading pinned on mobile instead of clearing on finger-lift
       }
+      const sig = sensor.parsed.x + '|' + sensor.parsed.y + '|' + (outdoor && outdoor.parsed ? outdoor.parsed.y : '');
+      if (sig === lastSig) return;
+      lastSig = sig;
       el.classList.remove('idle');
       let htmlOut = '<b>' + sensor.parsed.y.toFixed(1) + unit + '</b> \u00b7 ' + formatFull(sensor.parsed.x, true);
       if (outdoor && outdoor.parsed.y !== null && outdoor.parsed.y !== undefined){
@@ -5313,8 +5492,8 @@
           label: seriesLabel, data: [],
           borderColor: color,
           backgroundColor: (context) => makeAreaGradient(context, color),
-          tension: 0.25, pointRadius: 0, pointHoverRadius: 4,
-          pointHoverBackgroundColor: color, pointHitRadius: 28, pointHoverRadius: 5, borderWidth: 2, fill: 'start', parsing: false
+          tension: 0.25, pointRadius: 0, pointHoverRadius: 5,
+          pointHoverBackgroundColor: color, pointHitRadius: 28, borderWidth: 2, fill: 'start', parsing: false
         }, {
           // Outdoor reference line (v2.19.0) -- always present as dataset
           // index 1 so redrawChart()/updateWeatherOverlay() can address it
@@ -5549,14 +5728,24 @@
       }
 
       if (mode === 'outside-h'){
-        // Horizontal motion outside plot box -> pan graph X-axis only, never scroll page
+        // Horizontal motion outside plot box -> rAF-throttled X-axis pan only
         if (e.cancelable) e.preventDefault();
         e.stopImmediatePropagation();
         const stepX = t.clientX - lastX;
         lastX = t.clientX;
         if (stepX !== 0 && typeof chart.pan === 'function'){
-          chart.pan({ x: stepX, y: 0 }, undefined, 'none');
-          syncOtherChart({ chart });
+          chart._pendingPanX = (chart._pendingPanX || 0) + stepX;
+          if (!chart._panRaf){
+            chart._panRaf = requestAnimationFrame(() => {
+              chart._panRaf = 0;
+              const dx = chart._pendingPanX || 0;
+              chart._pendingPanX = 0;
+              if (dx !== 0){
+                chart.pan({ x: dx, y: 0 }, undefined, 'none');
+                syncOtherChart({ chart });
+              }
+            });
+          }
         }
       }
     }, { capture: true, passive: false });
@@ -5625,10 +5814,17 @@
   function makeAreaGradient(context, hexColor){
     const { ctx, chartArea } = context.chart;
     if (!chartArea) return hexToRgba(hexColor, 0.08);
+    const theme = getActiveTheme();
+    const cacheKey = hexColor + '|' + theme + '|' + Math.round(chartArea.top) + '|' + Math.round(chartArea.bottom);
+    if (context.chart._areaGradKey === cacheKey && context.chart._areaGrad){
+      return context.chart._areaGrad;
+    }
     const grad = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
-    const topAlpha = getActiveTheme() === 'atelier' ? 0.20 : 0.18;
+    const topAlpha = theme === 'atelier' ? 0.20 : 0.18;
     grad.addColorStop(0, hexToRgba(hexColor, topAlpha));
     grad.addColorStop(1, hexToRgba(hexColor, 0.0));
+    context.chart._areaGradKey = cacheKey;
+    context.chart._areaGrad = grad;
     return grad;
   }
 
@@ -5666,8 +5862,12 @@
     }
     if (clampLo !== null && yMin < clampLo) yMin = clampLo;
     if (clampHi !== null && yMax > clampHi) yMax = clampHi;
-    chart.options.scales.y.min = Math.floor(yMin * 10) / 10;
-    chart.options.scales.y.max = Math.ceil(yMax * 10) / 10;
+    const nextMin = Math.floor(yMin * 10) / 10;
+    const nextMax = Math.ceil(yMax * 10) / 10;
+    chart.options.scales.y.min = nextMin;
+    chart.options.scales.y.max = nextMax;
+    chart._autoYMin = nextMin;
+    chart._autoYMax = nextMax;
   }
 
   function updateSeriesStats(elId, pts, unit){
@@ -5705,8 +5905,9 @@
     chartHum.options.plugins.gapShading.gaps = gaps;
     applyYAxisBounds(chartTemp, tempPoints, weather.tempPoints, 2.0, null, null);
     applyYAxisBounds(chartHum, humPoints, weather.humPoints, 6.0, 0, 100);
-    updateSeriesStats('temp-stats', tempPoints, '°C');
-    updateSeriesStats('hum-stats', humPoints, '%');
+    const rawVis = sorted.filter(e => e.epochMs >= rangeStart && e.epochMs <= rangeEnd);
+    updateSeriesStats('temp-stats', rawVis.map(e => ({ y: e.temp })), '°C');
+    updateSeriesStats('hum-stats', rawVis.map(e => ({ y: e.hum })), '%');
     chartTemp.update('none');
     chartHum.update('none');
     // Fire-and-forget: makes sure the cache actually covers what was just
@@ -5740,7 +5941,7 @@
     for (let i = 1; i < vis.length; i++){
       const dt = vis[i].epochMs - vis[i - 1].epochMs;
       // Exclude multi-minute offline gaps so the average reflects real sensor cadence
-      if (dt > 0 && dt <= GAP_THRESHOLD_MS){
+      if (dt > 0 && dt <= getGapThresholdMs()){
         sumMs += dt;
         count++;
       }
@@ -5770,7 +5971,12 @@
 
   // debounced: fires after the user stops panning/zooming either chart
   function onViewChanged({ chart }){
-    userZoomedY = true;
+    const yScale = chart && chart.scales && chart.scales.y;
+    if (yScale && chart._autoYMin !== undefined && chart._autoYMax !== undefined){
+      if (Math.abs(yScale.min - chart._autoYMin) > 0.15 || Math.abs(yScale.max - chart._autoYMax) > 0.15){
+        userZoomedY = true;
+      }
+    }
     clearTimeout(viewChangeTimer);
     viewChangeTimer = setTimeout(async () => {
       userHasInteracted = true;
@@ -5969,6 +6175,8 @@
     const { tempPoints, humPoints } = weatherOverlayPoints(min, max);
     chartTemp.data.datasets[1].data = tempPoints;
     chartHum.data.datasets[1].data = humPoints;
+    applyYAxisBounds(chartTemp, chartTemp.data.datasets[0].data, tempPoints, 2.0, null, null);
+    applyYAxisBounds(chartHum, chartHum.data.datasets[0].data, humPoints, 6.0, 0, 100);
     chartTemp.update('none');
     chartHum.update('none');
   }
@@ -6038,9 +6246,9 @@
 
     ['stat-temp', 'stat-hum'].forEach(id => {
       const el = document.getElementById(id);
+      if (!el) return;
       el.classList.remove('pulse');
-      void el.offsetWidth;
-      el.classList.add('pulse');
+      requestAnimationFrame(() => el.classList.add('pulse'));
     });
   }
   function updateAgeText(){
@@ -6074,6 +6282,7 @@
     const sw = document.getElementById('auto-switch');
     const isOn = sw.classList.toggle('on');
     saveSetting('auto_on', isOn ? '1' : '0');
+    if (autoTimer){ clearInterval(autoTimer); autoTimer = null; }
     if (isOn){
       fetchReadings();
       autoTimer = setInterval(fetchReadings, getRefreshSeconds() * 1000);
@@ -6110,6 +6319,12 @@
     sessionPeakKey = null; lastNewDataMs = null;
     noMoreHistory = false; currentFetchLimit = PAGE_SIZE;
     userHasInteracted = false; latestReadingEpoch = null;
+    lastFetchedStatus = null; lastKnownDeviceIp = ''; stagedPowerMode = null;
+    lastCloudPanelSig = ''; window._lastRenderedLinkIp = '';
+    ['cloud-health-list', 'cloud-wifi-list', 'cloud-telemetry-body', 'cloud-storage-body'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = '';
+    });
     document.getElementById('temp-value').innerHTML = '—<span class="unit">°C</span>';
     document.getElementById('hum-value').innerHTML = '—<span class="unit">%RH</span>';
     document.getElementById('temp-age').textContent = 'no data yet';
