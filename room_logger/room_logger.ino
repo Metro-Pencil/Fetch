@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <esp_system.h>
 #include <WiFiMulti.h>
 #include <WiFiClientSecure.h>
 #include <ESPmDNS.h>
@@ -1579,6 +1580,199 @@ bool checkInternetReachable() {
   return ok;
 }
 
+// ---------------- Battery-run & Telemetry Tracker (NVS persisted) ----------------
+// Tracks active session uptime, per-power-mode time, WiFi connected/disconnected
+// durations, reconnect counts & connect speed, plus boot/crash history.
+// Toggleable ON/OFF from the Dashboard so charging periods aren't mixed into
+// battery-life measurements. Periodically saved to NVS ("rl_telem") every 5 min
+// and on mode changes/reboots so stats survive brownouts when the battery dies.
+Preferences telemPrefs;
+SemaphoreHandle_t telemMutex = NULL;
+bool          telemEnabled           = false;
+uint32_t      telemSessionStartEpoch = 0;
+uint32_t      telemUptimeSec         = 0;
+uint32_t      telemModeSec[4]        = {0, 0, 0, 0};
+uint32_t      telemWifiConnSec       = 0;
+uint32_t      telemWifiDiscSec       = 0;
+uint32_t      telemWifiReconnects    = 0;
+uint32_t      telemWifiConnMsSum     = 0;
+uint32_t      telemWifiConnSamples   = 0;
+uint32_t      telemBootCount         = 0;
+uint32_t      telemCrashCount        = 0;
+String        telemLastReset         = "Unknown";
+String        telemResetLog          = "";
+unsigned long telemLastTickMs        = 0;
+unsigned long telemLastSaveMs        = 0;
+bool          telemWasWifiConn       = false;
+unsigned long telemDiscStartMs       = 0;
+const unsigned long TELEM_SAVE_INTERVAL_MS = 5UL * 60UL * 1000UL;
+
+const char* resetReasonLabel(esp_reset_reason_t r, bool& isCrash) {
+  isCrash = false;
+  switch (r) {
+    case ESP_RST_POWERON:   return "Power-On";
+    case ESP_RST_EXT:       return "External Reset";
+    case ESP_RST_SW:        return "Software/OTA";
+    case ESP_RST_PANIC:     isCrash = true; return "Panic/Crash";
+    case ESP_RST_INT_WDT:   isCrash = true; return "Int Watchdog";
+    case ESP_RST_TASK_WDT:  isCrash = true; return "Task Watchdog";
+    case ESP_RST_WDT:       isCrash = true; return "Watchdog";
+    case ESP_RST_DEEPSLEEP: return "Deep Sleep";
+    case ESP_RST_BROWNOUT:  isCrash = true; return "Brownout (Low Batt)";
+    case ESP_RST_SDIO:      return "SDIO Reset";
+    default:                return "Other";
+  }
+}
+
+void saveTelemetryToNvsLocked() {
+  if (!telemPrefs.begin("rl_telem", false)) return;
+  telemPrefs.putBool("en", telemEnabled);
+  telemPrefs.putULong("start", telemSessionStartEpoch);
+  telemPrefs.putULong("up", telemUptimeSec);
+  telemPrefs.putULong("m0", telemModeSec[0]);
+  telemPrefs.putULong("m1", telemModeSec[1]);
+  telemPrefs.putULong("m2", telemModeSec[2]);
+  telemPrefs.putULong("m3", telemModeSec[3]);
+  telemPrefs.putULong("wc", telemWifiConnSec);
+  telemPrefs.putULong("wd", telemWifiDiscSec);
+  telemPrefs.putULong("wr", telemWifiReconnects);
+  telemPrefs.putULong("wsum", telemWifiConnMsSum);
+  telemPrefs.putULong("wsmp", telemWifiConnSamples);
+  telemPrefs.putULong("boots", telemBootCount);
+  telemPrefs.putULong("crash", telemCrashCount);
+  telemPrefs.putString("lrst", telemLastReset);
+  telemPrefs.putString("rlog", telemResetLog);
+  telemPrefs.end();
+  telemLastSaveMs = millis();
+}
+
+void saveTelemetryToNvs() {
+  if (telemMutex != NULL && xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
+  saveTelemetryToNvsLocked();
+  if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+}
+
+void loadAndInitTelemetryOnBoot() {
+  if (telemMutex != NULL && xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
+  if (telemPrefs.begin("rl_telem", true)) {
+    telemEnabled           = telemPrefs.getBool("en", false);
+    telemSessionStartEpoch = telemPrefs.getULong("start", 0);
+    telemUptimeSec         = telemPrefs.getULong("up", 0);
+    telemModeSec[0]        = telemPrefs.getULong("m0", 0);
+    telemModeSec[1]        = telemPrefs.getULong("m1", 0);
+    telemModeSec[2]        = telemPrefs.getULong("m2", 0);
+    telemModeSec[3]        = telemPrefs.getULong("m3", 0);
+    telemWifiConnSec       = telemPrefs.getULong("wc", 0);
+    telemWifiDiscSec       = telemPrefs.getULong("wd", 0);
+    telemWifiReconnects    = telemPrefs.getULong("wr", 0);
+    telemWifiConnMsSum     = telemPrefs.getULong("wsum", 0);
+    telemWifiConnSamples   = telemPrefs.getULong("wsmp", 0);
+    telemBootCount         = telemPrefs.getULong("boots", 0);
+    telemCrashCount        = telemPrefs.getULong("crash", 0);
+    telemResetLog          = telemPrefs.getString("rlog", "");
+    telemPrefs.end();
+  }
+
+  bool isCrash = false;
+  telemLastReset = String(resetReasonLabel(esp_reset_reason(), isCrash));
+  time_t nowSec = time(nullptr);
+  uint32_t ts = ((unsigned long)nowSec >= MIN_VALID_EPOCH) ? (uint32_t)nowSec : 0;
+  String entry = telemLastReset + "@" + String(ts);
+  if (telemResetLog.length() > 0) {
+    telemResetLog = entry + "|" + telemResetLog;
+    // Keep at most 6 entries in NVS
+    int pipes = 0;
+    for (size_t i = 0; i < telemResetLog.length(); i++) {
+      if (telemResetLog[i] == '|') {
+        pipes++;
+        if (pipes >= 6) { telemResetLog = telemResetLog.substring(0, i); break; }
+      }
+    }
+  } else {
+    telemResetLog = entry;
+  }
+
+  if (telemEnabled) {
+    telemBootCount++;
+    if (isCrash) telemCrashCount++;
+  }
+  telemLastTickMs = millis();
+  telemDiscStartMs = millis();
+  telemWasWifiConn = false;
+  saveTelemetryToNvsLocked();
+  if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+}
+
+void serviceTelemetryTick() {
+  unsigned long nowMs = millis();
+  if (telemLastTickMs == 0) { telemLastTickMs = nowMs; return; }
+  unsigned long elapsedMs = nowMs - telemLastTickMs;
+  if (elapsedMs < 1000UL) return;
+  uint32_t dtSec = (uint32_t)(elapsedMs / 1000UL);
+  telemLastTickMs += (unsigned long)dtSec * 1000UL;
+
+  if (telemMutex != NULL && xSemaphoreTake(telemMutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
+  if (telemEnabled) {
+    if (telemSessionStartEpoch == 0) {
+      time_t nowSec = time(nullptr);
+      if ((unsigned long)nowSec >= MIN_VALID_EPOCH) telemSessionStartEpoch = (uint32_t)nowSec;
+    }
+    telemUptimeSec += dtSec;
+    int pmIdx = (int)powerMode;
+    if (pmIdx >= 0 && pmIdx < 4) telemModeSec[pmIdx] += dtSec;
+
+    bool isConn = (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0));
+    if (isConn) {
+      telemWifiConnSec += dtSec;
+      if (!telemWasWifiConn) {
+        telemWifiReconnects++;
+        if (telemDiscStartMs > 0 && nowMs >= telemDiscStartMs) {
+          unsigned long connDur = nowMs - telemDiscStartMs;
+          if (connDur < 180000UL) { // cap outliers (<3 min) so long outages don't skew connect speed
+            telemWifiConnMsSum += (uint32_t)connDur;
+            telemWifiConnSamples++;
+          }
+        }
+      }
+    } else {
+      telemWifiDiscSec += dtSec;
+      if (telemWasWifiConn) telemDiscStartMs = nowMs;
+    }
+    telemWasWifiConn = isConn;
+
+    if (nowMs - telemLastSaveMs >= TELEM_SAVE_INTERVAL_MS) {
+      saveTelemetryToNvsLocked();
+    }
+  }
+  if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+}
+
+String buildTelemetryJson() {
+  String j = "{";
+  if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+    uint32_t avgConnMs = telemWifiConnSamples ? (telemWifiConnMsSum / telemWifiConnSamples) : 0;
+    j += "\"enabled\":" + String(telemEnabled ? "true" : "false") + ",";
+    j += "\"bootUptimeSec\":" + String((unsigned long)(millis() / 1000UL)) + ",";
+    j += "\"sessionStartEpoch\":" + String(telemSessionStartEpoch) + ",";
+    j += "\"sessionUptimeSec\":" + String(telemUptimeSec) + ",";
+    j += "\"normalSec\":" + String(telemModeSec[0]) + ",";
+    j += "\"lowSec\":" + String(telemModeSec[1]) + ",";
+    j += "\"mediumSec\":" + String(telemModeSec[2]) + ",";
+    j += "\"highSec\":" + String(telemModeSec[3]) + ",";
+    j += "\"wifiConnSec\":" + String(telemWifiConnSec) + ",";
+    j += "\"wifiDiscSec\":" + String(telemWifiDiscSec) + ",";
+    j += "\"wifiReconnects\":" + String(telemWifiReconnects) + ",";
+    j += "\"avgWifiConnMs\":" + String(avgConnMs) + ",";
+    j += "\"bootCount\":" + String(telemBootCount) + ",";
+    j += "\"crashCount\":" + String(telemCrashCount) + ",";
+    j += "\"lastReset\":\"" + jsonEscape(telemLastReset) + "\",";
+    j += "\"resetLog\":\"" + jsonEscape(telemResetLog) + "\"";
+    if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+  }
+  j += "}";
+  return j;
+}
+
 String buildStorageJson() {
   unsigned long flashKb   = (unsigned long)(ESP.getFlashChipSize() / 1024UL);
   unsigned long sketchKb  = (unsigned long)(ESP.getSketchSize() / 1024UL);
@@ -1682,7 +1876,7 @@ bool publishStatusToFirebase() {
                     "\",\"url\":\"" + jsonEscape(otaUrlCopy) +
                     "\"},\"wifi\":{\"preferred\":\"" + jsonEscape(prefCopy) +
                     "\",\"networks\":" + wifiListJson +
-                    "},\"health\":" + buildHealthStatusJson() + ",\"storage\":" + buildStorageJson() + "}";
+                    "},\"health\":" + buildHealthStatusJson() + ",\"storage\":" + buildStorageJson() + ",\"telemetry\":" + buildTelemetryJson() + "}";
 
   if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
     Serial.println("Failed to publish status to Firebase (TLS busy)");
@@ -1823,6 +2017,7 @@ void pollAndHandleFirebaseCommand() {
     else valid = false;
     if (valid) {
       applyPowerMode(target, false);
+      saveTelemetryToNvs();
       lastCmdStage = "completed";
       lastCmdResult = "Power mode set to " + String(powerModeName(target));
     } else {
@@ -1903,7 +2098,44 @@ void pollAndHandleFirebaseCommand() {
       lastCmdResult = cloudOtaMsg;
       publishStatusToFirebase();
     }
+  } else if (action == "setTelemetry") {
+    String enStr = jsonExtractField(body, "enabled");
+    bool nextEn = (enStr == "1" || enStr == "true");
+    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      telemEnabled = nextEn;
+      telemLastTickMs = millis();
+      if (telemEnabled && telemSessionStartEpoch == 0) {
+        time_t nowSec = time(nullptr);
+        if ((unsigned long)nowSec >= MIN_VALID_EPOCH) telemSessionStartEpoch = (uint32_t)nowSec;
+      }
+      saveTelemetryToNvsLocked();
+      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+    }
+    lastCmdStage = "completed";
+    lastCmdResult = nextEn ? "Battery & telemetry tracking ON" : "Battery & telemetry tracking PAUSED";
+    publishStatusToFirebase();
+  } else if (action == "resetTelemetry") {
+    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      time_t nowSec = time(nullptr);
+      telemSessionStartEpoch = ((unsigned long)nowSec >= MIN_VALID_EPOCH) ? (uint32_t)nowSec : 0;
+      telemUptimeSec = 0;
+      telemModeSec[0] = telemModeSec[1] = telemModeSec[2] = telemModeSec[3] = 0;
+      telemWifiConnSec = 0;
+      telemWifiDiscSec = 0;
+      telemWifiReconnects = 0;
+      telemWifiConnMsSum = 0;
+      telemWifiConnSamples = 0;
+      telemBootCount = telemEnabled ? 1 : 0;
+      telemCrashCount = 0;
+      telemLastTickMs = millis();
+      saveTelemetryToNvsLocked();
+      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+    }
+    lastCmdStage = "completed";
+    lastCmdResult = "Battery run counters reset to 0";
+    publishStatusToFirebase();
   } else if (action == "reboot") {
+    saveTelemetryToNvs();
     lastCmdStage = "completed";
     lastCmdResult = "Rebooting ESP32...";
     publishStatusToFirebase();
@@ -3407,6 +3639,7 @@ void wifiMaintenanceTask(void* param) {
     if (otaInProgress) continue;
 
     unsigned long now = millis();
+    serviceTelemetryTick();
 
     // Poll Firebase /cmd.json every 5s for instant remote Dashboard commands.
     if (WiFi.status() == WL_CONNECTED && (now - lastCmdPollMs >= 5000UL)) {
@@ -3704,6 +3937,7 @@ void setup() {
   wifiNetworksMutex = xSemaphoreCreateMutex();
   i2cMutex          = xSemaphoreCreateMutex();
   settingsMutex     = xSemaphoreCreateMutex();
+  telemMutex        = xSemaphoreCreateMutex();
 
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
@@ -3735,6 +3969,8 @@ void setup() {
   // fsHasMountedBefore() above); otherwise a failed mount almost certainly
   // means real, saved data is sitting there corrupted, not absent, and
   // formatting would destroy it instead of recovering it.
+  loadAndInitTelemetryOnBoot();
+
   bool fsEverMountedBefore = fsHasMountedBefore();
   fsReady = LittleFS.begin(false);
   if (!fsReady) {
