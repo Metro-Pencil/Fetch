@@ -239,7 +239,8 @@ const char* wifiPage = R"rawliteral(
   <a href='/credentials'>Dashboard login</a> &middot;
   <a href='/power-saving'>Power saving</a> &middot;
   <a href='/update'>OTA update</a> &middot;
-  <a href='/health'>Device health</a>
+  <a href='/health'>Device health</a> &middot;
+  <a href='/telemetry'>Telemetry</a>
 </nav>
 <h2>WiFi Networks</h2>
 <div id='conn-status' class='conn-box'>Checking connection...</div>
@@ -531,7 +532,8 @@ const char* credentialsPage = R"rawliteral(
   <a href='/firebase'>Firebase</a> &middot;
   <a href='/power-saving'>Power saving</a> &middot;
   <a href='/update'>OTA update</a> &middot;
-  <a href='/health'>Device health</a>
+  <a href='/health'>Device health</a> &middot;
+  <a href='/telemetry'>Telemetry</a>
 </nav>
 <h2>Dashboard Login</h2>
 <p>This is the username/password for every protected page here, including this one.</p>
@@ -635,7 +637,8 @@ const char* firebasePage = R"rawliteral(
   <a href='/credentials'>Dashboard login</a> &middot;
   <a href='/power-saving'>Power saving</a> &middot;
   <a href='/update'>OTA update</a> &middot;
-  <a href='/health'>Device health</a>
+  <a href='/health'>Device health</a> &middot;
+  <a href='/telemetry'>Telemetry</a>
 </nav>
 <h2>Firebase Realtime Database</h2>
 <p>Current auth token: <code>%MASKED_FB_AUTH%</code></p>
@@ -740,7 +743,8 @@ const char* powerSavingPage = R"rawliteral(
   <a href='/firebase'>Firebase</a> &middot;
   <a href='/credentials'>Dashboard login</a> &middot;
   <a href='/update'>OTA update</a> &middot;
-  <a href='/health'>Device health</a>
+  <a href='/health'>Device health</a> &middot;
+  <a href='/telemetry'>Telemetry</a>
 </nav>
 <h2>Power Saving</h2>
 %CONTENT%
@@ -821,7 +825,8 @@ const char* healthPage = R"rawliteral(<!DOCTYPE html>
   <a href='/firebase'>Firebase</a> &middot;
   <a href='/credentials'>Dashboard login</a> &middot;
   <a href='/power-saving'>Power saving</a> &middot;
-  <a href='/update'>OTA update</a>
+  <a href='/update'>OTA update</a> &middot;
+  <a href='/telemetry'>Telemetry</a>
 </nav>
 <h2>Device Health</h2>
 <div class='subtitle' id='pageSubtitle'>Refreshes automatically every few seconds.</div>
@@ -972,6 +977,135 @@ setInterval(refreshHealth, 5000);
 // credentials being sniffable on plain HTTP -- that needs a server-side TLS
 // cert, which this sketch doesn't have and can't safely generate on its own.
 // It only blunts brute-forcing the password.
+const char* telemetryPage = R"rawliteral(<!DOCTYPE html>
+<html><head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Battery &amp; WiFi Telemetry</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 520px; margin: 28px auto; padding: 0 16px; color: #222; }
+  nav { font-size: 14px; margin-bottom: 18px; }
+  nav a { color: #0b5ed7; text-decoration: none; }
+  nav a:hover { text-decoration: underline; }
+  h2 { margin: 0 0 6px; }
+  .subtitle { font-size: 13px; color: #666; margin-bottom: 18px; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; }
+  .row:last-child { border-bottom: none; }
+  .badge { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; }
+  .badge-ok { background: #e6f4ea; color: #137333; }
+  .badge-warn { background: #fef7e0; color: #b06000; }
+  label { display: block; font-size: 13px; color: #444; margin: 10px 0 4px; }
+  input[type=number] { width: 140px; padding: 7px 10px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  button { padding: 8px 14px; font-size: 13px; font-weight: 600; border-radius: 6px; border: 1px solid #ccc; background: #f8f9fa; cursor: pointer; }
+  button.primary { background: #0b5ed7; color: #fff; border-color: #0b5ed7; }
+  #msg { margin-top: 10px; font-size: 13px; color: #137333; min-height: 18px; }
+  .back-link { display: inline-block; margin-top: 12px; font-size: 14px; color: #0b5ed7; text-decoration: none; }
+</style>
+</head><body>
+<nav>
+  <a href='/wifi'>WiFi networks</a> &middot;
+  <a href='/firebase'>Firebase</a> &middot;
+  <a href='/credentials'>Dashboard login</a> &middot;
+  <a href='/power-saving'>Power saving</a> &middot;
+  <a href='/update'>OTA update</a> &middot;
+  <a href='/health'>Device health</a> &middot;
+  <a href='/telemetry'>Telemetry</a>
+</nav>
+<h2>Battery &amp; WiFi Telemetry</h2>
+<div class='subtitle' id='sub'>Persisted to NVS across power modes and brownouts.</div>
+
+<div class='card'>
+  <div class='row'><strong>Battery Run Tracking</strong><span class='badge' id='b-badge'>...</span></div>
+  <div class='row'><span>Start Voltage</span><strong id='b-volt'>—</strong></div>
+  <div class='row'><span>Tracked Uptime</span><strong id='b-up'>—</strong></div>
+  <div class='row'><span>Current Boot Uptime</span><strong id='b-bootup'>—</strong></div>
+  <div class='row'><span>Modes (N / L / M / H)</span><strong id='b-modes'>—</strong></div>
+  <div class='row'><span>Boots / Crashes</span><strong id='b-boots'>—</strong></div>
+  <label for='voltInput'>Measured start battery voltage (V, e.g. 4.18)</label>
+  <input type='number' id='voltInput' min='2.5' max='4.5' step='0.01' placeholder='4.20'>
+  <div class='btns'>
+    <button class='primary' id='b-toggle' onclick='toggleBatt()'>Toggle Battery</button>
+    <button onclick='saveVolt()'>Save Voltage</button>
+    <button onclick='resetBatt()'>Reset Battery Run</button>
+  </div>
+</div>
+
+<div class='card'>
+  <div class='row'><strong>WiFi Duration Tracking</strong><span class='badge' id='w-badge'>...</span></div>
+  <div class='row'><span>WiFi Connected</span><strong id='w-conn'>—</strong></div>
+  <div class='row'><span>WiFi Disconnected</span><strong id='w-disc'>—</strong></div>
+  <div class='row'><span>Reconnects / Avg Join</span><strong id='w-join'>—</strong></div>
+  <div class='btns'>
+    <button class='primary' id='w-toggle' onclick='toggleWifi()'>Toggle WiFi</button>
+    <button onclick='resetWifi()'>Reset WiFi Stats</button>
+  </div>
+</div>
+
+<div id='msg'></div>
+<a class='back-link' href='/'>&larr; Back</a>
+
+<script>
+var st = {};
+function fmt(s){
+  s = Math.max(0, Math.floor(s || 0));
+  var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return h > 0 ? (h + 'h ' + m + 'm') : (m > 0 ? (m + 'm ' + r + 's') : (r + 's'));
+}
+function load(){
+  fetch('/telemetry-data').then(r => r.json()).then(d => {
+    st = d;
+    var bOn = !!d.battEnabled, wOn = !!d.wifiEnabled;
+    document.getElementById('b-badge').textContent = bOn ? 'ON' : 'Paused';
+    document.getElementById('b-badge').className = 'badge ' + (bOn ? 'badge-ok' : 'badge-warn');
+    document.getElementById('b-toggle').textContent = bOn ? 'Pause Battery (Charging)' : 'Start Battery Tracking';
+    document.getElementById('b-volt').textContent = d.startVolts > 0 ? (d.startVolts.toFixed(2) + ' V') : 'Not set (assumes 4.20 V)';
+    if (d.startVolts > 0 && document.activeElement !== document.getElementById('voltInput')) {
+      document.getElementById('voltInput').value = d.startVolts.toFixed(2);
+    }
+    document.getElementById('b-up').textContent = fmt(d.sessionUptimeSec);
+    document.getElementById('b-bootup').textContent = fmt(d.bootUptimeSec);
+    document.getElementById('b-modes').textContent = fmt(d.normalSec)+' / '+fmt(d.lowSec)+' / '+fmt(d.mediumSec)+' / '+fmt(d.highSec);
+    document.getElementById('b-boots').textContent = (d.bootCount||0)+' / '+(d.crashCount||0)+' ('+(d.lastReset||'-')+')';
+
+    document.getElementById('w-badge').textContent = wOn ? 'ON' : 'Paused';
+    document.getElementById('w-badge').className = 'badge ' + (wOn ? 'badge-ok' : 'badge-warn');
+    document.getElementById('w-toggle').textContent = wOn ? 'Pause WiFi Tracking' : 'Start WiFi Tracking';
+    document.getElementById('w-conn').textContent = fmt(d.wifiConnSec);
+    document.getElementById('w-disc').textContent = fmt(d.wifiDiscSec);
+    document.getElementById('w-join').textContent = (d.wifiReconnects||0) + ' joins / ' + (d.avgWifiConnMs ? ((d.avgWifiConnMs/1000).toFixed(1)+'s') : '—');
+  });
+}
+function postAct(params){
+  fetch('/telemetry', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams(params) })
+    .then(r => r.text()).then(t => { document.getElementById('msg').textContent = t; load(); });
+}
+function toggleBatt(){
+  var v = document.getElementById('voltInput').value.trim();
+  postAct({ action: 'setBattery', enabled: st.battEnabled ? '0' : '1', startVolts: v });
+}
+function saveVolt(){
+  var v = document.getElementById('voltInput').value.trim();
+  postAct({ action: 'setVoltage', startVolts: v });
+}
+function resetBatt(){
+  if (!confirm('Reset battery run stats?')) return;
+  var v = document.getElementById('voltInput').value.trim();
+  postAct({ action: 'resetBattery', startVolts: v });
+}
+function toggleWifi(){
+  postAct({ action: 'setWifi', enabled: st.wifiEnabled ? '0' : '1' });
+}
+function resetWifi(){
+  if (!confirm('Reset WiFi tracking stats?')) return;
+  postAct({ action: 'resetWifi' });
+}
+load();
+setInterval(load, 5000);
+</script>
+</body></html>)rawliteral";
+
 const char* updatePage = R"rawliteral(
 <!DOCTYPE html><html><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
@@ -997,7 +1131,8 @@ const char* updatePage = R"rawliteral(
   <a href='/firebase'>Firebase</a> &middot;
   <a href='/credentials'>Dashboard login</a> &middot;
   <a href='/power-saving'>Power saving</a> &middot;
-  <a href='/health'>Device health</a>
+  <a href='/health'>Device health</a> &middot;
+  <a href='/telemetry'>Telemetry</a>
 </nav>
 <h2>OTA Firmware Update</h2>
 <p><small>Available OTA slot: <b>%OTA_SLOT_KB% KB</b> (use Minimal SPIFFS 1.9 MB partition for plenty of headroom)</small></p>
@@ -1588,7 +1723,9 @@ bool checkInternetReachable() {
 // and on mode changes/reboots so stats survive brownouts when the battery dies.
 Preferences telemPrefs;
 SemaphoreHandle_t telemMutex = NULL;
-bool          telemEnabled           = false;
+bool          battTrackEnabled       = false;
+bool          wifiTrackEnabled       = false;
+float         battStartVolts         = 0.0f;
 uint32_t      telemSessionStartEpoch = 0;
 uint32_t      telemUptimeSec         = 0;
 uint32_t      telemModeSec[4]        = {0, 0, 0, 0};
@@ -1626,7 +1763,9 @@ const char* resetReasonLabel(esp_reset_reason_t r, bool& isCrash) {
 
 void saveTelemetryToNvsLocked() {
   if (!telemPrefs.begin("rl_telem", false)) return;
-  telemPrefs.putBool("en", telemEnabled);
+  telemPrefs.putBool("battEn", battTrackEnabled);
+  telemPrefs.putBool("wifiEn", wifiTrackEnabled);
+  telemPrefs.putFloat("bvolt", battStartVolts);
   telemPrefs.putULong("start", telemSessionStartEpoch);
   telemPrefs.putULong("up", telemUptimeSec);
   telemPrefs.putULong("m0", telemModeSec[0]);
@@ -1655,7 +1794,9 @@ void saveTelemetryToNvs() {
 void loadAndInitTelemetryOnBoot() {
   if (telemMutex != NULL && xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
   if (telemPrefs.begin("rl_telem", true)) {
-    telemEnabled           = telemPrefs.getBool("en", false);
+    battTrackEnabled       = telemPrefs.getBool("battEn", false);
+    wifiTrackEnabled       = telemPrefs.getBool("wifiEn", false);
+    battStartVolts         = telemPrefs.getFloat("bvolt", 0.0f);
     telemSessionStartEpoch = telemPrefs.getULong("start", 0);
     telemUptimeSec         = telemPrefs.getULong("up", 0);
     telemModeSec[0]        = telemPrefs.getULong("m0", 0);
@@ -1692,7 +1833,7 @@ void loadAndInitTelemetryOnBoot() {
     telemResetLog = entry;
   }
 
-  if (telemEnabled) {
+  if (battTrackEnabled) {
     telemBootCount++;
     if (isCrash) telemCrashCount++;
   }
@@ -1712,7 +1853,7 @@ void serviceTelemetryTick() {
   telemLastTickMs += (unsigned long)dtSec * 1000UL;
 
   if (telemMutex != NULL && xSemaphoreTake(telemMutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
-  if (telemEnabled) {
+  if (battTrackEnabled) {
     if (telemSessionStartEpoch == 0) {
       time_t nowSec = time(nullptr);
       if ((unsigned long)nowSec >= MIN_VALID_EPOCH) telemSessionStartEpoch = (uint32_t)nowSec;
@@ -1720,7 +1861,9 @@ void serviceTelemetryTick() {
     telemUptimeSec += dtSec;
     int pmIdx = (int)powerMode;
     if (pmIdx >= 0 && pmIdx < 4) telemModeSec[pmIdx] += dtSec;
+  }
 
+  if (wifiTrackEnabled) {
     bool isConn = (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0));
     if (isConn) {
       telemWifiConnSec += dtSec;
@@ -1728,7 +1871,7 @@ void serviceTelemetryTick() {
         telemWifiReconnects++;
         if (telemDiscStartMs > 0 && nowMs >= telemDiscStartMs) {
           unsigned long connDur = nowMs - telemDiscStartMs;
-          if (connDur < 180000UL) { // cap outliers (<3 min) so long outages don't skew connect speed
+          if (connDur < 180000UL) {
             telemWifiConnMsSum += (uint32_t)connDur;
             telemWifiConnSamples++;
           }
@@ -1739,10 +1882,10 @@ void serviceTelemetryTick() {
       if (telemWasWifiConn) telemDiscStartMs = nowMs;
     }
     telemWasWifiConn = isConn;
+  }
 
-    if (nowMs - telemLastSaveMs >= TELEM_SAVE_INTERVAL_MS) {
-      saveTelemetryToNvsLocked();
-    }
+  if ((battTrackEnabled || wifiTrackEnabled) && (nowMs - telemLastSaveMs >= TELEM_SAVE_INTERVAL_MS)) {
+    saveTelemetryToNvsLocked();
   }
   if (telemMutex != NULL) xSemaphoreGive(telemMutex);
 }
@@ -1751,7 +1894,9 @@ String buildTelemetryJson() {
   String j = "{";
   if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
     uint32_t avgConnMs = telemWifiConnSamples ? (telemWifiConnMsSum / telemWifiConnSamples) : 0;
-    j += "\"enabled\":" + String(telemEnabled ? "true" : "false") + ",";
+    j += "\"battEnabled\":" + String(battTrackEnabled ? "true" : "false") + ",";
+    j += "\"wifiEnabled\":" + String(wifiTrackEnabled ? "true" : "false") + ",";
+    j += "\"startVolts\":" + String(battStartVolts, 2) + ",";
     j += "\"bootUptimeSec\":" + String((unsigned long)(millis() / 1000UL)) + ",";
     j += "\"sessionStartEpoch\":" + String(telemSessionStartEpoch) + ",";
     j += "\"sessionUptimeSec\":" + String(telemUptimeSec) + ",";
@@ -2098,13 +2243,16 @@ void pollAndHandleFirebaseCommand() {
       lastCmdResult = cloudOtaMsg;
       publishStatusToFirebase();
     }
-  } else if (action == "setTelemetry") {
+  } else if (action == "setBatteryTrack" || action == "setTelemetry") {
     String enStr = jsonExtractField(body, "enabled");
-    bool nextEn = (enStr == "1" || enStr == "true");
+    String vStr  = jsonExtractField(body, "startVolts");
+    bool nextEn  = (enStr == "1" || enStr == "true");
+    float parsedV = vStr.length() ? vStr.toFloat() : 0.0f;
     if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-      telemEnabled = nextEn;
+      battTrackEnabled = nextEn;
+      if (parsedV >= 2.5f && parsedV <= 4.5f) battStartVolts = parsedV;
       telemLastTickMs = millis();
-      if (telemEnabled && telemSessionStartEpoch == 0) {
+      if (battTrackEnabled && telemSessionStartEpoch == 0) {
         time_t nowSec = time(nullptr);
         if ((unsigned long)nowSec >= MIN_VALID_EPOCH) telemSessionStartEpoch = (uint32_t)nowSec;
       }
@@ -2112,27 +2260,72 @@ void pollAndHandleFirebaseCommand() {
       if (telemMutex != NULL) xSemaphoreGive(telemMutex);
     }
     lastCmdStage = "completed";
-    lastCmdResult = nextEn ? "Battery & telemetry tracking ON" : "Battery & telemetry tracking PAUSED";
+    lastCmdResult = nextEn
+      ? ("Battery tracking ON" + (battStartVolts > 0.1f ? (" (start " + String(battStartVolts, 2) + "V)") : String("")))
+      : "Battery tracking PAUSED";
     publishStatusToFirebase();
-  } else if (action == "resetTelemetry") {
+  } else if (action == "setStartVoltage") {
+    String vStr = jsonExtractField(body, "startVolts");
+    float parsedV = vStr.toFloat();
+    if (parsedV >= 2.5f && parsedV <= 4.5f) {
+      if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        battStartVolts = parsedV;
+        saveTelemetryToNvsLocked();
+        if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+      }
+      lastCmdStage = "completed";
+      lastCmdResult = "Start battery voltage saved: " + String(parsedV, 2) + "V";
+    } else {
+      lastCmdStage = "error";
+      lastCmdResult = "Invalid voltage (enter 2.50 - 4.50 V)";
+    }
+    publishStatusToFirebase();
+  } else if (action == "setWifiTrack") {
+    String enStr = jsonExtractField(body, "enabled");
+    bool nextEn  = (enStr == "1" || enStr == "true");
+    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      wifiTrackEnabled = nextEn;
+      telemLastTickMs = millis();
+      telemDiscStartMs = millis();
+      telemWasWifiConn = (WiFi.status() == WL_CONNECTED);
+      saveTelemetryToNvsLocked();
+      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+    }
+    lastCmdStage = "completed";
+    lastCmdResult = nextEn ? "WiFi duration tracking ON" : "WiFi duration tracking PAUSED";
+    publishStatusToFirebase();
+  } else if (action == "resetBatteryTrack" || action == "resetTelemetry") {
+    String vStr = jsonExtractField(body, "startVolts");
+    float parsedV = vStr.length() ? vStr.toFloat() : 0.0f;
     if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
       time_t nowSec = time(nullptr);
       telemSessionStartEpoch = ((unsigned long)nowSec >= MIN_VALID_EPOCH) ? (uint32_t)nowSec : 0;
       telemUptimeSec = 0;
       telemModeSec[0] = telemModeSec[1] = telemModeSec[2] = telemModeSec[3] = 0;
-      telemWifiConnSec = 0;
-      telemWifiDiscSec = 0;
-      telemWifiReconnects = 0;
-      telemWifiConnMsSum = 0;
-      telemWifiConnSamples = 0;
-      telemBootCount = telemEnabled ? 1 : 0;
+      telemBootCount = battTrackEnabled ? 1 : 0;
       telemCrashCount = 0;
+      if (parsedV >= 2.5f && parsedV <= 4.5f) battStartVolts = parsedV;
       telemLastTickMs = millis();
       saveTelemetryToNvsLocked();
       if (telemMutex != NULL) xSemaphoreGive(telemMutex);
     }
     lastCmdStage = "completed";
-    lastCmdResult = "Battery run counters reset to 0";
+    lastCmdResult = "Battery run counters reset";
+    publishStatusToFirebase();
+  } else if (action == "resetWifiTrack") {
+    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      telemWifiConnSec = 0;
+      telemWifiDiscSec = 0;
+      telemWifiReconnects = 0;
+      telemWifiConnMsSum = 0;
+      telemWifiConnSamples = 0;
+      telemLastTickMs = millis();
+      telemDiscStartMs = millis();
+      saveTelemetryToNvsLocked();
+      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+    }
+    lastCmdStage = "completed";
+    lastCmdResult = "WiFi tracking counters reset";
     publishStatusToFirebase();
   } else if (action == "reboot") {
     saveTelemetryToNvs();
@@ -4050,7 +4243,7 @@ void setup() {
       "Change dashboard login: /credentials\n"
       "Power saving: /power-saving\n"
       "OTA update: /update\n"
-      "Device health: /health");
+      "Device health: /health\nTelemetry: /telemetry");
   });
 
   server.on("/health", HTTP_GET, []() {
@@ -4387,6 +4580,67 @@ void setup() {
       delay(5000);
       ESP.restart();
     }
+  });
+
+
+  server.on("/telemetry", HTTP_GET, []() {
+    if (!requireAdminAuth()) return;
+    server.send(200, "text/html; charset=utf-8", telemetryPage);
+  });
+
+  server.on("/telemetry-data", HTTP_GET, []() {
+    if (!requireAdminAuth()) return;
+    server.send(200, "application/json", buildTelemetryJson());
+  });
+
+  server.on("/telemetry", HTTP_POST, []() {
+    if (!requireAdminAuth()) return;
+    String act = server.arg("action");
+    String vStr = server.arg("startVolts");
+    float parsedV = vStr.length() ? vStr.toFloat() : 0.0f;
+    String reply = "Updated.";
+
+    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      if (act == "setBattery") {
+        battTrackEnabled = (server.arg("enabled") == "1");
+        if (parsedV >= 2.5f && parsedV <= 4.5f) battStartVolts = parsedV;
+        telemLastTickMs = millis();
+        reply = battTrackEnabled ? "Battery tracking ON." : "Battery tracking PAUSED.";
+      } else if (act == "setVoltage") {
+        if (parsedV >= 2.5f && parsedV <= 4.5f) {
+          battStartVolts = parsedV;
+          reply = "Start voltage saved: " + String(parsedV, 2) + "V.";
+        } else {
+          reply = "Enter a valid voltage between 2.50 and 4.50 V.";
+        }
+      } else if (act == "resetBattery") {
+        time_t nowSec = time(nullptr);
+        telemSessionStartEpoch = ((unsigned long)nowSec >= MIN_VALID_EPOCH) ? (uint32_t)nowSec : 0;
+        telemUptimeSec = 0;
+        telemModeSec[0] = telemModeSec[1] = telemModeSec[2] = telemModeSec[3] = 0;
+        telemBootCount = battTrackEnabled ? 1 : 0;
+        telemCrashCount = 0;
+        if (parsedV >= 2.5f && parsedV <= 4.5f) battStartVolts = parsedV;
+        reply = "Battery run counters reset.";
+      } else if (act == "setWifi") {
+        wifiTrackEnabled = (server.arg("enabled") == "1");
+        telemLastTickMs = millis();
+        telemDiscStartMs = millis();
+        telemWasWifiConn = (WiFi.status() == WL_CONNECTED);
+        reply = wifiTrackEnabled ? "WiFi tracking ON." : "WiFi tracking PAUSED.";
+      } else if (act == "resetWifi") {
+        telemWifiConnSec = 0;
+        telemWifiDiscSec = 0;
+        telemWifiReconnects = 0;
+        telemWifiConnMsSum = 0;
+        telemWifiConnSamples = 0;
+        reply = "WiFi tracking counters reset.";
+      }
+      saveTelemetryToNvsLocked();
+      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+    }
+    statusPublishRequested = true;
+    server.send(200, "text/plain", reply);
   });
 
   const char* authHeaders[] = { "Authorization" };
