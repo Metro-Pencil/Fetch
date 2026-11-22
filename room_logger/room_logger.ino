@@ -1725,7 +1725,7 @@ bool checkInternetReachable() {
 Preferences telemPrefs;
 SemaphoreHandle_t telemMutex        = NULL;
 SemaphoreHandle_t fsMutex           = NULL;
-#define FW_VERSION "3.9.1"
+#define FW_VERSION "3.9.3"
 volatile bool ntpSyncedThisBoot     = false;
 bool          battTrackEnabled       = false;
 bool          wifiTrackEnabled       = false;
@@ -2659,35 +2659,81 @@ String rtcDiag = "not probed";
 uint8_t bcdToDec(uint8_t bcd) { return ((bcd >> 4) * 10) + (bcd & 0x0F); }
 uint8_t decToBcd(uint8_t dec) { return ((dec / 10) << 4) | (dec % 10); }
 
-// Wire.begin() with 100 kHz clock + short power-up settle + 3 probe retries.
-// If 0x68 does not ACK, scans the I2C bus and records a short diagnostic
-// string for /health so wiring/address/voltage issues are visible immediately.
+// Standard I2C bus recovery (UM10204): tears down Wire, clocks up to 16 open-drain
+// pulses on SCL if a slave (e.g. DS1307 across a soft reboot) is holding SDA LOW,
+// then issues an explicit STOP condition before re-initializing Wire.
+static void i2cRecoverBus(int& sdaIdleOut, int& sclIdleOut) {
+  Wire.end();
+  pinMode(RTC_SDA_PIN, INPUT_PULLUP);
+  pinMode(RTC_SCL_PIN, INPUT_PULLUP);
+  delayMicroseconds(20);
+
+  if (digitalRead(RTC_SDA_PIN) == LOW) {
+    pinMode(RTC_SCL_PIN, OUTPUT_OPEN_DRAIN);
+    for (int i = 0; i < 16; i++) {
+      digitalWrite(RTC_SCL_PIN, LOW);
+      delayMicroseconds(10);
+      digitalWrite(RTC_SCL_PIN, HIGH);
+      delayMicroseconds(10);
+      if (digitalRead(RTC_SDA_PIN) == HIGH) break;
+    }
+    pinMode(RTC_SDA_PIN, OUTPUT_OPEN_DRAIN);
+    digitalWrite(RTC_SDA_PIN, LOW);
+    delayMicroseconds(10);
+    digitalWrite(RTC_SCL_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(RTC_SDA_PIN, HIGH);
+    delayMicroseconds(10);
+  }
+
+  pinMode(RTC_SDA_PIN, INPUT_PULLUP);
+  pinMode(RTC_SCL_PIN, INPUT_PULLUP);
+  delay(5);
+  sdaIdleOut = digitalRead(RTC_SDA_PIN);
+  sclIdleOut = digitalRead(RTC_SCL_PIN);
+}
+
+// Bus-recovery + Wire.begin() with 100 kHz primary & 50 kHz fallback for DS1307.
+// Records idle SDA/SCL levels and any detected addresses in rtcDiag on failure.
 bool rtcBegin() {
   if (i2cMutex != NULL && xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
-  Wire.begin(RTC_SDA_PIN, RTC_SCL_PIN, 100000);
-  delay(50);
 
+  int sdaIdle = 1, sclIdle = 1;
   uint8_t err = 4;
-  for (int attempt = 0; attempt < 3; attempt++) {
-    Wire.beginTransmission(DS1307_I2C_ADDR);
-    err = Wire.endTransmission(true);
+  const uint32_t freqs[2] = { 100000UL, 50000UL };
+
+  for (int f = 0; f < 2; f++) {
+    i2cRecoverBus(sdaIdle, sclIdle);
+    Wire.begin(RTC_SDA_PIN, RTC_SCL_PIN, freqs[f]);
+    Wire.setTimeOut(50);
+    delay(40);
+
+    for (int attempt = 0; attempt < 3; attempt++) {
+      Wire.beginTransmission(DS1307_I2C_ADDR);
+      err = Wire.endTransmission(true);
+      if (err == 0) break;
+      delay(25);
+    }
     if (err == 0) break;
-    delay(25);
   }
 
   bool ok = (err == 0);
   if (!ok) {
     String found = "";
-    for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
-      Wire.beginTransmission(addr);
-      if (Wire.endTransmission(true) == 0) {
-        if (found.length() > 0) found += ",";
-        found += "0x";
-        if (addr < 16) found += "0";
-        found += String(addr, HEX);
+    // Skip full 112-address scan if SDA or SCL is physically stuck LOW (would stall 5+ seconds)
+    if (sdaIdle == HIGH && sclIdle == HIGH) {
+      for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission(true) == 0) {
+          if (found.length() > 0) found += ",";
+          found += "0x";
+          if (addr < 16) found += "0";
+          found += String(addr, HEX);
+        }
       }
     }
-    rtcDiag = "I2C err " + String(err) + " at 0x68; bus: " + (found.length() ? found : "empty");
+    rtcDiag = "I2C err " + String(err) + " at 0x68 (SDA=" + String(sdaIdle) + " SCL=" + String(sclIdle) + "); bus: " +
+              (found.length() ? found : "empty");
   }
   if (i2cMutex != NULL) xSemaphoreGive(i2cMutex);
   return ok;
