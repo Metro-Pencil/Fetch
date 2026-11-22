@@ -16,7 +16,7 @@
 // index.html); a service worker getting in the way of that would be
 // actively harmful, not helpful.
 
-const SHELL_CACHE = 'room-logger-shell-v20';
+const SHELL_CACHE = 'room-logger-shell-v22';
 const RUNTIME_CACHE = 'room-logger-runtime-v1';
 
 // Known-path assets precached at install time. The HTML page itself is
