@@ -197,7 +197,7 @@ const unsigned long HIGH_POWER_SLEEP_MS       = 1800000UL;    // 30 min WiFi-off
 const unsigned long HIGH_POWER_WAKE_WINDOW_MS = 60000UL;      // 60 s WiFi-on sync & web-UI window in High Power Saving
 const int           DRAIN_BATCH_SIZE        = 5;            // upload at most this many queued readings per attempt
 const unsigned long MIN_VALID_EPOCH         = 1600000000UL; // sanity floor for "is the system clock actually set" (RTC or NTP)
-const size_t        MAX_QUEUE_BYTES         = 500000;       // ~500 KB safety cap (~15+ days at 1/min inside 640 KB LittleFS)
+const size_t MAX_QUEUE_BYTES = 250000; // <40% of 640 KB LittleFS so copy-on-write drain never fills flash       // ~500 KB safety cap (~15+ days at 1/min inside 640 KB LittleFS)
 // ---------------- Button timing (ms) ----------------
 const unsigned long DEBOUNCE_MS            = 50;
 const unsigned long LONG_PRESS_MS          = 1000; // hold-to-power-save
@@ -1135,7 +1135,7 @@ const char* updatePage = R"rawliteral(
   <a href='/telemetry'>Telemetry</a>
 </nav>
 <h2>OTA Firmware Update</h2>
-<p><small>Available OTA slot: <b>%OTA_SLOT_KB% KB</b> (use Minimal SPIFFS 1.9 MB partition for plenty of headroom)</small></p>
+<p><small>Available OTA slot: <b>%OTA_SLOT_KB% KB</b> (use custom 1.66 MB OTA / 640 KB LittleFS partition (partitions.csv) for plenty of headroom)</small></p>
 
 <h3>1. Pull from GitHub Pages / HTTPS URL</h3>
 <form id='urlForm'>
@@ -1709,8 +1709,8 @@ bool checkInternetReachable() {
     return false;
   }
   WiFiClient probe;
-  probe.setTimeout(3000);
-  bool ok = probe.connect(resolved, 443);
+  probe.setTimeout(3); // seconds
+  bool ok = probe.connect(resolved, 443, 3000); // 3000ms connect timeout
   if (ok) probe.stop();
   return ok;
 }
@@ -1722,7 +1722,10 @@ bool checkInternetReachable() {
 // battery-life measurements. Periodically saved to NVS ("rl_telem") every 5 min
 // and on mode changes/reboots so stats survive brownouts when the battery dies.
 Preferences telemPrefs;
-SemaphoreHandle_t telemMutex = NULL;
+SemaphoreHandle_t telemMutex        = NULL;
+SemaphoreHandle_t fsMutex           = NULL;
+#define FW_VERSION "3.9.1"
+volatile bool ntpSyncedThisBoot     = false;
 bool          battTrackEnabled       = false;
 bool          wifiTrackEnabled       = false;
 float         battStartVolts         = 0.0f;
@@ -1840,19 +1843,28 @@ void loadAndInitTelemetryOnBoot() {
   telemLastTickMs = millis();
   telemDiscStartMs = millis();
   telemWasWifiConn = false;
-  saveTelemetryToNvsLocked();
+  if (battTrackEnabled || wifiTrackEnabled || isCrash) {
+    saveTelemetryToNvsLocked();
+  }
   if (telemMutex != NULL) xSemaphoreGive(telemMutex);
 }
 
 void serviceTelemetryTick() {
+  if (telemMutex != NULL && xSemaphoreTake(telemMutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
   unsigned long nowMs = millis();
-  if (telemLastTickMs == 0) { telemLastTickMs = nowMs; return; }
+  if (telemLastTickMs == 0) {
+    telemLastTickMs = nowMs;
+    if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+    return;
+  }
   unsigned long elapsedMs = nowMs - telemLastTickMs;
-  if (elapsedMs < 1000UL) return;
+  if (elapsedMs < 1000UL) {
+    if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+    return;
+  }
   uint32_t dtSec = (uint32_t)(elapsedMs / 1000UL);
   telemLastTickMs += (unsigned long)dtSec * 1000UL;
 
-  if (telemMutex != NULL && xSemaphoreTake(telemMutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
   if (battTrackEnabled) {
     if (telemSessionStartEpoch == 0) {
       time_t nowSec = time(nullptr);
@@ -1864,20 +1876,21 @@ void serviceTelemetryTick() {
   }
 
   if (wifiTrackEnabled) {
+    bool intentionalSleep = (powerMode == POWER_HIGH && !highPowerWifiAwake);
     bool isConn = (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0));
     if (isConn) {
       telemWifiConnSec += dtSec;
       if (!telemWasWifiConn) {
         telemWifiReconnects++;
-        if (telemDiscStartMs > 0 && nowMs >= telemDiscStartMs) {
-          unsigned long connDur = nowMs - telemDiscStartMs;
+        if (telemDiscStartMs > 0) {
+          unsigned long connDur = nowMs - telemDiscStartMs; // rollover-safe unsigned subtraction
           if (connDur < 180000UL) {
             telemWifiConnMsSum += (uint32_t)connDur;
             telemWifiConnSamples++;
           }
         }
       }
-    } else {
+    } else if (!intentionalSleep) {
       telemWifiDiscSec += dtSec;
       if (telemWasWifiConn) telemDiscStartMs = nowMs;
     }
@@ -1891,12 +1904,15 @@ void serviceTelemetryTick() {
 }
 
 String buildTelemetryJson() {
-  String j = "{";
+  String j;
+  j.reserve(512);
+  j = "{";
   if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
     uint32_t avgConnMs = telemWifiConnSamples ? (telemWifiConnMsSum / telemWifiConnSamples) : 0;
+    float safeVolts = isfinite(battStartVolts) ? battStartVolts : 0.0f;
     j += "\"battEnabled\":" + String(battTrackEnabled ? "true" : "false") + ",";
     j += "\"wifiEnabled\":" + String(wifiTrackEnabled ? "true" : "false") + ",";
-    j += "\"startVolts\":" + String(battStartVolts, 2) + ",";
+    j += "\"startVolts\":" + String(safeVolts, 2) + ",";
     j += "\"bootUptimeSec\":" + String((unsigned long)(millis() / 1000UL)) + ",";
     j += "\"sessionStartEpoch\":" + String(telemSessionStartEpoch) + ",";
     j += "\"sessionUptimeSec\":" + String(telemUptimeSec) + ",";
@@ -1928,13 +1944,17 @@ String buildStorageJson() {
   unsigned long pendLines = 0UL;
   unsigned long wifiB     = 0UL;
 
-  if (fsReady) {
+  if (fsReady && (fsMutex == NULL || xSemaphoreTake(fsMutex, pdMS_TO_TICKS(500)) == pdTRUE)) {
     if (LittleFS.exists(QUEUE_FILE)) {
       File f = LittleFS.open(QUEUE_FILE, "r");
       if (f) {
         pendB = (unsigned long)f.size();
-        while (f.available()) {
-          if (f.read() == '\n') pendLines++;
+        uint8_t buf[512];
+        size_t n;
+        while ((n = f.read(buf, sizeof(buf))) > 0) {
+          for (size_t i = 0; i < n; i++) {
+            if (buf[i] == '\n') pendLines++;
+          }
         }
         f.close();
       }
@@ -1946,13 +1966,17 @@ String buildStorageJson() {
         wf.close();
       }
     }
+    if (fsMutex != NULL) xSemaphoreGive(fsMutex);
   }
 
-  unsigned long heapTotalKb = (unsigned long)(ESP.getHeapSize() / 1024UL);
-  unsigned long heapFreeKb  = (unsigned long)(ESP.getFreeHeap() / 1024UL);
-  unsigned long heapMinKb   = (unsigned long)(ESP.getMinFreeHeap() / 1024UL);
+  unsigned long heapTotalKb    = (unsigned long)(ESP.getHeapSize() / 1024UL);
+  unsigned long heapFreeKb     = (unsigned long)(ESP.getFreeHeap() / 1024UL);
+  unsigned long heapMinKb      = (unsigned long)(ESP.getMinFreeHeap() / 1024UL);
+  unsigned long heapMaxAllocKb = (unsigned long)(ESP.getMaxAllocHeap() / 1024UL);
 
-  String j = "{";
+  String j;
+  j.reserve(384);
+  j = "{";
   j += "\"flashKb\":" + String(flashKb) + ",";
   j += "\"sketchKb\":" + String(sketchKb) + ",";
   j += "\"otaSlotKb\":" + String(otaSlotKb) + ",";
@@ -1964,7 +1988,9 @@ String buildStorageJson() {
   j += "\"wifiBytes\":" + String(wifiB) + ",";
   j += "\"heapTotalKb\":" + String(heapTotalKb) + ",";
   j += "\"heapFreeKb\":" + String(heapFreeKb) + ",";
-  j += "\"heapMinFreeKb\":" + String(heapMinKb);
+  j += "\"heapMinFreeKb\":" + String(heapMinKb) + ",";
+  j += "\"heapMaxAllocKb\":" + String(heapMaxAllocKb) + ",";
+  j += "\"fwVersion\":\"" FW_VERSION "\"";
   j += "}";
   return j;
 }
@@ -2043,6 +2069,7 @@ bool publishStatusToFirebase() {
   if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
 
   if (code == 200) {
+    lastFirebaseSuccessMillis = millis();
     if (wifiMutex == NULL || xSemaphoreTake(wifiMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
       lastPublishedIp = ip.toString();
       if (wifiMutex != NULL) xSemaphoreGive(wifiMutex);
@@ -2054,40 +2081,69 @@ bool publishStatusToFirebase() {
   return false;
 }
 
-// Extracts a string or bare primitive value for `"key":...` from a flat JSON object.
+// Extracts a string or bare primitive value for `"key":...` from a top-level flat JSON object.
 String jsonExtractField(const String& json, const char* key) {
-  String pat = String("\"") + key + "\"";
-  int pos = json.indexOf(pat);
-  if (pos < 0) return "";
-  pos = json.indexOf(':', pos + pat.length());
-  if (pos < 0) return "";
-  pos++;
-  while (pos < (int)json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) pos++;
-  if (pos >= (int)json.length()) return "";
-  if (json[pos] == '"') {
-    pos++;
-    String out;
-    while (pos < (int)json.length()) {
-      char c = json[pos++];
-      if (c == '\\' && pos < (int)json.length()) {
-        char n = json[pos++];
-        if (n == 'n') out += '\n';
-        else if (n == 'r') out += '\r';
-        else if (n == 't') out += '\t';
-        else out += n;
-      } else if (c == '"') {
-        break;
-      } else {
-        out += c;
+  int len = (int)json.length();
+  int keyLen = (int)strlen(key);
+  int depth = 0;
+  int i = 0;
+  while (i < len) {
+    char ch = json[i];
+    if (ch == '{' || ch == '[') { depth++; i++; continue; }
+    if (ch == '}' || ch == ']') { depth--; i++; continue; }
+    if (ch == '"') {
+      int strStart = i + 1;
+      i++;
+      while (i < len) {
+        if (json[i] == '\\' && i + 1 < len) { i += 2; continue; }
+        if (json[i] == '"') break;
+        i++;
       }
+      int strEnd = i;
+      if (i < len) i++; // skip closing quote
+      int j = i;
+      while (j < len && (json[j] == ' ' || json[j] == '\t' || json[j] == '\r' || json[j] == '\n')) j++;
+      if (depth == 1 && j < len && json[j] == ':' && (strEnd - strStart) == keyLen &&
+          strncmp(json.c_str() + strStart, key, keyLen) == 0) {
+        int pos = j + 1;
+        while (pos < len && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n')) pos++;
+        if (pos >= len) return "";
+        if (json[pos] == '"') {
+          pos++;
+          String out;
+          while (pos < len) {
+            char c = json[pos++];
+            if (c == '\\' && pos < len) {
+              char n = json[pos++];
+              if (n == 'n') out += '\n';
+              else if (n == 'r') out += '\r';
+              else if (n == 't') out += '\t';
+              else if (n == 'u' && pos + 4 <= len) {
+                char hex[5] = { json[pos], json[pos+1], json[pos+2], json[pos+3], 0 };
+                long codepoint = strtol(hex, nullptr, 16);
+                if (codepoint >= 0x20 && codepoint <= 0x7E) out += (char)codepoint;
+                pos += 4;
+              } else out += n;
+            } else if (c == '"') {
+              break;
+            } else {
+              out += c;
+            }
+          }
+          return out;
+        }
+        int end = pos;
+        while (end < len && json[end] != ',' && json[end] != '}' && json[end] != ']' &&
+               json[end] != ' ' && json[end] != '\r' && json[end] != '\n') end++;
+        String raw = json.substring(pos, end);
+        if (raw == "null") return "";
+        return raw;
+      }
+      continue;
     }
-    return out;
+    i++;
   }
-  int end = pos;
-  while (end < (int)json.length() && json[end] != ',' && json[end] != '}' && json[end] != ' ' && json[end] != '\r' && json[end] != '\n') end++;
-  String raw = json.substring(pos, end);
-  if (raw == "null") return "";
-  return raw;
+  return "";
 }
 
 void pollAndHandleFirebaseCommand() {
@@ -2129,7 +2185,8 @@ void pollAndHandleFirebaseCommand() {
   String action = jsonExtractField(body, "action");
   if (action.length() == 0 || (cmdId.length() > 0 && cmdId == lastProcessedCmdId)) return;
 
-  // Clear /cmd.json immediately so a reboot or retry never executes the same command twice.
+  // Clear /cmd.json immediately and confirm HTTP 200 before executing reboot/OTA commands.
+  int delCode = -1;
   if (tlsMutex == NULL || xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(5000)) == pdTRUE) {
     WiFiClientSecure client;
     configureSecureClient(client);
@@ -2138,10 +2195,14 @@ void pollAndHandleFirebaseCommand() {
     http.setConnectTimeout(5000);
     http.setTimeout(6000);
     if (http.begin(client, url)) {
-      http.sendRequest("DELETE");
+      delCode = http.sendRequest("DELETE");
       http.end();
     }
     if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+  }
+  if (delCode != 200 && (action == "reboot" || action == "otaUrl")) {
+    Serial.println("[CloudCmd] Aborting " + action + " because DELETE /cmd.json failed (HTTP " + String(delCode) + ")");
+    return;
   }
 
   lastProcessedCmdId = cmdId.length() > 0 ? cmdId : String(millis());
@@ -2213,9 +2274,10 @@ void pollAndHandleFirebaseCommand() {
     publishStatusToFirebase();
   } else if (action == "otaUrl") {
     String otaUrl = jsonExtractField(body, "url");
-    if (!otaUrl.startsWith("https://") && !otaUrl.startsWith("http://")) {
+    if (!otaUrl.startsWith("https://")) {
       cloudOtaState = "error";
-      cloudOtaMsg = "Invalid OTA URL";
+      cloudOtaMsg = "Invalid OTA URL (must start with https://)";
+      lastCmdStage = "error";
       lastCmdResult = cloudOtaMsg;
       publishStatusToFirebase();
       return;
@@ -2226,12 +2288,13 @@ void pollAndHandleFirebaseCommand() {
     publishStatusToFirebase();
 
     String err;
-    bool ok = performOtaFromUrl(otaUrl, err);
+    bool ok = performOtaFromUrl(otaUrl, err, false);
     if (ok) {
       cloudOtaState = "ok";
       cloudOtaMsg = "Flash complete -- rebooting now";
       lastCmdStage = "completed";
       lastCmdResult = cloudOtaMsg;
+      saveTelemetryToNvs();
       publishStatusToFirebase();
       digitalWrite(LED_PIN, HIGH);
       delay(5000);
@@ -2479,15 +2542,23 @@ void drainQueue(int maxCount) {
     } else {
       File tmp = LittleFS.open(QUEUE_TMP_FILE, "w");
       if (tmp) {
-        if (failedLine.length() > 0) tmp.println(failedLine);
+        bool copyOk = true;
+        if (failedLine.length() > 0 && tmp.println(failedLine) == 0) copyOk = false;
         uint8_t buf[256];
-        while (src.available()) {
+        while (copyOk && src.available()) {
           size_t n = src.read(buf, sizeof(buf));
-          if (n > 0) tmp.write(buf, n);
+          if (n > 0 && tmp.write(buf, n) != n) copyOk = false;
         }
         tmp.close();
         src.close();
-        LittleFS.rename(QUEUE_TMP_FILE, QUEUE_FILE);
+        if (copyOk) {
+          if (!LittleFS.rename(QUEUE_TMP_FILE, QUEUE_FILE)) {
+            Serial.println("Failed to rename drained backlog");
+          }
+        } else {
+          LittleFS.remove(QUEUE_TMP_FILE);
+          Serial.println("Flash full during backlog drain -- kept original queue");
+        }
       } else {
         Serial.println("Could not open scratch file for draining backlog");
         src.close();
@@ -2508,17 +2579,29 @@ void drainQueue(int maxCount) {
 // session control's writes always take priority, so if that happened this
 // just leaves the pin alone rather than forcing it off underneath whatever
 // session control has since set it to.
-void handleReadingCycle() {
+bool handleReadingCycle() {
   bool litForThisCycle = ledAvailableForStatus();
   if (litForThisCycle) digitalWrite(LED_PIN, HIGH);
 
-  float temp = dht.readTemperature();
-  float hum  = dht.readHumidity();
+  float temp = NAN;
+  float hum  = NAN;
+  bool validRead = false;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    temp = dht.readTemperature();
+    hum  = dht.readHumidity();
+    if (isfinite(temp) && isfinite(hum) &&
+        temp >= -40.0f && temp <= 80.0f &&
+        hum >= 0.0f && hum <= 100.0f) {
+      validRead = true;
+      break;
+    }
+    if (attempt < 2) vTaskDelay(pdMS_TO_TICKS(2100));
+  }
 
-  if (isnan(temp) || isnan(hum)) {
-    Serial.println("Read failed -- check wiring");
+  if (!validRead) {
+    Serial.println("DHT22 read failed or out-of-range after 3 attempts");
     if (litForThisCycle && ledAvailableForStatus()) digitalWrite(LED_PIN, LOW);
-    return;
+    return false;
   }
 
   lastTemp = temp;
@@ -2535,11 +2618,11 @@ void handleReadingCycle() {
   if ((unsigned long)now < MIN_VALID_EPOCH) {
     Serial.println("Clock not synced yet -- skipping this reading");
     if (litForThisCycle && ledAvailableForStatus()) digitalWrite(LED_PIN, LOW);
-    return;
+    return false;
   }
 
   unsigned long epoch = (unsigned long)now;
-  String payload = "{\"temp\":" + String(temp) + ",\"hum\":" + String(hum) + ",\"t\":" + String(epoch) + "}";
+  String payload = "{\"temp\":" + String(temp, 1) + ",\"hum\":" + String(hum, 1) + ",\"t\":" + String(epoch) + "}";
 
   bool uploaded = false;
   if (uploadsAllowedNow() && WiFi.status() == WL_CONNECTED) {
@@ -2551,6 +2634,7 @@ void handleReadingCycle() {
   }
 
   if (litForThisCycle && ledAvailableForStatus()) digitalWrite(LED_PIN, LOW);
+  return true;
 }
 
 // ---------------- DS1307 real-time clock ----------------
@@ -2619,23 +2703,40 @@ bool rtcHasValidTime() {
   int got = (txErr == 0) ? Wire.requestFrom((uint8_t)DS1307_I2C_ADDR, (uint8_t)7) : 0;
   if (txErr == 0 && got == 7) {
     uint8_t rawSec   = Wire.read();
-    Wire.read(); // min
-    Wire.read(); // hour
+    uint8_t rawMin   = Wire.read();
+    uint8_t rawHour  = Wire.read();
     Wire.read(); // dow
     uint8_t rawDate  = Wire.read();
     uint8_t rawMonth = Wire.read();
     uint8_t rawYear  = Wire.read();
     bool oscRunning  = (rawSec & 0x80) == 0;
+    int sec          = bcdToDec(rawSec & 0x7F);
+    int minute       = bcdToDec(rawMin & 0x7F);
+    int hour         = (rawHour & 0x40)
+      ? ((bcdToDec(rawHour & 0x1F) % 12) + ((rawHour & 0x20) ? 12 : 0))
+      : bcdToDec(rawHour & 0x3F);
     int year2000     = 2000 + bcdToDec(rawYear);
     int month        = bcdToDec(rawMonth & 0x1F);
     int day          = bcdToDec(rawDate & 0x3F);
-    valid = oscRunning && (year2000 >= 2021) && (month >= 1 && month <= 12) && (day >= 1 && day <= 31);
+    valid = oscRunning && (year2000 >= 2021 && year2000 <= 2099) &&
+            (month >= 1 && month <= 12) && (day >= 1 && day <= 31) &&
+            (hour >= 0 && hour <= 23) && (minute >= 0 && minute <= 59) && (sec >= 0 && sec <= 59);
     rtcDiag = String(year2000) + "-" + String(month) + "-" + String(day) + (oscRunning ? "" : " (CH halted)");
   } else {
     rtcDiag = "read failed (txErr=" + String(txErr) + ", got=" + String(got) + ")";
   }
   if (i2cMutex != NULL) xSemaphoreGive(i2cMutex);
   return valid;
+}
+
+static time_t utcCivilToEpoch(int y, int m, int d, int hh, int mm, int ss) {
+  y -= (m <= 2);
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = (unsigned)(y - era * 400);
+  const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  int64_t days = (int64_t)era * 146097 + (int64_t)doe - 719468;
+  return (time_t)(days * 86400LL + (int64_t)hh * 3600LL + (int64_t)mm * 60LL + ss);
 }
 
 time_t rtcGetEpoch() {
@@ -2652,15 +2753,19 @@ time_t rtcGetEpoch() {
     uint8_t rawMonth = Wire.read();
     uint8_t rawYear  = Wire.read();
 
-    struct tm t = {};
-    t.tm_sec  = bcdToDec(rawSec & 0x7F);
-    t.tm_min  = bcdToDec(rawMin & 0x7F);
-    t.tm_hour = bcdToDec(rawHour & 0x3F);
-    t.tm_mday = bcdToDec(rawDate & 0x3F);
-    t.tm_mon  = bcdToDec(rawMonth & 0x1F) - 1;
-    t.tm_year = bcdToDec(rawYear) + 100;
-    t.tm_isdst = 0;
-    result = mktime(&t);
+    int sec   = bcdToDec(rawSec & 0x7F);
+    int min   = bcdToDec(rawMin & 0x7F);
+    int hour  = (rawHour & 0x40)
+      ? ((bcdToDec(rawHour & 0x1F) % 12) + ((rawHour & 0x20) ? 12 : 0))
+      : bcdToDec(rawHour & 0x3F);
+    int day   = bcdToDec(rawDate & 0x3F);
+    int month = bcdToDec(rawMonth & 0x1F);
+    int year  = 2000 + bcdToDec(rawYear);
+    if (year >= 2021 && year <= 2099 && month >= 1 && month <= 12 &&
+        day >= 1 && day <= 31 && hour >= 0 && hour <= 23 &&
+        min >= 0 && min <= 59 && sec >= 0 && sec <= 59) {
+      result = utcCivilToEpoch(year, month, day, hour, min, sec);
+    }
   }
   if (i2cMutex != NULL) xSemaphoreGive(i2cMutex);
   return result;
@@ -2921,32 +3026,37 @@ void loadOtaBinUrl() {
 }
 
 void saveOtaBinUrl(const String& url) {
-  currentOtaBinUrl = url;
-  syncCodePrefs.putString("ota_bin_url", url);
+  if (settingsMutex == NULL || xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+    currentOtaBinUrl = url;
+    syncCodePrefs.putString("ota_bin_url", url);
+    if (settingsMutex != NULL) xSemaphoreGive(settingsMutex);
+  }
 }
 
-void otaStreamLog(const String& msg) {
+void otaStreamLog(const String& msg, bool streamToHttp = true) {
   Serial.println(msg);
-  server.sendContent(msg + "\n");
+  if (streamToHttp) {
+    server.sendContent(msg + "\n");
+  }
 }
 
 // Downloads a compiled .bin from an https:// URL, flashes via Update.h, blinks
-// the blue LED every 200ms, and streams live status lines back to the browser.
-bool performOtaFromUrl(const String& url, String& errOut) {
+// the blue LED every 200ms, and optionally streams live status lines to Core 1 HTTP.
+bool performOtaFromUrl(const String& url, String& errOut, bool streamToHttp = false) {
   if (!url.startsWith("https://") || url.length() > 256 || url.indexOf(' ') >= 0) {
     errOut = "URL must start with https:// and contain no spaces.";
-    otaStreamLog("[OTA] FAILED: " + errOut);
+    otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
     return false;
   }
   if (WiFi.status() != WL_CONNECTED) {
     errOut = "WiFi is not connected.";
-    otaStreamLog("[OTA] FAILED: " + errOut);
+    otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
     return false;
   }
-  otaStreamLog("[OTA] Waiting for TLS lock...");
+  otaStreamLog("[OTA] Waiting for TLS lock...", streamToHttp);
   if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
     errOut = "Device busy with another HTTPS request -- try again.";
-    otaStreamLog("[OTA] FAILED: " + errOut);
+    otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
     return false;
   }
 
@@ -2963,31 +3073,32 @@ bool performOtaFromUrl(const String& url, String& errOut) {
     HTTPClient http;
     http.setConnectTimeout(15000);
     http.setTimeout(30000);
+    http.useHTTP10(true); // disable chunked transfer framing so raw stream bytes match binary image
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
-    otaStreamLog("[OTA] Connecting to firmware server...");
+    otaStreamLog("[OTA] Connecting to firmware server...", streamToHttp);
     if (!http.begin(client, url)) {
       errOut = "Could not initialize HTTPS connection.";
-      otaStreamLog("[OTA] FAILED: " + errOut);
+      otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
     } else {
       int httpCode = http.GET();
       if (httpCode != HTTP_CODE_OK) {
         errOut = "Download failed (HTTP " + String(httpCode) + ").";
-        otaStreamLog("[OTA] FAILED: " + errOut);
+        otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
       } else {
         int contentLength = http.getSize();
         size_t updateSize = (contentLength > 0) ? (size_t)contentLength : UPDATE_SIZE_UNKNOWN;
         if (contentLength > 0) {
-          otaStreamLog("[OTA] Connected (HTTP 200) -- firmware size: " + String(contentLength / 1024.0, 1) + " KB");
+          otaStreamLog("[OTA] Connected (HTTP 200) -- firmware size: " + String(contentLength / 1024.0, 1) + " KB", streamToHttp);
         } else {
-          otaStreamLog("[OTA] Connected (HTTP 200) -- chunked stream");
+          otaStreamLog("[OTA] Connected (HTTP 200) -- HTTP/1.0 stream", streamToHttp);
         }
-        otaStreamLog("[OTA] Preparing OTA flash partition...");
+        otaStreamLog("[OTA] Preparing OTA flash partition...", streamToHttp);
         if (!Update.begin(updateSize)) {
           errOut = "Not enough OTA space: " + String(Update.errorString());
-          otaStreamLog("[OTA] FAILED: " + errOut);
+          otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
         } else {
-          otaStreamLog("[OTA] Downloading & flashing (blue LED blinking every 200ms)...");
+          otaStreamLog("[OTA] Downloading & flashing (blue LED blinking every 200ms)...", streamToHttp);
           WiFiClient* stream = http.getStreamPtr();
           uint8_t buf[1024];
           size_t written = 0;
@@ -2996,7 +3107,7 @@ bool performOtaFromUrl(const String& url, String& errOut) {
           unsigned long lastDataMs = millis();
           bool writeErr = false;
 
-          while (http.connected() && (contentLength < 0 || (int)written < contentLength)) {
+          while ((http.connected() || stream->available() > 0) && (contentLength < 0 || (int)written < contentLength)) {
             serviceOtaLed();
             size_t avail = stream->available();
             if (avail > 0) {
@@ -3015,11 +3126,11 @@ bool performOtaFromUrl(const String& url, String& errOut) {
                     lastPctLogged = pct;
                     lastProgressMs = millis();
                     otaStreamLog("[OTA] Flashing... " + String(pct) + "% (" +
-                                 String(written / 1024) + " / " + String(contentLength / 1024) + " KB)");
+                                 String(written / 1024) + " / " + String(contentLength / 1024) + " KB)", streamToHttp);
                   }
                 } else if (millis() - lastProgressMs >= 2000) {
                   lastProgressMs = millis();
-                  otaStreamLog("[OTA] Flashing... " + String(written / 1024) + " KB written");
+                  otaStreamLog("[OTA] Flashing... " + String(written / 1024) + " KB written", streamToHttp);
                 }
               }
             } else {
@@ -3031,21 +3142,21 @@ bool performOtaFromUrl(const String& url, String& errOut) {
           if (writeErr) {
             Update.abort();
             errOut = "Flash write error: " + String(Update.errorString());
-            otaStreamLog("[OTA] FAILED: " + errOut);
-          } else if (contentLength > 0 && (int)written != contentLength) {
+            otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
+          } else if (written == 0 || (contentLength > 0 && (int)written != contentLength)) {
             Update.abort();
             errOut = "Incomplete download (" + String(written) + "/" + String(contentLength) + " bytes).";
-            otaStreamLog("[OTA] FAILED: " + errOut);
+            otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
           } else {
-            otaStreamLog("[OTA] Verifying written image & switching boot partition...");
+            otaStreamLog("[OTA] Verifying written image & switching boot partition...", streamToHttp);
             if (!Update.end(true)) {
               errOut = "Flash verification failed: " + String(Update.errorString());
-              otaStreamLog("[OTA] FAILED: " + errOut);
+              otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
             } else if (!Update.isFinished()) {
               errOut = "Update did not finish cleanly.";
-              otaStreamLog("[OTA] FAILED: " + errOut);
+              otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
             } else {
-              otaStreamLog("[OTA] DONE! " + String(written / 1024.0, 1) + " KB flashed & verified. Holding blue LED solid for 5s, then rebooting...");
+              otaStreamLog("[OTA] DONE! " + String(written / 1024.0, 1) + " KB flashed & verified. Holding blue LED solid for 5s, then rebooting...", streamToHttp);
               ok = true;
             }
           }
@@ -3245,14 +3356,25 @@ String htmlEscape(const String& s) {
 // backslash.
 String jsonEscape(const String& s) {
   String out;
-  out.reserve(s.length());
+  out.reserve(s.length() + 8);
   for (unsigned int i = 0; i < s.length(); i++) {
-    switch (s[i]) {
+    unsigned char c = (unsigned char)s[i];
+    switch (c) {
       case '"':  out += "\\\""; break;
       case '\\': out += "\\\\"; break;
+      case '\b': out += "\\b";  break;
+      case '\f': out += "\\f";  break;
       case '\n': out += "\\n";  break;
       case '\r': out += "\\r";  break;
-      default:   out += s[i];
+      case '\t': out += "\\t";  break;
+      default:
+        if (c < 0x20) {
+          char esc[7];
+          snprintf(esc, sizeof(esc), "\\u%04x", c);
+          out += esc;
+        } else {
+          out += (char)c;
+        }
     }
   }
   return out;
@@ -3313,11 +3435,14 @@ String buildHealthStatusJson() {
           ",\"secondsAgo\":" + (fbAttempted ? String((now - lastFirebaseAttemptMillis) / 1000) : String("null")) +
           "},";
 
-  String diagCopy = rtcDiag;
-  diagCopy.replace("\"", "'");
+  String diagCopy;
+  if (i2cMutex == NULL || xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+    diagCopy = rtcDiag;
+    if (i2cMutex != NULL) xSemaphoreGive(i2cMutex);
+  }
   json += "\"rtc\":{\"present\":" + String(rtcPresent ? "true" : "false") +
           ",\"timeValid\":" + String(rtcTimeValid ? "true" : "false") +
-          ",\"diag\":\"" + diagCopy + "\"},";
+          ",\"diag\":\"" + jsonEscape(diagCopy) + "\"},";
 
   json += "\"dht\":{\"everRead\":" + String(dhtEverRead ? "true" : "false") +
           ",\"secondsAgo\":" + (dhtEverRead ? String((now - lastGoodDhtReadMillis) / 1000) : String("null")) +
@@ -3662,6 +3787,7 @@ void applyWifiRadioProfileLocked(PowerMode mode) {
 }
 
 void applyPowerMode(PowerMode newMode, bool publishStatus) {
+  serviceTelemetryTick(); // bill elapsed seconds to prevMode before switching
   PowerMode prevMode = powerMode;
   powerMode = newMode;
   savePowerMode();
@@ -3677,8 +3803,8 @@ void applyPowerMode(PowerMode newMode, bool publishStatus) {
     setCpuFrequencyMhz(POWER_SAVING_CPU_MHZ);
     // Let wifiMaintenanceTask (Core 0) publish status.json and cut WiFi cleanly
     // so Core 1's HTTP handler never stalls for a blocking HTTPS request.
-    highPowerPendingSleep = true;
     if (publishStatus) statusPublishRequested = true;
+    highPowerPendingSleep = true;
     Serial.println("Power mode -> High Power Saving (80 MHz, WiFi sleeping for 30m after status publish).");
     return;
   }
@@ -3760,9 +3886,10 @@ void sensorUploadTask(void* param) {
 
     unsigned long readInterval = firstReadDone ? effectiveReadUploadIntervalMs() : 10000UL;
     if (lastReadUploadLocal == 0 || (now - lastReadUploadLocal >= readInterval)) {
-      if (timeSynced) firstReadDone = true;
       lastReadUploadLocal = now;
-      handleReadingCycle();
+      if (handleReadingCycle() && timeSynced) {
+        firstReadDone = true;
+      }
     }
 
     if (!otaInProgress && (now - lastDrainAttemptLocal >= effectiveDrainIntervalMs())) {
@@ -3872,11 +3999,11 @@ void wifiMaintenanceTask(void* param) {
           applyWifiRadioProfileLocked(POWER_HIGH);
           lastConnectedSSID = "";
           xSemaphoreGive(wifiMutex);
+          highPowerWifiAwake = true;
+          highPowerWakeStartMs = now;
+          lastCheckLocal = 0; // trigger immediate connect attempt
+          Serial.println("High Power Saving: waking WiFi for 60s sync & web window.");
         }
-        highPowerWifiAwake = true;
-        highPowerWakeStartMs = now;
-        lastCheckLocal = 0; // trigger immediate connect attempt
-        Serial.println("High Power Saving: waking WiFi for 60s sync & web window.");
       } else if (now - highPowerWakeStartMs >= HIGH_POWER_WAKE_WINDOW_MS) {
         if (xSemaphoreTake(wifiMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
           WiFi.mode(WIFI_OFF);
@@ -4089,12 +4216,18 @@ void wifiMaintenanceTask(void* param) {
 // - In any power-saving mode (Low/Medium/High): single click returns to Normal immediately.
 // - In Normal mode: hold for 1 second to enter High Power Saving.
 void handleButton() {
+  static unsigned long modeChangeCooldownMs = 0;
   bool rawPress = sessionButtonPressed();
   unsigned long now = millis();
+
+  if (modeChangeCooldownMs != 0 && (now - modeChangeCooldownMs < 500UL)) {
+    return;
+  }
 
   if (powerMode != POWER_NORMAL) {
     holdingForPowerSave = false;
     if (rawPress) {
+      modeChangeCooldownMs = now;
       applyPowerMode(POWER_NORMAL, true);
     }
     return;
@@ -4110,6 +4243,7 @@ void handleButton() {
     if (digitalRead(BUTTON_PIN) == LOW) {
       if (now - longPressStart >= LONG_PRESS_MS) {
         holdingForPowerSave = false;
+        modeChangeCooldownMs = now;
         applyPowerMode(POWER_HIGH, true);
       }
     } else {
@@ -4131,6 +4265,7 @@ void setup() {
   i2cMutex          = xSemaphoreCreateMutex();
   settingsMutex     = xSemaphoreCreateMutex();
   telemMutex        = xSemaphoreCreateMutex();
+  fsMutex           = xSemaphoreCreateMutex();
 
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
@@ -4502,8 +4637,13 @@ void setup() {
 
   server.on("/update", HTTP_GET, []() {
     if (!requireAdminAuth()) return;
+    String otaUrlCopy;
+    if (settingsMutex == NULL || xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+      otaUrlCopy = currentOtaBinUrl;
+      if (settingsMutex != NULL) xSemaphoreGive(settingsMutex);
+    }
     String page = String(updatePage);
-    page.replace("%OTA_BIN_URL%", htmlEscape(currentOtaBinUrl));
+    page.replace("%OTA_BIN_URL%", htmlEscape(otaUrlCopy));
     page.replace("%OTA_SLOT_KB%", String((unsigned long)(ESP.getFreeSketchSpace() / 1024)));
     server.sendHeader("Cache-Control", "no-store, must-revalidate");
     server.send(200, "text/html", page);
@@ -4517,6 +4657,7 @@ void setup() {
       server.send(ok ? 200 : 500, "text/plain",
         ok ? "Firmware flashed -- LED solid 5s, then restarting..." : ("Update failed: " + String(Update.errorString())));
       if (ok) {
+        saveTelemetryToNvs();
         digitalWrite(LED_PIN, HIGH);
         delay(5000);
         ESP.restart();
@@ -4526,9 +4667,10 @@ void setup() {
       }
     },
     []() {
-      if (!server.authenticate(currentOtaUser.c_str(), currentOtaPass.c_str())) return;
+      if (otaLockedOut() || !server.authenticate(currentOtaUser.c_str(), currentOtaPass.c_str())) return;
       HTTPUpload& upload = server.upload();
       if (upload.status == UPLOAD_FILE_START) {
+        if (otaInProgress) return;
         otaInProgress = true;
         otaLedState = true;
         otaLedLastToggleMs = millis();
@@ -4536,17 +4678,26 @@ void setup() {
         Serial.println("OTA upload start: " + upload.filename);
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
           Serial.println("OTA begin failed: " + String(Update.errorString()));
+          digitalWrite(LED_PIN, LOW);
+          otaInProgress = false;
         }
       } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (!otaInProgress) return;
         serviceOtaLed();
         if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
           Serial.println("OTA write failed: " + String(Update.errorString()));
+          Update.abort();
+          digitalWrite(LED_PIN, LOW);
+          otaInProgress = false;
         }
       } else if (upload.status == UPLOAD_FILE_END) {
+        if (!otaInProgress) return;
         if (Update.end(true)) {
           Serial.println("OTA upload complete: " + String(upload.totalSize) + " bytes");
         } else {
           Serial.println("OTA end failed: " + String(Update.errorString()));
+          digitalWrite(LED_PIN, LOW);
+          otaInProgress = false;
         }
       } else if (upload.status == UPLOAD_FILE_ABORTED) {
         Update.abort();
@@ -4571,11 +4722,12 @@ void setup() {
     server.send(200, "text/plain", "");
 
     String err;
-    otaStreamLog("[OTA] Request accepted -- starting pull update.");
-    bool ok = performOtaFromUrl(url, err);
+    otaStreamLog("[OTA] Request accepted -- starting pull update.", true);
+    bool ok = performOtaFromUrl(url, err, true);
     server.sendContent(""); // finish chunked response
 
     if (ok) {
+      saveTelemetryToNvs();
       digitalWrite(LED_PIN, HIGH);
       delay(5000);
       ESP.restart();
@@ -4585,33 +4737,44 @@ void setup() {
 
   server.on("/telemetry", HTTP_GET, []() {
     if (!requireAdminAuth()) return;
+    server.sendHeader("Cache-Control", "no-store, must-revalidate");
     server.send(200, "text/html; charset=utf-8", telemetryPage);
   });
 
   server.on("/telemetry-data", HTTP_GET, []() {
     if (!requireAdminAuth()) return;
+    server.sendHeader("Cache-Control", "no-store, must-revalidate");
     server.send(200, "application/json", buildTelemetryJson());
   });
 
   server.on("/telemetry", HTTP_POST, []() {
     if (!requireAdminAuth()) return;
+    serviceTelemetryTick(); // flush elapsed time before mutating tracker flags
     String act = server.arg("action");
     String vStr = server.arg("startVolts");
     float parsedV = vStr.length() ? vStr.toFloat() : 0.0f;
     String reply = "Updated.";
+    int statusCode = 200;
 
     if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
       if (act == "setBattery") {
         battTrackEnabled = (server.arg("enabled") == "1");
-        if (parsedV >= 2.5f && parsedV <= 4.5f) battStartVolts = parsedV;
-        telemLastTickMs = millis();
+        if (battTrackEnabled && parsedV >= 2.5f && parsedV <= 4.5f) battStartVolts = parsedV;
+        if (battTrackEnabled && telemSessionStartEpoch == 0) {
+          time_t nowSec = time(nullptr);
+          if ((unsigned long)nowSec >= MIN_VALID_EPOCH) telemSessionStartEpoch = (uint32_t)nowSec;
+        }
         reply = battTrackEnabled ? "Battery tracking ON." : "Battery tracking PAUSED.";
       } else if (act == "setVoltage") {
-        if (parsedV >= 2.5f && parsedV <= 4.5f) {
+        if (vStr == "0" || vStr == "0.0" || vStr == "0.00") {
+          battStartVolts = 0.0f;
+          reply = "Start voltage cleared (defaults to 4.20V / 100%).";
+        } else if (parsedV >= 2.5f && parsedV <= 4.5f) {
           battStartVolts = parsedV;
           reply = "Start voltage saved: " + String(parsedV, 2) + "V.";
         } else {
-          reply = "Enter a valid voltage between 2.50 and 4.50 V.";
+          statusCode = 400;
+          reply = "Enter a valid voltage between 2.50 and 4.50 V (or 0 to clear).";
         }
       } else if (act == "resetBattery") {
         time_t nowSec = time(nullptr);
@@ -4620,11 +4783,11 @@ void setup() {
         telemModeSec[0] = telemModeSec[1] = telemModeSec[2] = telemModeSec[3] = 0;
         telemBootCount = battTrackEnabled ? 1 : 0;
         telemCrashCount = 0;
+        telemResetLog = "";
         if (parsedV >= 2.5f && parsedV <= 4.5f) battStartVolts = parsedV;
         reply = "Battery run counters reset.";
       } else if (act == "setWifi") {
         wifiTrackEnabled = (server.arg("enabled") == "1");
-        telemLastTickMs = millis();
         telemDiscStartMs = millis();
         telemWasWifiConn = (WiFi.status() == WL_CONNECTED);
         reply = wifiTrackEnabled ? "WiFi tracking ON." : "WiFi tracking PAUSED.";
@@ -4634,13 +4797,19 @@ void setup() {
         telemWifiReconnects = 0;
         telemWifiConnMsSum = 0;
         telemWifiConnSamples = 0;
+        telemDiscStartMs = millis();
+        telemWasWifiConn = (WiFi.status() == WL_CONNECTED);
         reply = "WiFi tracking counters reset.";
+      } else {
+        statusCode = 400;
+        reply = "Unknown telemetry action.";
       }
-      saveTelemetryToNvsLocked();
+      if (statusCode == 200) saveTelemetryToNvsLocked();
       if (telemMutex != NULL) xSemaphoreGive(telemMutex);
     }
-    statusPublishRequested = true;
-    server.send(200, "text/plain", reply);
+    if (statusCode == 200) statusPublishRequested = true;
+    server.sendHeader("Cache-Control", "no-store, must-revalidate");
+    server.send(statusCode, "text/plain", reply);
   });
 
   const char* authHeaders[] = { "Authorization" };
