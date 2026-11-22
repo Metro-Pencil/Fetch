@@ -2362,7 +2362,7 @@
   }
 
 
-  /* ---------- Battery Run & Telemetry Card (v3.9.1) ---------- */
+  /* ---------- Battery Run & Telemetry Card (v3.9.2) ---------- */
   .telem-top-row {
     display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
     margin-bottom: 10px;
@@ -2396,6 +2396,79 @@
   [data-theme="atelier"] .telem-reset-item {
     background: #FFFFFF;
     border-color: var(--border);
+  }
+
+  /* ---------- Command Queue & Offline 4-Step Upload History (v3.9.2) ---------- */
+  .cmd-q-list {
+    display: flex; flex-direction: column; gap: 8px; margin-top: 8px;
+  }
+  .cmd-q-item {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 10px 12px;
+    transition: border-color 180ms ease;
+  }
+  .cmd-q-item.is-active { border-color: rgba(245, 166, 107, 0.55); }
+  .cmd-q-item.is-done { border-color: rgba(74, 222, 128, 0.45); }
+  .cmd-q-item.is-err { border-color: rgba(248, 113, 113, 0.50); }
+  .cmd-q-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; flex-wrap: wrap;
+    font-family: var(--sans); font-size: 12px; font-weight: 600; color: var(--text);
+  }
+  .cmd-q-meta {
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+    font-variant-numeric: tabular-nums; margin-left: auto;
+  }
+  .cmd-q-steps {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px; margin-top: 8px;
+  }
+  .cmd-q-step {
+    display: flex; align-items: center; justify-content: center; gap: 4px;
+    padding: 4px 5px; border-radius: 8px;
+    background: var(--panel); border: 1px solid var(--border);
+    font-family: var(--mono); font-size: 9.5px; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .cmd-q-step.active {
+    border-color: var(--temp); color: var(--temp); font-weight: 600;
+  }
+  .cmd-q-step.done {
+    border-color: rgba(74, 222, 128, 0.45); color: var(--ok); font-weight: 600;
+  }
+  .cmd-q-step.err {
+    border-color: rgba(248, 113, 113, 0.55); color: var(--err); font-weight: 600;
+  }
+  .cmd-q-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; flex-wrap: wrap; margin-top: 7px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  }
+  .cmd-q-foot-msg { min-width: 0; overflow-wrap: anywhere; flex: 1 1 160px; }
+  .cmd-q-btn-sm {
+    min-height: 32px !important; padding: 4px 10px !important;
+    font-size: 11px !important; border-radius: 8px !important;
+  }
+  .cmd-q-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 7px; border-radius: 999px;
+    font-family: var(--mono); font-size: 10px; font-weight: 600;
+    background: rgba(245, 166, 107, 0.16); color: var(--temp);
+    border: 1px solid rgba(245, 166, 107, 0.35);
+  }
+  [data-theme="kinetic"] .cmd-q-item {
+    background: rgba(255, 255, 255, 0.045);
+    border-color: rgba(255, 255, 255, 0.10);
+  }
+  [data-theme="kinetic"] .cmd-q-step {
+    background: rgba(10, 12, 16, 0.55);
+  }
+  [data-theme="atelier"] .cmd-q-item {
+    background: rgba(36, 29, 24, 0.03);
+    border-radius: 16px;
+  }
+  [data-theme="atelier"] .cmd-q-step {
+    background: #FFFFFF;
   }
 
   /* Responsive overrides placed AFTER all theme blocks so Kinetic/Atelier stay aligned on mobile */
@@ -2433,8 +2506,11 @@
 <div id="cmd-stepper-fallback-host" style="display:none;">
   <div class="cmd-stepper" id="cmd-stepper" role="status" aria-live="polite">
     <div class="cmd-stepper-head">
-      <span id="cmd-stepper-title">Cloud Command</span>
-      <span style="display:inline-flex;align-items:center;gap:8px;">
+      <span style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;">
+        <span id="cmd-stepper-title">Cloud Command</span>
+        <span class="cmd-q-badge" id="cmd-stepper-qbadge" style="display:none;"></span>
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:8px;flex-shrink:0;">
         <span id="cmd-stepper-time">0.0s</span>
         <button type="button" class="cmd-stepper-close" id="cmd-stepper-close" onclick="dismissCmdStepper()" aria-label="Dismiss">&times;</button>
       </span>
@@ -2454,7 +2530,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.9.1</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.9.2</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -2862,11 +2938,11 @@
           <div class="card-head-toggle" style="margin-bottom:4px;">
             <h2>App Theme &amp; Updates</h2>
             <div class="card-head-meta">
-              <span class="minimal-pill-hint">v3.9.1</span>
+              <span class="minimal-pill-hint">v3.9.2</span>
               <span class="expand-chevron" aria-hidden="true">&#9662;</span>
             </div>
           </div>
-          <div class="ota-meta" id="app-ver-meta">Running <b>v3.9.1</b> · checking GitHub for updates…</div>
+          <div class="ota-meta" id="app-ver-meta">Running <b>v3.9.2</b> · checking GitHub for updates…</div>
           <div class="card-detail-drawer">
             <div class="card-detail-content">
               <div class="card-detail-inner-pad">
@@ -2961,6 +3037,32 @@
           </div>
         </div>
 
+        <div class="card expandable-card" id="card-cmd-queue" onclick="toggleCardExpand(event, this)">
+          <div class="card-head-toggle">
+            <h2>Command Queue &amp; Upload History</h2>
+            <div class="card-head-meta">
+              <span class="status-pill" id="cmd-queue-pill">Idle</span>
+              <span class="minimal-pill-hint" id="cmd-history-count">0 saved</span>
+              <span class="expand-chevron" aria-hidden="true">&#9662;</span>
+            </div>
+          </div>
+          <div class="ota-meta" id="cmd-queue-meta">Sequential 4-step upload queue (prevents concurrent actions from dropping) with offline history saved on this device.</div>
+          <div class="cmd-q-list" id="cmd-active-queue-list"></div>
+
+          <div class="card-detail-drawer">
+            <div class="card-detail-content">
+              <div class="card-detail-inner-pad">
+                <div class="controls-row" style="margin-bottom:8px;">
+                  <button type="button" class="btn-ghost" onclick="resumeCmdQueueNow()">Process Queue</button>
+                  <button type="button" class="btn-ghost" onclick="exportCmdHistory()">Export JSON</button>
+                  <button type="button" class="btn-ghost" onclick="clearCmdHistory()">Clear History</button>
+                </div>
+                <div class="cmd-q-list" id="cmd-history-list"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-head-toggle">
             <h2>ESP32 Storage &amp; RAM</h2>
@@ -3006,7 +3108,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.2.0/chartjs-plugin-zoom.min.js"></script>
 <script>
-  const APP_VERSION = '3.9.1';
+  const APP_VERSION = '3.9.2';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   const VIEW_ORDER = ['dashboard', 'graphs', 'controls', 'system'];
@@ -4047,6 +4149,15 @@
       const ssid = wifiBtn.getAttribute('data-ssid') || '';
       if (act === 'pref') cloudSetPreferredWifi(ssid);
       else if (act === 'remove') cloudRemoveWifi(ssid);
+      return;
+    }
+    const qBtn = ev.target && ev.target.closest('[data-cmdq-act]');
+    if (qBtn){
+      ev.stopPropagation();
+      const act = qBtn.getAttribute('data-cmdq-act');
+      const cid = qBtn.getAttribute('data-cmd-id') || '';
+      if (act === 'cancel') cancelQueuedCmd(cid);
+      else if (act === 'retry') retryHistoryCmd(cid);
     }
   });
 
@@ -4249,14 +4360,200 @@
     dashMsg.textContent = '';
   }
 
-  // ---------- Native Firebase Cloud Control Bridge (v3.7.0 — Inline Contextual 4-Step Dropdown) ----------
+  // ---------- Native Firebase Cloud Control Bridge (v3.9.2 — FIFO 4-Step Queue + Offline History) ----------
+  const CMD_QUEUE_LS = 'rl_cmd_queue_v1';
+  const CMD_HISTORY_LS = 'rl_cmd_history_v1';
+  const CMD_HISTORY_MAX = 100;
+
+  let cmdQueue = [];
+  let cmdHistory = [];
+  let activeCmdJob = null;
+  let cmdSeqCounter = 0;
   let pendingCmdId = '';
   let pendingCmdStartMs = 0;
   let pendingCmdLabel = '';
   let cmdPollTimer = null;
   let cmdClockTimer = null;
   let cmdAutoHideTimer = null;
+  let cmdNextTimer = null;
   let activeCmdSlotKey = 'home-actions';
+
+  function loadCmdQueueAndHistory(){
+    try {
+      const q = JSON.parse(localStorage.getItem(CMD_QUEUE_LS) || '[]');
+      if (Array.isArray(q)) cmdQueue = q.filter(j => j && j.payload && j.id);
+    } catch(e) { cmdQueue = []; }
+    try {
+      const h = JSON.parse(localStorage.getItem(CMD_HISTORY_LS) || '[]');
+      if (Array.isArray(h)) cmdHistory = h.filter(j => j && j.id).slice(0, CMD_HISTORY_MAX);
+    } catch(e) { cmdHistory = []; }
+  }
+
+  function persistCmdQueueAndHistory(){
+    try { localStorage.setItem(CMD_QUEUE_LS, JSON.stringify(cmdQueue)); } catch(e) {}
+    try { localStorage.setItem(CMD_HISTORY_LS, JSON.stringify(cmdHistory.slice(0, CMD_HISTORY_MAX))); } catch(e) {}
+  }
+
+  function cmdStepStatesForStage(stage){
+    if (stage === 'queued')     return ['', '', '', ''];
+    if (stage === 'sending')    return ['active', '', '', ''];
+    if (stage === 'sent')       return ['done', 'active', '', ''];
+    if (stage === 'received')   return ['done', 'done', 'active', ''];
+    if (stage === 'completed')  return ['done', 'done', 'done', 'done'];
+    if (stage === 'error')      return ['done', 'done', 'err', 'err'];
+    if (stage === 'send_error') return ['err', '', '', ''];
+    if (stage === 'timeout')    return ['done', 'err', '', ''];
+    return ['', '', '', ''];
+  }
+
+  function renderCmdJobCardHtml(job, isLive){
+    const st = cmdStepStatesForStage(job.stage);
+    const stepLabels = ['1 Firebase', '2 ESP Got', '3 Applied', '4 Done'];
+    const cardCls =
+      job.stage === 'completed' ? ' is-done' :
+      (job.stage === 'error' || job.stage === 'send_error' || job.stage === 'timeout') ? ' is-err' :
+      (isLive && job.stage !== 'queued') ? ' is-active' : '';
+    const durStr = job.durationMs !== null && job.durationMs !== undefined
+      ? ((job.durationMs / 1000).toFixed(1) + 's')
+      : (job.startedAt ? (((Date.now() - job.startedAt) / 1000).toFixed(1) + 's') : 'Queued');
+    const whenStr = job.createdAt ? formatFull(job.createdAt, true) : '';
+    const actBtns = job.stage === 'queued'
+      ? '<button type="button" class="btn-ghost cmd-q-btn-sm" data-cmdq-act="cancel" data-cmd-id="' + escapeHtml(job.id) + '">Cancel</button>'
+      : (!isLive ? '<button type="button" class="btn-ghost cmd-q-btn-sm" data-cmdq-act="retry" data-cmd-id="' + escapeHtml(job.id) + '">Retry</button>' : '');
+
+    return '<div class="cmd-q-item' + cardCls + '" data-cmd-job-id="' + escapeHtml(job.id) + '">' +
+      '<div class="cmd-q-head">' +
+        '<span>' + escapeHtml(job.label || (job.payload && job.payload.action) || 'Command') + '</span>' +
+        '<span class="cmd-q-meta">' + escapeHtml(durStr) + (whenStr ? (' · ' + escapeHtml(whenStr)) : '') + '</span>' +
+      '</div>' +
+      '<div class="cmd-q-steps">' +
+        stepLabels.map((lbl, idx) => '<div class="cmd-q-step ' + st[idx] + '">' + lbl + '</div>').join('') +
+      '</div>' +
+      '<div class="cmd-q-foot">' +
+        '<span class="cmd-q-foot-msg">' + escapeHtml(job.detail || job.stage) + '</span>' +
+        actBtns +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderCmdQueueSection(){
+    const pill = document.getElementById('cmd-queue-pill');
+    const cntEl = document.getElementById('cmd-history-count');
+    const activeList = document.getElementById('cmd-active-queue-list');
+    const histList = document.getElementById('cmd-history-list');
+    const qBadge = document.getElementById('cmd-stepper-qbadge');
+
+    const pendingCount = cmdQueue.length;
+    if (qBadge){
+      if (pendingCount > 0){
+        qBadge.style.display = 'inline-flex';
+        qBadge.textContent = '+' + pendingCount + ' queued';
+      } else {
+        qBadge.style.display = 'none';
+      }
+    }
+
+    if (pill){
+      if (activeCmdJob){
+        pill.textContent = pendingCount > 0 ? ('1 Running · ' + pendingCount + ' Queued') : '1 Running';
+        pill.className = 'status-pill warn';
+      } else if (pendingCount > 0){
+        pill.textContent = pendingCount + ' Queued';
+        pill.className = 'status-pill warn';
+      } else {
+        pill.textContent = 'Idle';
+        pill.className = 'status-pill ok';
+      }
+    }
+    if (cntEl){
+      cntEl.textContent = cmdHistory.length + ' saved';
+    }
+    if (activeList){
+      const liveItems = [];
+      if (activeCmdJob) liveItems.push(renderCmdJobCardHtml(activeCmdJob, true));
+      for (const qJob of cmdQueue) liveItems.push(renderCmdJobCardHtml(qJob, true));
+      activeList.innerHTML = liveItems.length
+        ? liveItems.join('')
+        : '<div class="ota-meta" style="margin:0;">No active 4-step uploads. Tap the header above to view offline history.</div>';
+    }
+    if (histList){
+      histList.innerHTML = cmdHistory.length
+        ? cmdHistory.map(j => renderCmdJobCardHtml(j, false)).join('')
+        : '<div class="ota-meta" style="margin:0;">No upload history recorded yet.</div>';
+    }
+  }
+
+  function cancelQueuedCmd(id){
+    const idx = cmdQueue.findIndex(j => j.id === id);
+    if (idx < 0) return;
+    const [removed] = cmdQueue.splice(idx, 1);
+    removed.stage = 'error';
+    removed.detail = 'Cancelled before upload';
+    removed.finishedAt = Date.now();
+    removed.durationMs = 0;
+    cmdHistory.unshift(removed);
+    if (cmdHistory.length > CMD_HISTORY_MAX) cmdHistory.length = CMD_HISTORY_MAX;
+    persistCmdQueueAndHistory();
+    renderCmdQueueSection();
+    showToast('Cancelled queued command');
+  }
+
+  function retryHistoryCmd(id){
+    const item = cmdHistory.find(j => j.id === id);
+    if (!item || !item.payload) return;
+    sendCloudCommand(Object.assign({}, item.payload), item.label, item.slotKey);
+  }
+
+  function resumeCmdQueueNow(){
+    if (!activeCmdJob && cmdQueue.length > 0){
+      processNextCmdQueue();
+      showToast('Processing queued commands…');
+    } else if (activeCmdJob){
+      showToast('A command is already running');
+    } else {
+      showToast('Queue is empty');
+    }
+  }
+
+  function exportCmdHistory(){
+    const payload = { exportedAt: new Date().toISOString(), active: activeCmdJob, queue: cmdQueue, history: cmdHistory };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'room-logger-command-history.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  function clearCmdHistory(){
+    if (!cmdHistory.length){ showToast('History is already empty'); return; }
+    if (!confirm('Clear all ' + cmdHistory.length + ' saved offline upload history records?')) return;
+    cmdHistory = [];
+    persistCmdQueueAndHistory();
+    renderCmdQueueSection();
+    showToast('Upload history cleared');
+  }
+
+  function finalizeActiveCmdJob(finalStage, detailMsg){
+    if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
+    if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
+    if (activeCmdJob){
+      activeCmdJob.stage = finalStage;
+      activeCmdJob.detail = detailMsg || activeCmdJob.detail;
+      activeCmdJob.finishedAt = Date.now();
+      activeCmdJob.durationMs = activeCmdJob.startedAt ? Math.max(0, activeCmdJob.finishedAt - activeCmdJob.startedAt) : 0;
+      cmdHistory.unshift(activeCmdJob);
+      if (cmdHistory.length > CMD_HISTORY_MAX) cmdHistory.length = CMD_HISTORY_MAX;
+      activeCmdJob = null;
+    }
+    pendingCmdId = '';
+    persistCmdQueueAndHistory();
+    renderCmdQueueSection();
+    if (cmdQueue.length > 0){
+      clearTimeout(cmdNextTimer);
+      cmdNextTimer = setTimeout(() => processNextCmdQueue(), 650);
+    }
+  }
 
   function setCloudCmdStatus(msg, cls){
     const el = document.getElementById('cloud-cmd-status');
@@ -4285,8 +4582,10 @@
 
   function dismissCmdStepper(){
     if (cmdAutoHideTimer){ clearTimeout(cmdAutoHideTimer); cmdAutoHideTimer = null; }
-    if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
-    if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
+    if (!activeCmdJob){
+      if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
+      if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
+    }
     const box = document.getElementById('cmd-stepper');
     if (box){
       box.classList.remove('show', 'is-done', 'is-err');
@@ -4356,7 +4655,7 @@
     return (b / (1024 * 1024)).toFixed(2) + ' MB';
   }
 
-  // ---------- Battery Run & Telemetry UI (v3.9.1 — Separate Battery/WiFi + Start Voltage SOC) ----------
+  // ---------- Battery Run & Telemetry UI (v3.9.2 — Separate Battery/WiFi + Start Voltage SOC) ----------
   const PACK_MAH_LS = 'rl_pack_mah';
   let lastBattTrackOn = false;
   let lastWifiTrackOn = false;
@@ -4428,7 +4727,7 @@
     if (!t){
       if (bPill){ bPill.textContent = 'Update FW'; bPill.className = 'status-pill warn'; }
       if (wPill){ wPill.textContent = 'Update FW'; wPill.className = 'status-pill warn'; }
-      body.innerHTML = '<div class="ota-meta">Flash v3.9.1 firmware to enable separate Battery/WiFi tracking &amp; manual start voltage.</div>';
+      body.innerHTML = '<div class="ota-meta">Flash v3.9.2 firmware to enable separate Battery/WiFi tracking &amp; manual start voltage.</div>';
       return;
     }
 
@@ -4755,25 +5054,27 @@
     if (pendingCmdId && status && String(status.lastCmdId || '') === pendingCmdId){
       const stg = String(status.lastCmdStage || 'completed');
       if (stg === 'received'){
-        updateCmdStepper('received', 'ESP32 received command — applying changes now…');
+        const msg = 'ESP32 received command — applying changes now…';
+        if (activeCmdJob){ activeCmdJob.stage = 'received'; activeCmdJob.detail = msg; renderCmdQueueSection(); }
+        updateCmdStepper('received', msg);
         setCloudCmdStatus('ESP32 received command — applying…', 'warn');
       } else if (stg === 'error'){
-        updateCmdStepper('error', 'ESP32 reported error: ' + (status.lastCmdResult || 'Failed'));
+        const msg = 'ESP32 reported error: ' + (status.lastCmdResult || 'Failed');
+        updateCmdStepper('error', msg);
         setCloudCmdStatus('✕ ESP32: ' + (status.lastCmdResult || 'Failed'), 'err');
-        pendingCmdId = '';
-        if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
+        finalizeActiveCmdJob('error', msg);
       } else {
-        updateCmdStepper('completed', 'Confirmed by ESP32: ' + (status.lastCmdResult || 'Done'));
+        const msg = 'Confirmed by ESP32: ' + (status.lastCmdResult || 'Done');
+        updateCmdStepper('completed', msg);
         setCloudCmdStatus('✓ ' + (status.lastCmdResult || 'Done'), '');
-        pendingCmdId = '';
         stagedPowerMode = null;
         document.querySelectorAll('#cloud-power-grid .power-opt.staged').forEach(b => b.classList.remove('staged'));
-        if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
+        finalizeActiveCmdJob('completed', msg);
       }
     }
   }
 
-  async function sendCloudCommand(payloadObj, waitingMsg, slotKey){
+  function sendCloudCommand(payloadObj, waitingMsg, slotKey){
     const inferredSlot = slotKey || (
       payloadObj && payloadObj.action === 'setPowerMode' ? 'power-mode' :
       payloadObj && (payloadObj.action === 'addWifi' || payloadObj.action === 'removeWifi' || payloadObj.action === 'setPreferredWifi') ? 'wifi-control' :
@@ -4781,30 +5082,70 @@
       payloadObj && /^(setTelemetry|resetTelemetry|setBatteryTrack|resetBatteryTrack|setStartVoltage|setWifiTrack|resetWifiTrack)$/.test(payloadObj.action) ? 'telemetry-control' :
       'home-actions'
     );
-    mountStepperIntoSlot(inferredSlot);
-    if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
-    if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
     const host = getHost();
     if (!host){
       setCloudCmdStatus('Set Firebase RTDB host on the Graphs tab first.', 'err');
       showToast('Set Firebase RTDB host on Graphs tab first');
       return false;
     }
-    const id = String(Date.now());
-    const body = Object.assign({ id: id }, payloadObj);
-    pendingCmdId = id;
-    pendingCmdStartMs = Date.now();
-    pendingCmdLabel = waitingMsg || ('Action: ' + (payloadObj.action || 'command'));
-    updateCmdStepper('sending', 'Uploading command to Firebase…');
+    const id = String(Date.now()) + '_' + (++cmdSeqCounter);
+    const job = {
+      id: id,
+      payload: Object.assign({}, payloadObj),
+      label: waitingMsg || ('Action: ' + (payloadObj.action || 'command')),
+      slotKey: inferredSlot,
+      stage: 'queued',
+      detail: 'Queued — waiting for earlier upload to finish…',
+      createdAt: Date.now(),
+      startedAt: null,
+      finishedAt: null,
+      durationMs: null
+    };
+    cmdQueue.push(job);
+    persistCmdQueueAndHistory();
+    renderCmdQueueSection();
+
+    if (activeCmdJob){
+      showToast('Queued (#' + cmdQueue.length + '): ' + job.label.replace(/…$/, ''));
+      return true;
+    }
+    return processNextCmdQueue();
+  }
+
+  async function processNextCmdQueue(){
+    if (activeCmdJob || !cmdQueue.length) return false;
+    const host = getHost();
+    if (!host) return false;
+
+    activeCmdJob = cmdQueue.shift();
+    activeCmdJob.startedAt = Date.now();
+    activeCmdJob.stage = 'sending';
+    activeCmdJob.detail = 'Uploading command to Firebase…';
+    persistCmdQueueAndHistory();
+
+    mountStepperIntoSlot(activeCmdJob.slotKey);
+    if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
+    if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
+
+    pendingCmdId = activeCmdJob.id;
+    pendingCmdStartMs = activeCmdJob.startedAt;
+    pendingCmdLabel = activeCmdJob.label;
+    updateCmdStepper('sending', activeCmdJob.detail);
+    renderCmdQueueSection();
     setCloudCmdStatus('', '');
 
-    if (cmdClockTimer) clearInterval(cmdClockTimer);
     cmdClockTimer = setInterval(() => {
+      const elapsed = ((Date.now() - pendingCmdStartMs) / 1000).toFixed(1) + 's';
       const tEl = document.getElementById('cmd-stepper-time');
-      if (tEl && pendingCmdStartMs) tEl.textContent = ((Date.now() - pendingCmdStartMs) / 1000).toFixed(1) + 's';
+      if (tEl && pendingCmdStartMs) tEl.textContent = elapsed;
+      if (activeCmdJob){
+        const liveMeta = document.querySelector('[data-cmd-job-id="' + activeCmdJob.id + '"] .cmd-q-meta');
+        if (liveMeta) liveMeta.textContent = elapsed + ' · ' + formatFull(activeCmdJob.createdAt, true);
+      }
     }, 250);
 
     try {
+      const body = Object.assign({ id: activeCmdJob.id }, activeCmdJob.payload);
       const url = 'https://' + host + '/cmd.json' + getFbAuthParam();
       const res = await fetch(url, {
         method: 'PUT',
@@ -4816,29 +5157,30 @@
         const errMsg = 'Upload to Firebase failed (HTTP ' + res.status + '). Add Firebase DB secret in Graphs → Spike Vault if needed.';
         updateCmdStepper('send_error', errMsg);
         setCloudCmdStatus(errMsg, 'err');
-        pendingCmdId = '';
+        finalizeActiveCmdJob('send_error', errMsg);
         return false;
       }
-      updateCmdStepper('sent', 'Uploaded to Firebase — waiting for ESP32 to pick it up (~5s)…');
-      if (cmdPollTimer) clearInterval(cmdPollTimer);
+      activeCmdJob.stage = 'sent';
+      activeCmdJob.detail = 'Uploaded to Firebase — waiting for ESP32 to pick it up (~5s)…';
+      updateCmdStepper('sent', activeCmdJob.detail);
+      renderCmdQueueSection();
+
       let polls = 0;
       cmdPollTimer = setInterval(() => {
         polls++;
         fetchStatus();
         if (polls >= 20){
-          clearInterval(cmdPollTimer);
-          cmdPollTimer = null;
-          if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
-          if (pendingCmdId){
-            updateCmdStepper('sent', 'Still queued in Firebase — ESP32 will apply it on its next wake/poll window.');
-          }
+          const timeoutMsg = 'Timed out waiting for ESP32 ACK (30s) — ESP32 will apply on next wake/poll window.';
+          updateCmdStepper('error', timeoutMsg);
+          finalizeActiveCmdJob('timeout', timeoutMsg);
         }
       }, 1500);
       return true;
     } catch(err){
-      updateCmdStepper('send_error', 'Network error: ' + err.message);
+      const errMsg = 'Network error: ' + err.message;
+      updateCmdStepper('send_error', errMsg);
       setCloudCmdStatus('Command error: ' + err.message, 'err');
-      pendingCmdId = '';
+      finalizeActiveCmdJob('send_error', errMsg);
       return false;
     }
   }
@@ -5783,6 +6125,14 @@
       try { authEl.value = localStorage.getItem(FB_AUTH_LS) || ''; } catch(e) {}
     }
     renderAnomalyUI();
+    loadCmdQueueAndHistory();
+    renderCmdQueueSection();
+    if (cmdQueue.length > 0 && navigator.onLine !== false){
+      setTimeout(() => processNextCmdQueue(), 1200);
+    }
+    window.addEventListener('online', () => {
+      if (!activeCmdJob && cmdQueue.length > 0) processNextCmdQueue();
+    });
   })();
 
   // Keeps the chart NOT being dragged/zoomed visually in step with the one
