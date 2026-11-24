@@ -1734,8 +1734,8 @@ SemaphoreHandle_t telemMutex        = NULL;
 SemaphoreHandle_t fsMutex           = NULL;
 // Independent ESP32 firmware version & build counter (single source of truth for build.yml & PWA).
 // Increment FW_BUILD by +1 on EVERY change to room_logger.ino; NEVER bump for dashboard-only changes!
-#define FW_VERSION "3.9.7"
-#define FW_BUILD   2
+#define FW_VERSION "3.9.8"
+#define FW_BUILD   3
 volatile bool ntpSyncedThisBoot     = false;
 bool          battTrackEnabled       = false;
 bool          wifiTrackEnabled       = false;
@@ -2307,6 +2307,7 @@ void executeFirebaseCommand(const String& body, const String& fbHost, const Stri
     fastHttp.setTimeout(8000);
     if (fastHttp.begin(fastClient, url)) {
       delCode = fastHttp.sendRequest("DELETE");
+      if (delCode > 0) fastHttp.getString(); // drain "null" body so keep-alive TLS socket stays clean for PUT
       fastHttp.end();
     }
     fastKeepAliveActive = true;
@@ -2534,7 +2535,7 @@ void executeFirebaseCommand(const String& body, const String& fbHost, const Stri
     lastCmdStage = "completed";
     lastCmdResult = "Rebooting ESP32...";
     finishAck();
-    delay(400);
+    delay(1200);
     ESP.restart();
   } else if (action == "setOpenFallback") {
     String enStr = jsonExtractField(body, "enabled");
@@ -2589,7 +2590,7 @@ void executeFirebaseCommand(const String& body, const String& fbHost, const Stri
     lastCmdStage = "completed";
     lastCmdResult = "LittleFS formatted cleanly -- rebooting ESP32...";
     finishAck();
-    delay(400);
+    delay(1200);
     ESP.restart();
   } else if (action == "refreshStatus") {
     lastCmdStage = "completed";
