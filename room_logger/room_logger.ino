@@ -119,9 +119,15 @@ WifiSaveResult addOrUpdateWifiNetwork(const String& ssid, const String& password
                                       const String& snStr, const String& dnsStr);
 bool removeWifiNetworkByIndex(int index, String& outRemovedSsid);
 bool savePreferredWifi(const String& ssid);
+bool saveOtaCredentials(const String& newUser, const String& newPass);
+void saveOpenNetworkSetting(bool enabled);
+bool saveFirebaseSettings(const String& newHost, const String& newAuth);
 void otaStreamLog(const String& msg, bool streamToHttp = true);
 bool performOtaFromUrl(const String& url, String& errOut, bool streamToHttp = false);
 bool publishStatusToFirebase();
+bool publishStatusUsingClient(WiFiClientSecure& client, HTTPClient& http, const String& fbHost, const String& fbAuth);
+void fbSseClose();
+void serviceFirebaseSse();
 String jsonEscape(const String& s);
 bool isValidSsid(const String& ssid);
 bool checkInternetReachable();
@@ -1725,7 +1731,7 @@ bool checkInternetReachable() {
 Preferences telemPrefs;
 SemaphoreHandle_t telemMutex        = NULL;
 SemaphoreHandle_t fsMutex           = NULL;
-#define FW_VERSION "3.9.3"
+#define FW_VERSION "3.9.5"
 volatile bool ntpSyncedThisBoot     = false;
 bool          battTrackEnabled       = false;
 bool          wifiTrackEnabled       = false;
@@ -2034,21 +2040,23 @@ bool publishStatusToFirebase() {
     if (settingsMutex != NULL) xSemaphoreGive(settingsMutex);
   }
 
-  String payload = "{\"ip\":\"" + ip.toString() +
-                    "\",\"ssid\":\"" + jsonEscape(WiFi.SSID()) +
-                    "\",\"fsOk\":" + (fsReady ? "true" : "false") +
-                    ",\"internetOk\":true" +
-                    ",\"lastSeen\":" + String(lastSeen) +
-                    ",\"powerMode\":\"" + String(powerModeName(powerMode)) +
-                    "\",\"lastCmdId\":\"" + jsonEscape(lastProcessedCmdId) +
-                    "\",\"lastCmdStage\":\"" + jsonEscape(lastCmdStage) +
-                    "\",\"lastCmdResult\":\"" + jsonEscape(lastCmdResult) +
-                    "\",\"ota\":{\"state\":\"" + jsonEscape(cloudOtaState) +
-                    "\",\"msg\":\"" + jsonEscape(cloudOtaMsg) +
-                    "\",\"url\":\"" + jsonEscape(otaUrlCopy) +
-                    "\"},\"wifi\":{\"preferred\":\"" + jsonEscape(prefCopy) +
-                    "\",\"networks\":" + wifiListJson +
-                    "},\"health\":" + buildHealthStatusJson() + ",\"storage\":" + buildStorageJson() + ",\"telemetry\":" + buildTelemetryJson() + "}";
+  String payload;
+  payload.reserve(1400);
+  payload = "{\"ip\":\"" + ip.toString() +
+            "\",\"ssid\":\"" + jsonEscape(WiFi.SSID()) +
+            "\",\"fsOk\":" + (fsReady ? "true" : "false") +
+            ",\"internetOk\":true" +
+            ",\"lastSeen\":" + String(lastSeen) +
+            ",\"powerMode\":\"" + String(powerModeName(powerMode)) +
+            "\",\"lastCmdId\":\"" + jsonEscape(lastProcessedCmdId) +
+            "\",\"lastCmdStage\":\"" + jsonEscape(lastCmdStage) +
+            "\",\"lastCmdResult\":\"" + jsonEscape(lastCmdResult) +
+            "\",\"ota\":{\"state\":\"" + jsonEscape(cloudOtaState) +
+            "\",\"msg\":\"" + jsonEscape(cloudOtaMsg) +
+            "\",\"url\":\"" + jsonEscape(otaUrlCopy) +
+            "\"},\"wifi\":{\"openFallback\":" + (allowOpenNetworkFallback ? "true" : "false") + ",\"preferred\":\"" + jsonEscape(prefCopy) +
+            "\",\"networks\":" + wifiListJson +
+            "},\"health\":" + buildHealthStatusJson() + ",\"storage\":" + buildStorageJson() + ",\"telemetry\":" + buildTelemetryJson() + "}";
 
   if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
     Serial.println("Failed to publish status to Firebase (TLS busy)");
@@ -2079,6 +2087,74 @@ bool publishStatusToFirebase() {
     return true;
   }
   Serial.println("Failed to publish status to Firebase (HTTP " + String(code) + ")");
+  return false;
+}
+
+// Reuses an already-connected WiFiClientSecure + HTTPClient (keep-alive) under tlsMutex
+// so command DELETE + status ACK complete in a single TLS handshake (~300-600ms instead of 4-8s).
+bool publishStatusUsingClient(WiFiClientSecure& client, HTTPClient& http, const String& fbHost, const String& fbAuth) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  IPAddress ip = WiFi.localIP();
+  if (ip == IPAddress(0, 0, 0, 0) || fbHost.length() == 0) return false;
+
+  String url = "https://" + fbHost + "/status.json";
+  if (fbAuth.length() > 0) url += "?auth=" + fbAuth;
+
+  time_t nowSec = time(nullptr);
+  unsigned long lastSeen = ((unsigned long)nowSec >= MIN_VALID_EPOCH) ? (unsigned long)nowSec : 0;
+
+  String wifiListJson = "[";
+  String prefCopy = "";
+  if (wifiNetworksMutex == NULL || xSemaphoreTake(wifiNetworksMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+    prefCopy = preferredWifiSsid;
+    for (size_t i = 0; i < wifiNetworks.size(); i++) {
+      if (i > 0) wifiListJson += ",";
+      bool hasStatic = (wifiNetworks[i].staticIP != IPAddress(0, 0, 0, 0));
+      wifiListJson += "{\"ssid\":\"" + jsonEscape(wifiNetworks[i].ssid) +
+                      "\",\"ip\":\"" + (hasStatic ? wifiNetworks[i].staticIP.toString() : String("")) + "\"}";
+    }
+    if (wifiNetworksMutex != NULL) xSemaphoreGive(wifiNetworksMutex);
+  }
+  wifiListJson += "]";
+
+  String otaUrlCopy = "";
+  if (settingsMutex == NULL || xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+    otaUrlCopy = currentOtaBinUrl;
+    if (settingsMutex != NULL) xSemaphoreGive(settingsMutex);
+  }
+
+  String payload;
+  payload.reserve(1400);
+  payload = "{\"ip\":\"" + ip.toString() +
+            "\",\"ssid\":\"" + jsonEscape(WiFi.SSID()) +
+            "\",\"fsOk\":" + (fsReady ? "true" : "false") +
+            ",\"internetOk\":true" +
+            ",\"lastSeen\":" + String(lastSeen) +
+            ",\"powerMode\":\"" + String(powerModeName(powerMode)) +
+            "\",\"lastCmdId\":\"" + jsonEscape(lastProcessedCmdId) +
+            "\",\"lastCmdStage\":\"" + jsonEscape(lastCmdStage) +
+            "\",\"lastCmdResult\":\"" + jsonEscape(lastCmdResult) +
+            "\",\"ota\":{\"state\":\"" + jsonEscape(cloudOtaState) +
+            "\",\"msg\":\"" + jsonEscape(cloudOtaMsg) +
+            "\",\"url\":\"" + jsonEscape(otaUrlCopy) +
+            "\"},\"wifi\":{\"openFallback\":" + (allowOpenNetworkFallback ? "true" : "false") + ",\"preferred\":\"" + jsonEscape(prefCopy) +
+            "\",\"networks\":" + wifiListJson +
+            "},\"health\":" + buildHealthStatusJson() + ",\"storage\":" + buildStorageJson() + ",\"telemetry\":" + buildTelemetryJson() + "}";
+
+  int code = -1;
+  if (http.begin(client, url)) {
+    http.addHeader("Content-Type", "application/json");
+    code = http.PUT(payload);
+    http.end();
+  }
+  if (code == 200) {
+    lastFirebaseSuccessMillis = millis();
+    if (wifiMutex == NULL || xSemaphoreTake(wifiMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+      lastPublishedIp = ip.toString();
+      if (wifiMutex != NULL) xSemaphoreGive(wifiMutex);
+    }
+    return true;
+  }
   return false;
 }
 
@@ -2147,6 +2223,521 @@ String jsonExtractField(const String& json, const char* key) {
   return "";
 }
 
+// Extracts the nested JSON object for `"data":{...}` from a Firebase SSE `put`/`patch` event.
+static String extractSseDataObject(const String& line) {
+  int pos = line.indexOf("\"data\":");
+  if (pos < 0) return "";
+  pos += 7;
+  while (pos < (int)line.length() && (line[pos] == ' ' || line[pos] == '\t')) pos++;
+  if (pos >= (int)line.length() || line[pos] != '{') return "";
+  int depth = 0;
+  bool inStr = false;
+  for (int i = pos; i < (int)line.length(); i++) {
+    char c = line[i];
+    if (inStr) {
+      if (c == '\\' && i + 1 < (int)line.length()) { i++; continue; }
+      if (c == '"') inStr = false;
+    } else {
+      if (c == '"') inStr = true;
+      else if (c == '{') depth++;
+      else if (c == '}') {
+        depth--;
+        if (depth == 0) return line.substring(pos, i + 1);
+      }
+    }
+  }
+  return "";
+}
+
+// Persistent Firebase RTDB Server-Sent Events (SSE) stream on /cmd.json.
+// Eliminates the 5s poll wait + GET TLS handshake so remote controls fire in ~1-2s worldwide.
+WiFiClientSecure fbSseClient;
+bool fbSseConnected = false;
+unsigned long fbSseLastActivityMs = 0;
+unsigned long fbSseLastAttemptMs  = 0;
+String fbSseEventName = "";
+String fbSseLineBuf   = "";
+String fbSseActiveHost = "";
+
+void fbSseClose() {
+  if (fbSseClient.connected()) fbSseClient.stop();
+  fbSseConnected = false;
+  fbSseEventName = "";
+  fbSseLineBuf = "";
+}
+
+void executeFirebaseCommand(const String& body, const String& fbHost, const String& fbAuth) {
+  String cmdId  = jsonExtractField(body, "id");
+  String action = jsonExtractField(body, "action");
+  if (action.length() == 0 || (cmdId.length() > 0 && cmdId == lastProcessedCmdId)) return;
+
+  // Safety valve: if contiguous heap is tight, close SSE socket before opening outbound TLS.
+  if (fbSseConnected && ESP.getMaxAllocHeap() < 55000) {
+    fbSseClose();
+  }
+  // Always close SSE before reboot or OTA so maximum contiguous RAM is free.
+  if (action == "otaUrl" || action == "reboot") {
+    fbSseClose();
+  }
+
+  String url = "https://" + fbHost + "/cmd.json";
+  if (fbAuth.length() > 0) url += "?auth=" + fbAuth;
+
+  lastProcessedCmdId = cmdId.length() > 0 ? cmdId : String(millis());
+  lastCmdStage = "received";
+  lastCmdResult = "ESP32 received '" + action + "' -- applying...";
+  Serial.println("[CloudCmd] Executing action=" + action + " id=" + lastProcessedCmdId);
+
+  // Fast local commands share ONE keep-alive TLS socket for DELETE /cmd.json + PUT /status.json!
+  bool isSlowCmd = (action == "otaUrl");
+  int delCode = -1;
+  bool fastKeepAliveActive = false;
+  WiFiClientSecure fastClient;
+  HTTPClient fastHttp;
+
+  if (!isSlowCmd && (tlsMutex == NULL || xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(6000)) == pdTRUE)) {
+    configureSecureClient(fastClient);
+    fastClient.setTimeout(8);
+    fastHttp.setReuse(true);
+    fastHttp.setConnectTimeout(6000);
+    fastHttp.setTimeout(8000);
+    if (fastHttp.begin(fastClient, url)) {
+      delCode = fastHttp.sendRequest("DELETE");
+      fastHttp.end();
+    }
+    fastKeepAliveActive = true;
+  } else {
+    if (tlsMutex == NULL || xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(6000)) == pdTRUE) {
+      WiFiClientSecure client;
+      configureSecureClient(client);
+      client.setTimeout(6);
+      HTTPClient http;
+      http.setConnectTimeout(5000);
+      http.setTimeout(6000);
+      if (http.begin(client, url)) {
+        delCode = http.sendRequest("DELETE");
+        http.end();
+      }
+      if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+    }
+  }
+
+  if (delCode != 200 && (action == "reboot" || action == "otaUrl")) {
+    if (fastKeepAliveActive) {
+      fastClient.stop();
+      if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+    }
+    Serial.println("[CloudCmd] Aborting " + action + " because DELETE /cmd.json failed (HTTP " + String(delCode) + ")");
+    return;
+  }
+
+  auto finishAck = [&]() {
+    if (fastKeepAliveActive) {
+      bool ok = publishStatusUsingClient(fastClient, fastHttp, fbHost, fbAuth);
+      fastClient.stop();
+      if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+      if (!ok) publishStatusToFirebase();
+    } else {
+      publishStatusToFirebase();
+    }
+  };
+
+  if (isSlowCmd) {
+    publishStatusToFirebase(); // Stage 2 ACK for long-running OTA
+  }
+
+  if (action == "setPowerMode") {
+    String m = jsonExtractField(body, "mode");
+    m.toLowerCase();
+    PowerMode target = POWER_NORMAL;
+    bool valid = true;
+    if (m == "normal") target = POWER_NORMAL;
+    else if (m == "low") target = POWER_LOW;
+    else if (m == "medium") target = POWER_MEDIUM;
+    else if (m == "high") target = POWER_HIGH;
+    else valid = false;
+    if (valid) {
+      applyPowerMode(target, false);
+      saveTelemetryToNvs();
+      lastCmdStage = "completed";
+      lastCmdResult = "Power mode set to " + String(powerModeName(target));
+    } else {
+      lastCmdStage = "error";
+      lastCmdResult = "Invalid power mode: " + m;
+    }
+    finishAck();
+  } else if (action == "addWifi") {
+    String ssid = jsonExtractField(body, "ssid");
+    String pass = jsonExtractField(body, "password");
+    String ipS  = jsonExtractField(body, "ip");
+    String gwS  = jsonExtractField(body, "gateway");
+    String snS  = jsonExtractField(body, "subnet");
+    String dnsS = jsonExtractField(body, "dns");
+    WifiSaveResult r = addOrUpdateWifiNetwork(ssid, pass, ipS, gwS, snS, dnsS);
+    if (r == WIFI_SAVE_ADDED) { lastCmdStage = "completed"; lastCmdResult = "Added WiFi '" + ssid + "'"; }
+    else if (r == WIFI_SAVE_UPDATED) { lastCmdStage = "completed"; lastCmdResult = "Updated WiFi '" + ssid + "' (reboot to apply password/IP)"; }
+    else if (r == WIFI_SAVE_LIMIT_REACHED) { lastCmdStage = "error"; lastCmdResult = "WiFi list is full"; }
+    else { lastCmdStage = "error"; lastCmdResult = "Invalid WiFi settings for '" + ssid + "'"; }
+    finishAck();
+  } else if (action == "removeWifi") {
+    String targetSsid = jsonExtractField(body, "ssid");
+    int idx = -1;
+    if (wifiNetworksMutex == NULL || xSemaphoreTake(wifiNetworksMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      for (size_t i = 0; i < wifiNetworks.size(); i++) {
+        if (wifiNetworks[i].ssid == targetSsid) { idx = (int)i; break; }
+      }
+      if (wifiNetworksMutex != NULL) xSemaphoreGive(wifiNetworksMutex);
+    }
+    String removed;
+    if (idx >= 0 && removeWifiNetworkByIndex(idx, removed)) {
+      lastCmdStage = "completed";
+      lastCmdResult = "Removed WiFi '" + removed + "'";
+    } else {
+      lastCmdStage = "error";
+      lastCmdResult = "WiFi '" + targetSsid + "' not found";
+    }
+    finishAck();
+  } else if (action == "setPreferredWifi") {
+    String pref = jsonExtractField(body, "ssid");
+    if (savePreferredWifi(pref)) {
+      lastCmdStage = "completed";
+      lastCmdResult = pref.length() ? ("Preferred WiFi set to '" + pref + "'") : "Preferred WiFi cleared";
+    } else {
+      lastCmdStage = "error";
+      lastCmdResult = "Failed to save Preferred WiFi";
+    }
+    finishAck();
+  } else if (action == "otaUrl") {
+    String otaUrl = jsonExtractField(body, "url");
+    if (!otaUrl.startsWith("https://")) {
+      cloudOtaState = "error";
+      cloudOtaMsg = "Invalid OTA URL (must start with https://)";
+      lastCmdStage = "error";
+      lastCmdResult = cloudOtaMsg;
+      finishAck();
+      return;
+    }
+    cloudOtaState = "running";
+    cloudOtaMsg = "Downloading & flashing firmware...";
+    lastCmdResult = cloudOtaMsg;
+    finishAck();
+
+    String err;
+    bool ok = performOtaFromUrl(otaUrl, err, false);
+    if (ok) {
+      cloudOtaState = "ok";
+      cloudOtaMsg = "Flash complete -- rebooting now";
+      lastCmdStage = "completed";
+      lastCmdResult = cloudOtaMsg;
+      saveTelemetryToNvs();
+      finishAck();
+      digitalWrite(LED_PIN, HIGH);
+      delay(5000);
+      ESP.restart();
+    } else {
+      cloudOtaState = "error";
+      cloudOtaMsg = "OTA failed: " + err;
+      lastCmdStage = "error";
+      lastCmdResult = cloudOtaMsg;
+      finishAck();
+    }
+  } else if (action == "setBatteryTrack" || action == "setTelemetry") {
+    String enStr = jsonExtractField(body, "enabled");
+    String vStr  = jsonExtractField(body, "startVolts");
+    bool nextEn  = (enStr == "1" || enStr == "true");
+    float parsedV = vStr.length() ? vStr.toFloat() : 0.0f;
+    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      battTrackEnabled = nextEn;
+      if (parsedV >= 2.5f && parsedV <= 4.5f) battStartVolts = parsedV;
+      telemLastTickMs = millis();
+      if (battTrackEnabled && telemSessionStartEpoch == 0) {
+        time_t nowSec = time(nullptr);
+        if ((unsigned long)nowSec >= MIN_VALID_EPOCH) telemSessionStartEpoch = (uint32_t)nowSec;
+      }
+      saveTelemetryToNvsLocked();
+      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+    }
+    lastCmdStage = "completed";
+    lastCmdResult = nextEn
+      ? ("Battery tracking ON" + (battStartVolts > 0.1f ? (" (start " + String(battStartVolts, 2) + "V)") : String("")))
+      : "Battery tracking PAUSED";
+    finishAck();
+  } else if (action == "setStartVoltage") {
+    String vStr = jsonExtractField(body, "startVolts");
+    float parsedV = vStr.toFloat();
+    if (parsedV >= 2.5f && parsedV <= 4.5f) {
+      if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        battStartVolts = parsedV;
+        saveTelemetryToNvsLocked();
+        if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+      }
+      lastCmdStage = "completed";
+      lastCmdResult = "Start battery voltage saved: " + String(parsedV, 2) + "V";
+    } else {
+      lastCmdStage = "error";
+      lastCmdResult = "Invalid voltage (enter 2.50 - 4.50 V)";
+    }
+    finishAck();
+  } else if (action == "setWifiTrack") {
+    String enStr = jsonExtractField(body, "enabled");
+    bool nextEn  = (enStr == "1" || enStr == "true");
+    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      wifiTrackEnabled = nextEn;
+      telemLastTickMs = millis();
+      telemDiscStartMs = millis();
+      telemWasWifiConn = (WiFi.status() == WL_CONNECTED);
+      saveTelemetryToNvsLocked();
+      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+    }
+    lastCmdStage = "completed";
+    lastCmdResult = nextEn ? "WiFi duration tracking ON" : "WiFi duration tracking PAUSED";
+    finishAck();
+  } else if (action == "resetBatteryTrack" || action == "resetTelemetry") {
+    String vStr = jsonExtractField(body, "startVolts");
+    float parsedV = vStr.length() ? vStr.toFloat() : 0.0f;
+    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      time_t nowSec = time(nullptr);
+      telemSessionStartEpoch = ((unsigned long)nowSec >= MIN_VALID_EPOCH) ? (uint32_t)nowSec : 0;
+      telemUptimeSec = 0;
+      telemModeSec[0] = telemModeSec[1] = telemModeSec[2] = telemModeSec[3] = 0;
+      telemBootCount = battTrackEnabled ? 1 : 0;
+      telemCrashCount = 0;
+      if (parsedV >= 2.5f && parsedV <= 4.5f) battStartVolts = parsedV;
+      telemLastTickMs = millis();
+      saveTelemetryToNvsLocked();
+      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+    }
+    lastCmdStage = "completed";
+    lastCmdResult = "Battery run counters reset";
+    finishAck();
+  } else if (action == "resetWifiTrack") {
+    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+      telemWifiConnSec = 0;
+      telemWifiDiscSec = 0;
+      telemWifiReconnects = 0;
+      telemWifiConnMsSum = 0;
+      telemWifiConnSamples = 0;
+      telemLastTickMs = millis();
+      telemDiscStartMs = millis();
+      saveTelemetryToNvsLocked();
+      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
+    }
+    lastCmdStage = "completed";
+    lastCmdResult = "WiFi tracking counters reset";
+    finishAck();
+  } else if (action == "reboot") {
+    saveTelemetryToNvs();
+    lastCmdStage = "completed";
+    lastCmdResult = "Rebooting ESP32...";
+    finishAck();
+    delay(400);
+    ESP.restart();
+  } else if (action == "setOpenFallback") {
+    String enStr = jsonExtractField(body, "enabled");
+    bool nextEn = (enStr == "1" || enStr == "true");
+    saveOpenNetworkSetting(nextEn);
+    lastCmdStage = "completed";
+    lastCmdResult = nextEn ? "Open WiFi auto-fallback enabled" : "Open WiFi auto-fallback disabled";
+    finishAck();
+  } else if (action == "setFirebaseConfig") {
+    String newHost = jsonExtractField(body, "host");
+    String newAuth = jsonExtractField(body, "auth");
+    String clearA  = jsonExtractField(body, "clearAuth");
+    newHost.trim();
+    String curHost, curAuth;
+    if (settingsMutex == NULL || xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+      curHost = currentFirebaseHost;
+      curAuth = currentFirebaseAuth;
+      if (settingsMutex != NULL) xSemaphoreGive(settingsMutex);
+    }
+    if (newHost.length() == 0) newHost = curHost;
+    String finalAuth = (clearA == "1" || clearA == "true") ? "" : (newAuth.length() > 0 ? newAuth : curAuth);
+    if (saveFirebaseSettings(newHost, finalAuth)) {
+      fbSseClose(); // reconnect SSE with updated host/token
+      lastCmdStage = "completed";
+      lastCmdResult = "Firebase settings saved (" + newHost + (finalAuth.length() ? ", auth set)" : ", no auth)");
+    } else {
+      lastCmdStage = "error";
+      lastCmdResult = "Invalid Firebase host or auth token";
+    }
+    finishAck();
+  } else if (action == "setAdminCredentials") {
+    String newUser = jsonExtractField(body, "user");
+    String newPass = jsonExtractField(body, "pass");
+    newUser.trim();
+    if (saveOtaCredentials(newUser, newPass)) {
+      lastCmdStage = "completed";
+      lastCmdResult = "Admin login updated for user '" + newUser + "'";
+    } else {
+      lastCmdStage = "error";
+      lastCmdResult = "Invalid login (user 1-64 chars, password 8-64 chars)";
+    }
+    finishAck();
+  } else if (action == "formatFs") {
+    fbSseClose();
+    if (fsMutex == NULL || xSemaphoreTake(fsMutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+      LittleFS.end();
+      LittleFS.format();
+      fsReady = LittleFS.begin(true);
+      if (fsMutex != NULL) xSemaphoreGive(fsMutex);
+    }
+    saveTelemetryToNvs();
+    lastCmdStage = "completed";
+    lastCmdResult = "LittleFS formatted cleanly -- rebooting ESP32...";
+    finishAck();
+    delay(400);
+    ESP.restart();
+  } else if (action == "refreshStatus") {
+    lastCmdStage = "completed";
+    lastCmdResult = "Health & storage refreshed";
+    finishAck();
+  } else {
+    lastCmdStage = "error";
+    lastCmdResult = "Unknown command: " + action;
+    finishAck();
+  }
+}
+
+static bool fbSseOpen(const String& fbHost, const String& fbAuth) {
+  fbSseClose();
+  if (otaInProgress || WiFi.status() != WL_CONNECTED) return false;
+  if (powerMode == POWER_HIGH && !highPowerWifiAwake) return false;
+  if (ESP.getMaxAllocHeap() < 55000) return false; // preserve heap for TLS uploads
+
+  String host = fbHost;
+  String path = "/cmd.json";
+  if (fbAuth.length() > 0) path += "?auth=" + fbAuth;
+
+  for (int redirects = 0; redirects < 3; redirects++) {
+    configureSecureClient(fbSseClient);
+    fbSseClient.setTimeout(5);
+    if (!fbSseClient.connect(host.c_str(), 443)) {
+      fbSseClient.stop();
+      return false;
+    }
+    fbSseClient.print(
+      String("GET ") + path + " HTTP/1.1\r\n" +
+      "Host: " + host + "\r\n" +
+      "Accept: text/event-stream\r\n" +
+      "Cache-Control: no-cache\r\n" +
+      "Connection: keep-alive\r\n\r\n"
+    );
+
+    unsigned long waitStart = millis();
+    while (!fbSseClient.available() && fbSseClient.connected() && (millis() - waitStart < 5000UL)) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (!fbSseClient.available()) {
+      fbSseClient.stop();
+      return false;
+    }
+
+    String statusLine = fbSseClient.readStringUntil('\n');
+    statusLine.trim();
+    int httpCode = 0;
+    int sp1 = statusLine.indexOf(' ');
+    if (sp1 > 0) httpCode = statusLine.substring(sp1 + 1).toInt();
+
+    String location = "";
+    while (fbSseClient.connected()) {
+      String hdr = fbSseClient.readStringUntil('\n');
+      hdr.trim();
+      if (hdr.length() == 0) break;
+      if (hdr.startsWith("Location:") || hdr.startsWith("location:")) {
+        location = hdr.substring(9);
+        location.trim();
+      }
+    }
+
+    if (httpCode == 200) {
+      fbSseConnected = true;
+      fbSseLastActivityMs = millis();
+      fbSseActiveHost = fbHost;
+      fbSseEventName = "";
+      fbSseLineBuf = "";
+      Serial.println("[SSE] Connected to Firebase /cmd.json stream (" + host + ")");
+      return true;
+    }
+
+    fbSseClient.stop();
+    if ((httpCode == 301 || httpCode == 302 || httpCode == 307) && location.startsWith("https://")) {
+      String rest = location.substring(8);
+      int slash = rest.indexOf('/');
+      if (slash > 0) {
+        host = rest.substring(0, slash);
+        path = rest.substring(slash);
+        continue;
+      }
+    }
+    Serial.println("[SSE] Handshake failed (HTTP " + String(httpCode) + ")");
+    return false;
+  }
+  return false;
+}
+
+void serviceFirebaseSse() {
+  if (otaInProgress || WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
+    if (fbSseConnected) fbSseClose();
+    return;
+  }
+  if (powerMode == POWER_HIGH && !highPowerWifiAwake) {
+    if (fbSseConnected) fbSseClose();
+    return;
+  }
+
+  String fbHost, fbAuth;
+  if (xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
+  fbHost = currentFirebaseHost;
+  fbAuth = currentFirebaseAuth;
+  xSemaphoreGive(settingsMutex);
+  if (fbHost.length() == 0) return;
+
+  unsigned long now = millis();
+  if (fbSseConnected && (fbSseActiveHost != fbHost || !fbSseClient.connected() || (now - fbSseLastActivityMs > 75000UL))) {
+    Serial.println("[SSE] Stream dropped or timed out -- reconnecting");
+    fbSseClose();
+  }
+
+  if (!fbSseConnected) {
+    if (now - fbSseLastAttemptMs < 5000UL) return;
+    fbSseLastAttemptMs = now;
+    if (tlsMutex == NULL || xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(1500)) == pdTRUE) {
+      fbSseOpen(fbHost, fbAuth);
+      if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+    }
+    return;
+  }
+
+  // Non-blocking drain of incoming SSE lines
+  int maxBytes = 2048;
+  while (fbSseClient.available() && maxBytes-- > 0) {
+    char c = (char)fbSseClient.read();
+    fbSseLastActivityMs = now;
+    if (c == '\r') continue;
+    if (c == '\n') {
+      String line = fbSseLineBuf;
+      fbSseLineBuf = "";
+      if (line.startsWith("event:")) {
+        fbSseEventName = line.substring(6);
+        fbSseEventName.trim();
+      } else if (line.startsWith("data:")) {
+        if (fbSseEventName == "put" || fbSseEventName == "patch") {
+          String cmdObj = extractSseDataObject(line);
+          if (cmdObj.length() > 4) {
+            executeFirebaseCommand(cmdObj, fbHost, fbAuth);
+            return; // exit loop cleanly after command execution
+          }
+        } else if (fbSseEventName == "cancel" || fbSseEventName == "auth_revoked") {
+          fbSseClose();
+          return;
+        }
+      }
+    } else if (fbSseLineBuf.length() < 1536) {
+      fbSseLineBuf += c;
+    }
+  }
+}
+
 void pollAndHandleFirebaseCommand() {
   if (otaInProgress || WiFi.status() != WL_CONNECTED) return;
   if (WiFi.localIP() == IPAddress(0, 0, 0, 0)) return;
@@ -2181,233 +2772,9 @@ void pollAndHandleFirebaseCommand() {
 
   body.trim();
   if (code != 200 || body.length() < 4 || body == "null") return;
-
-  String cmdId  = jsonExtractField(body, "id");
-  String action = jsonExtractField(body, "action");
-  if (action.length() == 0 || (cmdId.length() > 0 && cmdId == lastProcessedCmdId)) return;
-
-  // Clear /cmd.json immediately and confirm HTTP 200 before executing reboot/OTA commands.
-  int delCode = -1;
-  if (tlsMutex == NULL || xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(5000)) == pdTRUE) {
-    WiFiClientSecure client;
-    configureSecureClient(client);
-    client.setTimeout(6);
-    HTTPClient http;
-    http.setConnectTimeout(5000);
-    http.setTimeout(6000);
-    if (http.begin(client, url)) {
-      delCode = http.sendRequest("DELETE");
-      http.end();
-    }
-    if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
-  }
-  if (delCode != 200 && (action == "reboot" || action == "otaUrl")) {
-    Serial.println("[CloudCmd] Aborting " + action + " because DELETE /cmd.json failed (HTTP " + String(delCode) + ")");
-    return;
-  }
-
-  lastProcessedCmdId = cmdId.length() > 0 ? cmdId : String(millis());
-  lastCmdStage = "received";
-  lastCmdResult = "ESP32 received '" + action + "' -- applying...";
-  Serial.println("[CloudCmd] Executing action=" + action + " id=" + lastProcessedCmdId);
-  publishStatusToFirebase(); // Stage 2 ACK: ESP32 received command
-
-  if (action == "setPowerMode") {
-    String m = jsonExtractField(body, "mode");
-    m.toLowerCase();
-    PowerMode target = POWER_NORMAL;
-    bool valid = true;
-    if (m == "normal") target = POWER_NORMAL;
-    else if (m == "low") target = POWER_LOW;
-    else if (m == "medium") target = POWER_MEDIUM;
-    else if (m == "high") target = POWER_HIGH;
-    else valid = false;
-    if (valid) {
-      applyPowerMode(target, false);
-      saveTelemetryToNvs();
-      lastCmdStage = "completed";
-      lastCmdResult = "Power mode set to " + String(powerModeName(target));
-    } else {
-      lastCmdStage = "error";
-      lastCmdResult = "Invalid power mode: " + m;
-    }
-    publishStatusToFirebase();
-  } else if (action == "addWifi") {
-    String ssid = jsonExtractField(body, "ssid");
-    String pass = jsonExtractField(body, "password");
-    String ipS  = jsonExtractField(body, "ip");
-    String gwS  = jsonExtractField(body, "gateway");
-    String snS  = jsonExtractField(body, "subnet");
-    String dnsS = jsonExtractField(body, "dns");
-    WifiSaveResult r = addOrUpdateWifiNetwork(ssid, pass, ipS, gwS, snS, dnsS);
-    if (r == WIFI_SAVE_ADDED) { lastCmdStage = "completed"; lastCmdResult = "Added WiFi '" + ssid + "'"; }
-    else if (r == WIFI_SAVE_UPDATED) { lastCmdStage = "completed"; lastCmdResult = "Updated WiFi '" + ssid + "' (reboot to apply password/IP)"; }
-    else if (r == WIFI_SAVE_LIMIT_REACHED) { lastCmdStage = "error"; lastCmdResult = "WiFi list is full"; }
-    else { lastCmdStage = "error"; lastCmdResult = "Invalid WiFi settings for '" + ssid + "'"; }
-    publishStatusToFirebase();
-  } else if (action == "removeWifi") {
-    String targetSsid = jsonExtractField(body, "ssid");
-    int idx = -1;
-    if (wifiNetworksMutex == NULL || xSemaphoreTake(wifiNetworksMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-      for (size_t i = 0; i < wifiNetworks.size(); i++) {
-        if (wifiNetworks[i].ssid == targetSsid) { idx = (int)i; break; }
-      }
-      if (wifiNetworksMutex != NULL) xSemaphoreGive(wifiNetworksMutex);
-    }
-    String removed;
-    if (idx >= 0 && removeWifiNetworkByIndex(idx, removed)) {
-      lastCmdStage = "completed";
-      lastCmdResult = "Removed WiFi '" + removed + "'";
-    } else {
-      lastCmdStage = "error";
-      lastCmdResult = "WiFi '" + targetSsid + "' not found";
-    }
-    publishStatusToFirebase();
-  } else if (action == "setPreferredWifi") {
-    String pref = jsonExtractField(body, "ssid");
-    if (savePreferredWifi(pref)) {
-      lastCmdStage = "completed";
-      lastCmdResult = pref.length() ? ("Preferred WiFi set to '" + pref + "'") : "Preferred WiFi cleared";
-    } else {
-      lastCmdStage = "error";
-      lastCmdResult = "Failed to save Preferred WiFi";
-    }
-    publishStatusToFirebase();
-  } else if (action == "otaUrl") {
-    String otaUrl = jsonExtractField(body, "url");
-    if (!otaUrl.startsWith("https://")) {
-      cloudOtaState = "error";
-      cloudOtaMsg = "Invalid OTA URL (must start with https://)";
-      lastCmdStage = "error";
-      lastCmdResult = cloudOtaMsg;
-      publishStatusToFirebase();
-      return;
-    }
-    cloudOtaState = "running";
-    cloudOtaMsg = "Downloading & flashing firmware...";
-    lastCmdResult = cloudOtaMsg;
-    publishStatusToFirebase();
-
-    String err;
-    bool ok = performOtaFromUrl(otaUrl, err, false);
-    if (ok) {
-      cloudOtaState = "ok";
-      cloudOtaMsg = "Flash complete -- rebooting now";
-      lastCmdStage = "completed";
-      lastCmdResult = cloudOtaMsg;
-      saveTelemetryToNvs();
-      publishStatusToFirebase();
-      digitalWrite(LED_PIN, HIGH);
-      delay(5000);
-      ESP.restart();
-    } else {
-      cloudOtaState = "error";
-      cloudOtaMsg = "OTA failed: " + err;
-      lastCmdStage = "error";
-      lastCmdResult = cloudOtaMsg;
-      publishStatusToFirebase();
-    }
-  } else if (action == "setBatteryTrack" || action == "setTelemetry") {
-    String enStr = jsonExtractField(body, "enabled");
-    String vStr  = jsonExtractField(body, "startVolts");
-    bool nextEn  = (enStr == "1" || enStr == "true");
-    float parsedV = vStr.length() ? vStr.toFloat() : 0.0f;
-    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-      battTrackEnabled = nextEn;
-      if (parsedV >= 2.5f && parsedV <= 4.5f) battStartVolts = parsedV;
-      telemLastTickMs = millis();
-      if (battTrackEnabled && telemSessionStartEpoch == 0) {
-        time_t nowSec = time(nullptr);
-        if ((unsigned long)nowSec >= MIN_VALID_EPOCH) telemSessionStartEpoch = (uint32_t)nowSec;
-      }
-      saveTelemetryToNvsLocked();
-      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
-    }
-    lastCmdStage = "completed";
-    lastCmdResult = nextEn
-      ? ("Battery tracking ON" + (battStartVolts > 0.1f ? (" (start " + String(battStartVolts, 2) + "V)") : String("")))
-      : "Battery tracking PAUSED";
-    publishStatusToFirebase();
-  } else if (action == "setStartVoltage") {
-    String vStr = jsonExtractField(body, "startVolts");
-    float parsedV = vStr.toFloat();
-    if (parsedV >= 2.5f && parsedV <= 4.5f) {
-      if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-        battStartVolts = parsedV;
-        saveTelemetryToNvsLocked();
-        if (telemMutex != NULL) xSemaphoreGive(telemMutex);
-      }
-      lastCmdStage = "completed";
-      lastCmdResult = "Start battery voltage saved: " + String(parsedV, 2) + "V";
-    } else {
-      lastCmdStage = "error";
-      lastCmdResult = "Invalid voltage (enter 2.50 - 4.50 V)";
-    }
-    publishStatusToFirebase();
-  } else if (action == "setWifiTrack") {
-    String enStr = jsonExtractField(body, "enabled");
-    bool nextEn  = (enStr == "1" || enStr == "true");
-    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-      wifiTrackEnabled = nextEn;
-      telemLastTickMs = millis();
-      telemDiscStartMs = millis();
-      telemWasWifiConn = (WiFi.status() == WL_CONNECTED);
-      saveTelemetryToNvsLocked();
-      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
-    }
-    lastCmdStage = "completed";
-    lastCmdResult = nextEn ? "WiFi duration tracking ON" : "WiFi duration tracking PAUSED";
-    publishStatusToFirebase();
-  } else if (action == "resetBatteryTrack" || action == "resetTelemetry") {
-    String vStr = jsonExtractField(body, "startVolts");
-    float parsedV = vStr.length() ? vStr.toFloat() : 0.0f;
-    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-      time_t nowSec = time(nullptr);
-      telemSessionStartEpoch = ((unsigned long)nowSec >= MIN_VALID_EPOCH) ? (uint32_t)nowSec : 0;
-      telemUptimeSec = 0;
-      telemModeSec[0] = telemModeSec[1] = telemModeSec[2] = telemModeSec[3] = 0;
-      telemBootCount = battTrackEnabled ? 1 : 0;
-      telemCrashCount = 0;
-      if (parsedV >= 2.5f && parsedV <= 4.5f) battStartVolts = parsedV;
-      telemLastTickMs = millis();
-      saveTelemetryToNvsLocked();
-      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
-    }
-    lastCmdStage = "completed";
-    lastCmdResult = "Battery run counters reset";
-    publishStatusToFirebase();
-  } else if (action == "resetWifiTrack") {
-    if (telemMutex == NULL || xSemaphoreTake(telemMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-      telemWifiConnSec = 0;
-      telemWifiDiscSec = 0;
-      telemWifiReconnects = 0;
-      telemWifiConnMsSum = 0;
-      telemWifiConnSamples = 0;
-      telemLastTickMs = millis();
-      telemDiscStartMs = millis();
-      saveTelemetryToNvsLocked();
-      if (telemMutex != NULL) xSemaphoreGive(telemMutex);
-    }
-    lastCmdStage = "completed";
-    lastCmdResult = "WiFi tracking counters reset";
-    publishStatusToFirebase();
-  } else if (action == "reboot") {
-    saveTelemetryToNvs();
-    lastCmdStage = "completed";
-    lastCmdResult = "Rebooting ESP32...";
-    publishStatusToFirebase();
-    delay(400);
-    ESP.restart();
-  } else if (action == "refreshStatus") {
-    lastCmdStage = "completed";
-    lastCmdResult = "Health & storage refreshed";
-    publishStatusToFirebase();
-  } else {
-    lastCmdStage = "error";
-    lastCmdResult = "Unknown command: " + action;
-    publishStatusToFirebase();
-  }
+  executeFirebaseCommand(body, fbHost, fbAuth);
 }
+
 
 
 // Sends one reading to Firebase. Returns the HTTP status code (200 = success;
@@ -2693,14 +3060,54 @@ static void i2cRecoverBus(int& sdaIdleOut, int& sclIdleOut) {
   sclIdleOut = digitalRead(RTC_SCL_PIN);
 }
 
+// Minimal open-drain bit-bang ACK probe at ~50 kHz for 7-bit I2C address.
+// Isolates hardware/wiring issues from ESP32 Wire driver timeouts.
+static bool i2cBitBangProbe(uint8_t addr7) {
+  Wire.end();
+  pinMode(RTC_SDA_PIN, OUTPUT_OPEN_DRAIN);
+  pinMode(RTC_SCL_PIN, OUTPUT_OPEN_DRAIN);
+  digitalWrite(RTC_SDA_PIN, HIGH);
+  digitalWrite(RTC_SCL_PIN, HIGH);
+  delayMicroseconds(20);
+  // START
+  digitalWrite(RTC_SDA_PIN, LOW);  delayMicroseconds(10);
+  digitalWrite(RTC_SCL_PIN, LOW);  delayMicroseconds(10);
+  uint8_t b = (uint8_t)(addr7 << 1); // write bit = 0
+  for (int i = 7; i >= 0; i--) {
+    digitalWrite(RTC_SDA_PIN, (b & (1 << i)) ? HIGH : LOW);
+    delayMicroseconds(10);
+    digitalWrite(RTC_SCL_PIN, HIGH); delayMicroseconds(10);
+    digitalWrite(RTC_SCL_PIN, LOW);  delayMicroseconds(10);
+  }
+  // Release SDA & clock 9th bit for ACK
+  digitalWrite(RTC_SDA_PIN, HIGH); delayMicroseconds(10);
+  digitalWrite(RTC_SCL_PIN, HIGH); delayMicroseconds(10);
+  bool ack = (digitalRead(RTC_SDA_PIN) == LOW);
+  digitalWrite(RTC_SCL_PIN, LOW);  delayMicroseconds(10);
+  // STOP
+  digitalWrite(RTC_SDA_PIN, LOW);  delayMicroseconds(10);
+  digitalWrite(RTC_SCL_PIN, HIGH); delayMicroseconds(10);
+  digitalWrite(RTC_SDA_PIN, HIGH); delayMicroseconds(10);
+  return ack;
+}
+
 // Bus-recovery + Wire.begin() with 100 kHz primary & 50 kHz fallback for DS1307.
-// Records idle SDA/SCL levels and any detected addresses in rtcDiag on failure.
+// Uses a 1-byte register probe (0x00) instead of a 0-byte write (avoids ESP32 Wire
+// 0-byte timeout bugs) and records external pull-up state + bit-bang ACK on failure.
 bool rtcBegin() {
   if (i2cMutex != NULL && xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
 
   int sdaIdle = 1, sclIdle = 1;
   uint8_t err = 4;
   const uint32_t freqs[2] = { 100000UL, 50000UL };
+
+  // Check raw pin levels WITHOUT internal pull-up to detect missing external pull-ups
+  Wire.end();
+  pinMode(RTC_SDA_PIN, INPUT);
+  pinMode(RTC_SCL_PIN, INPUT);
+  delayMicroseconds(50);
+  int extSda = digitalRead(RTC_SDA_PIN);
+  int extScl = digitalRead(RTC_SCL_PIN);
 
   for (int f = 0; f < 2; f++) {
     i2cRecoverBus(sdaIdle, sclIdle);
@@ -2710,6 +3117,7 @@ bool rtcBegin() {
 
     for (int attempt = 0; attempt < 3; attempt++) {
       Wire.beginTransmission(DS1307_I2C_ADDR);
+      Wire.write((uint8_t)0x00); // 1-byte register pointer probe (more reliable than 0-byte write)
       err = Wire.endTransmission(true);
       if (err == 0) break;
       delay(25);
@@ -2720,8 +3128,7 @@ bool rtcBegin() {
   bool ok = (err == 0);
   if (!ok) {
     String found = "";
-    // Skip full 112-address scan if SDA or SCL is physically stuck LOW (would stall 5+ seconds)
-    if (sdaIdle == HIGH && sclIdle == HIGH) {
+    if (sdaIdle == HIGH && sclIdle == HIGH && err != 5) {
       for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
         Wire.beginTransmission(addr);
         if (Wire.endTransmission(true) == 0) {
@@ -2732,8 +3139,12 @@ bool rtcBegin() {
         }
       }
     }
-    rtcDiag = "I2C err " + String(err) + " at 0x68 (SDA=" + String(sdaIdle) + " SCL=" + String(sclIdle) + "); bus: " +
-              (found.length() ? found : "empty");
+    bool bbAck = i2cBitBangProbe(DS1307_I2C_ADDR);
+    // Restore Wire peripheral after bit-bang check
+    Wire.begin(RTC_SDA_PIN, RTC_SCL_PIN, 100000UL);
+    Wire.setTimeOut(50);
+    rtcDiag = "I2C err " + String(err) + " at 0x68 (extPU=" + String(extSda) + "/" + String(extScl) +
+              " bbAck=" + String(bbAck ? 1 : 0) + "); bus: " + (found.length() ? found : "empty");
   }
   if (i2cMutex != NULL) xSemaphoreGive(i2cMutex);
   return ok;
@@ -4001,15 +4412,19 @@ void wifiMaintenanceTask(void* param) {
   unsigned long lastCmdPollMs = 0;
 
   for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(100));
 
-    if (otaInProgress) continue;
+    if (otaInProgress) {
+      if (fbSseConnected) fbSseClose();
+      continue;
+    }
 
     unsigned long now = millis();
     serviceTelemetryTick();
 
-    // Poll Firebase /cmd.json every 5s for instant remote Dashboard commands.
-    if (WiFi.status() == WL_CONNECTED && (now - lastCmdPollMs >= 5000UL)) {
+    // Instant Firebase SSE stream on /cmd.json (fallback poll every 15s only if SSE is down)
+    serviceFirebaseSse();
+    if (!fbSseConnected && WiFi.status() == WL_CONNECTED && (now - lastCmdPollMs >= 15000UL)) {
       lastCmdPollMs = now;
       pollAndHandleFirebaseCommand();
     }
@@ -4023,6 +4438,7 @@ void wifiMaintenanceTask(void* param) {
       }
     }
     if (highPowerPendingSleep && powerMode == POWER_HIGH) {
+      fbSseClose();
       highPowerPendingSleep = false;
       highPowerWifiAwake = false;
       highPowerSleepStartMs = now;
@@ -4052,6 +4468,7 @@ void wifiMaintenanceTask(void* param) {
           Serial.println("High Power Saving: waking WiFi for 60s sync & web window.");
         }
       } else if (now - highPowerWakeStartMs >= HIGH_POWER_WAKE_WINDOW_MS) {
+        fbSseClose();
         if (xSemaphoreTake(wifiMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
           WiFi.mode(WIFI_OFF);
           lastConnectedSSID = "";
