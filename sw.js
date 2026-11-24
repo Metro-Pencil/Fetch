@@ -7,7 +7,7 @@
 // It NEVER caches live data (*.firebaseio.com, ESP32 device paths, OTA .bin,
 // or app-version.json).
 
-const SHELL_CACHE = 'room-logger-shell-v31';
+const SHELL_CACHE = 'room-logger-shell-v32';
 const RUNTIME_CACHE = 'room-logger-runtime-v2';
 
 const PRECACHE_ASSETS = [
@@ -15,12 +15,12 @@ const PRECACHE_ASSETS = [
   'index.html',
   'manifest.json',
   'bg-backdrop.jpg',
-  'base.css?v=3.9.8',
-  'themes.css?v=3.9.8',
-  'ui.js?v=3.9.8',
-  'data.js?v=3.9.8',
-  'cloud.js?v=3.9.8',
-  'charts.js?v=3.9.8',
+  'base.css?v=3.9.9',
+  'themes.css?v=3.9.9',
+  'ui.js?v=3.9.9',
+  'data.js?v=3.9.9',
+  'cloud.js?v=3.9.9',
+  'charts.js?v=3.9.9',
   'icon-192.png',
   'icon-512.png',
   'icon-maskable-512.png',

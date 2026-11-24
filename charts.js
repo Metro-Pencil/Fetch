@@ -1456,32 +1456,47 @@
       return;
     }
     const latestBuild = Number(latest.build || 0);
-    const latestLabel = (latest.version ? ('v' + latest.version) : '') + (latestBuild ? (' · Build #' + latestBuild) : (' (' + (latest.commit || 'latest') + ')'));
+    const latestVer = String(latest.version || '').replace(/^v/i, '');
+    const latestLabel = latestVer
+      ? ('v' + latestVer + (latestBuild ? (' · Build #' + latestBuild) : ''))
+      : (latestBuild ? ('Build #' + latestBuild) : ('commit ' + (latest.commit || 'latest')));
     const kb = latest.sizeBytes ? (latest.sizeBytes / 1024).toFixed(1) + ' KB' : 'unknown size';
     const when = latest.builtAt ? formatFull(Date.parse(latest.builtAt)) : 'unknown time';
 
     let isOutdated = false;
     let statusLine = '';
-    if (!esp || (!esp.build && !esp.version)){
-      if (pill){ pill.textContent = latestBuild ? ('Latest #' + latestBuild) : 'Cloud Flash'; pill.className = 'status-pill warn'; }
-      statusLine = 'ESP32 firmware version unknown (pre-v3.9.5) — latest available is <b>' + escapeHtml(latestLabel.trim()) + '</b>.';
-      isOutdated = !!latestBuild;
+    if (!latestBuild && !latestVer){
+      // Published version.json came from an older build.yml without version/build fields -- never claim "Up to date"!
+      const espStr = esp && esp.version ? (' (ESP32 on v' + escapeHtml(esp.version) + (esp.build ? (' #' + esp.build) : '') + ')') : '';
+      if (pill){ pill.textContent = 'Ready · ' + (latest.commit || 'bin'); pill.className = 'status-pill warn'; }
+      statusLine = 'Build <b>' + escapeHtml(latest.commit || 'latest') + '</b> ready' + espStr + ' — push updated <code>.github/workflows/build.yml</code> for automatic version matching.';
+    } else if (!esp || (!esp.build && !esp.version)){
+      isOutdated = true;
+      if (pill){ pill.textContent = latestBuild ? ('Update → #' + latestBuild) : ('Update → v' + latestVer); pill.className = 'status-pill warn'; }
+      statusLine = '<b>ESP32 firmware version unknown</b> (offline or older build) — latest available is <b>' + escapeHtml(latestLabel) + '</b>.';
+    } else if (latestBuild > 0 && esp.build === 0){
+      isOutdated = true;
+      if (pill){ pill.textContent = 'Update → #' + latestBuild; pill.className = 'status-pill warn'; }
+      statusLine = '<b>Firmware update available:</b> ESP32 is on v' + escapeHtml(esp.version || '?') + ' (pre-build-counter) → latest is <b>' + escapeHtml(latestLabel) + '</b>.';
     } else if (latestBuild > 0 && esp.build > 0){
       if (esp.build < latestBuild){
         isOutdated = true;
         if (pill){ pill.textContent = 'Update #' + esp.build + ' → #' + latestBuild; pill.className = 'status-pill warn'; }
-        statusLine = '<b>Firmware update available:</b> ESP32 is on Build #' + esp.build + ' (v' + escapeHtml(esp.version || '?') + ') → latest is <b>Build #' + latestBuild + '</b>.';
+        statusLine = '<b>Firmware update available:</b> ESP32 is on Build #' + esp.build + ' (v' + escapeHtml(esp.version || '?') + ') → latest is <b>' + escapeHtml(latestLabel) + '</b>.';
       } else {
         if (pill){ pill.textContent = 'Up to date (#' + esp.build + ')'; pill.className = 'status-pill ok'; }
         statusLine = '<b>ESP32 is up to date</b> on Build #' + esp.build + ' (v' + escapeHtml(esp.version || '?') + ').';
       }
-    } else if (latest.version && esp.version && esp.version !== latest.version){
+    } else if (latestVer && esp.version && esp.version !== latestVer){
       isOutdated = true;
-      if (pill){ pill.textContent = 'Update ' + esp.version + ' → ' + latest.version; pill.className = 'status-pill warn'; }
-      statusLine = '<b>Firmware update available:</b> ESP32 v' + escapeHtml(esp.version) + ' → v' + escapeHtml(latest.version) + '.';
-    } else {
+      if (pill){ pill.textContent = 'Update v' + esp.version + ' → v' + latestVer; pill.className = 'status-pill warn'; }
+      statusLine = '<b>Firmware update available:</b> ESP32 v' + escapeHtml(esp.version) + ' → <b>v' + escapeHtml(latestVer) + '</b>.';
+    } else if (latestVer && esp.version && esp.version === latestVer){
       if (pill){ pill.textContent = 'Up to date'; pill.className = 'status-pill ok'; }
-      statusLine = '<b>ESP32 is up to date</b> (' + escapeHtml(latestLabel.trim()) + ').';
+      statusLine = '<b>ESP32 is up to date</b> (' + escapeHtml(latestLabel) + ').';
+    } else {
+      if (pill){ pill.textContent = 'Ready · ' + (latest.commit || 'bin'); pill.className = 'status-pill warn'; }
+      statusLine = 'Latest build <b>' + escapeHtml(latestLabel) + '</b> ready to flash.';
     }
 
     if (metaEl){
