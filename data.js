@@ -622,6 +622,7 @@
       const act = qBtn.getAttribute('data-cmdq-act');
       const cid = qBtn.getAttribute('data-cmd-id') || '';
       if (act === 'cancel') cancelQueuedCmd(cid);
+      else if (act === 'push-now') pushOfflineCmdNow(cid);
       else if (act === 'retry') retryHistoryCmd(cid);
     }
   });

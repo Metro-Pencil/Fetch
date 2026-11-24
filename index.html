@@ -582,6 +582,14 @@
       <div class="cmd-step" id="cstep-4"><span class="cmd-step-dot">4</span><span>Done</span></div>
     </div>
     <div class="cmd-stepper-foot" id="cmd-stepper-foot"></div>
+    <div class="cmd-offline-prompt" id="cmd-offline-prompt">
+      <div class="cmd-offline-prompt-msg" id="cmd-offline-prompt-msg">ESP32 is currently offline. Hold this update and push automatically as soon as it reconnects?</div>
+      <div class="cmd-offline-prompt-actions">
+        <button type="button" class="btn-primary" onclick="holdOfflineCmdKeep()">Wait for ESP32 (Hold)</button>
+        <button type="button" class="btn-ghost" onclick="pushOfflineCmdNow()">Push Now Anyway</button>
+        <button type="button" class="btn-ghost" onclick="cancelActiveOfflinePrompt()">Cancel</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -590,7 +598,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.9.3</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.9.5</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -895,9 +903,16 @@
           <div class="card-detail-drawer">
             <div class="card-detail-content">
               <div class="card-detail-inner-pad">
+                <div class="wifi-fallback-row">
+                  <div>
+                    <div style="font-weight:600;color:var(--text);">Open-WiFi Auto-Fallback</div>
+                    <div style="font-size:11px;color:var(--muted);">Auto-join open networks if saved WiFi is unavailable</div>
+                  </div>
+                  <button type="button" class="btn-ghost" id="btn-open-fallback" onclick="cloudToggleOpenFallback()" style="min-height:40px;padding:6px 12px;font-size:11.5px;">Open Fallback: —</button>
+                </div>
                 <div class="wifi-list" id="cloud-wifi-list"></div>
                 <details class="ota-details">
-                  <summary>Add or update a WiFi network</summary>
+                  <summary>Add or update a WiFi network (DHCP or Static IP)</summary>
                   <div class="ota-form">
                     <div class="field-row">
                       <label for="cw-ssid">WiFi Name (SSID)</label>
@@ -906,6 +921,22 @@
                     <div class="field-row">
                       <label for="cw-pass">Password (leave blank for open WiFi)</label>
                       <input type="password" id="cw-pass" placeholder="WiFi password" autocomplete="off">
+                    </div>
+                    <div class="field-row">
+                      <label for="cw-ip">Static IP (optional — leave blank for DHCP)</label>
+                      <input type="text" id="cw-ip" placeholder="e.g. 192.168.1.50" autocomplete="off">
+                    </div>
+                    <div class="field-row">
+                      <label for="cw-gw">Gateway (optional)</label>
+                      <input type="text" id="cw-gw" placeholder="e.g. 192.168.1.1" autocomplete="off">
+                    </div>
+                    <div class="field-row">
+                      <label for="cw-sn">Subnet Mask (optional)</label>
+                      <input type="text" id="cw-sn" placeholder="e.g. 255.255.255.0" autocomplete="off">
+                    </div>
+                    <div class="field-row">
+                      <label for="cw-dns">DNS Server (optional)</label>
+                      <input type="text" id="cw-dns" placeholder="e.g. 8.8.8.8" autocomplete="off">
                     </div>
                     <div class="controls-row">
                       <button type="button" class="btn-primary" onclick="cloudAddWifi()">Apply &amp; Save WiFi</button>
@@ -941,6 +972,15 @@
                   <button type="button" class="btn-ghost" id="btn-flash-esp" onclick="openEspOta()" disabled>Local /update</button>
                   <button type="button" class="btn-ghost" id="btn-copy-bin" onclick="copyBinUrl()" disabled>Copy .bin URL</button>
                 </div>
+                <div class="ota-form" style="margin-top:10px;">
+                  <div class="field-row">
+                    <label for="cw-custom-ota-url">Custom Firmware .bin HTTPS URL</label>
+                    <input type="url" id="cw-custom-ota-url" placeholder="https://.../firmware/latest.bin" autocomplete="off">
+                  </div>
+                  <div class="controls-row">
+                    <button type="button" class="btn-ghost" onclick="cloudFlashCustomOta()">Flash Custom URL</button>
+                  </div>
+                </div>
                 <details class="ota-details">
                   <summary>Push new room_logger.ino to Firmware Repo (triggers build.yml)</summary>
                   <div class="ota-form">
@@ -964,6 +1004,67 @@
                       <button type="button" class="btn-ghost" id="btn-push-ino" onclick="pushInoToGithub()">Push &amp; Compile on GitHub</button>
                     </div>
                     <div class="dash-msg" id="ota-push-msg"></div>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ESP32 Device Settings (Firebase Sync, Admin Login, Format LittleFS) -->
+        <div class="card expandable-card" id="card-esp-settings" onclick="toggleCardExpand(event, this)">
+          <div class="card-head-toggle" style="margin-bottom:4px;">
+            <h2>ESP32 Settings &amp; Security</h2>
+            <div class="card-head-meta">
+              <span class="minimal-pill-hint">Firebase · Login · FS</span>
+              <span class="expand-chevron" aria-hidden="true">&#9662;</span>
+            </div>
+          </div>
+          <div class="ota-meta">Push Firebase host/secret, update ESP32 admin login, or format LittleFS remotely.</div>
+          <div class="inline-cmd-slot" data-cmd-slot="esp-settings"></div>
+          <div class="card-detail-drawer">
+            <div class="card-detail-content">
+              <div class="card-detail-inner-pad">
+                <details class="ota-details" open style="margin-top:0;padding-top:0;border-top:none;">
+                  <summary>Firebase RTDB Host &amp; Auth Secret (Sync to ESP32)</summary>
+                  <div class="ota-form">
+                    <div class="field-row">
+                      <label for="cw-fb-host">ESP32 Firebase Host (leave blank to use app's host)</label>
+                      <input type="text" id="cw-fb-host" placeholder="e.g. esp32-19dd8-default-rtdb.firebaseio.com" autocomplete="off">
+                    </div>
+                    <div class="field-row">
+                      <label for="cw-fb-auth">Firebase Database Secret (saved to ESP32 NVS &amp; this phone)</label>
+                      <input type="password" id="cw-fb-auth" placeholder="Paste 40-char Firebase Database Secret" autocomplete="off">
+                    </div>
+                    <div class="controls-row">
+                      <button type="button" class="btn-primary" onclick="cloudSyncFirebaseToEsp(false)">Sync Firebase to ESP32</button>
+                      <button type="button" class="btn-ghost" onclick="cloudSyncFirebaseToEsp(true)">Clear ESP32 Auth</button>
+                    </div>
+                  </div>
+                </details>
+
+                <details class="ota-details">
+                  <summary>ESP32 Local Admin Login (/credentials)</summary>
+                  <div class="ota-form">
+                    <div class="field-row">
+                      <label for="cw-adm-user">Admin Username (1–64 chars)</label>
+                      <input type="text" id="cw-adm-user" placeholder="e.g. admin" autocomplete="off">
+                    </div>
+                    <div class="field-row">
+                      <label for="cw-adm-pass">New Admin Password (8–64 chars)</label>
+                      <input type="password" id="cw-adm-pass" placeholder="At least 8 characters" autocomplete="off">
+                    </div>
+                    <div class="controls-row">
+                      <button type="button" class="btn-ghost" onclick="cloudUpdateAdminCreds()">Update Admin Login</button>
+                    </div>
+                  </div>
+                </details>
+
+                <details class="ota-details">
+                  <summary>Storage Maintenance (LittleFS)</summary>
+                  <div class="ota-meta" style="margin-top:6px;">Formats LittleFS on the ESP32 (wipes offline reading queue and saved WiFi file, then reboots).</div>
+                  <div class="controls-row" style="margin-top:8px;">
+                    <button type="button" class="btn-danger" onclick="cloudFormatFs()">Format ESP32 LittleFS</button>
                   </div>
                 </details>
               </div>
@@ -998,11 +1099,11 @@
           <div class="card-head-toggle" style="margin-bottom:4px;">
             <h2>App Theme &amp; Updates</h2>
             <div class="card-head-meta">
-              <span class="minimal-pill-hint">v3.9.3</span>
+              <span class="minimal-pill-hint">v3.9.5</span>
               <span class="expand-chevron" aria-hidden="true">&#9662;</span>
             </div>
           </div>
-          <div class="ota-meta" id="app-ver-meta">Running <b>v3.9.3</b> · checking GitHub for updates…</div>
+          <div class="ota-meta" id="app-ver-meta">Running <b>v3.9.5</b> · checking GitHub for updates…</div>
           <div class="card-detail-drawer">
             <div class="card-detail-content">
               <div class="card-detail-inner-pad">
@@ -1113,7 +1214,7 @@
             <div class="card-detail-content">
               <div class="card-detail-inner-pad">
                 <div class="controls-row" style="margin-bottom:8px;">
-                  <button type="button" class="btn-ghost" onclick="resumeCmdQueueNow()">Process Queue</button>
+                  <button type="button" class="btn-ghost" onclick="resumeCmdQueueNow()">Push Held / Queue</button>
                   <button type="button" class="btn-ghost" onclick="exportCmdHistory()">Export JSON</button>
                   <button type="button" class="btn-ghost" onclick="clearCmdHistory()">Clear History</button>
                 </div>

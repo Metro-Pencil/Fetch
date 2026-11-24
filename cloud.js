@@ -70,6 +70,11 @@
                            2.5 * 60 * 1000;
     const validIp = isSafeHostOrIp(status.ip) && status.ip !== '0.0.0.0';
     const isOnline = validIp && status.internetOk !== false && (ageMs <= offlineWindowMs);
+    const wasOffline = (lastDeviceOnline === false);
+    lastDeviceOnline = isOnline;
+    if (isOnline && (wasOffline || cmdQueue.some(j => j.stage === 'hold_offline'))){
+      releaseHeldOfflineQueue();
+    }
 
     const modeLabel = mode.charAt(0).toUpperCase() + mode.slice(1) + (mode === 'normal' ? '' : ' power save');
     const modeCls = mode === 'normal' ? 'ok' : 'warn';
@@ -123,7 +128,57 @@
   let cmdQueue = [];
   let cmdHistory = [];
   let activeCmdJob = null;
+  let lastDeviceOnline = null; // null = unknown yet, true = online, false = offline
+  let promptOfflineJobId = '';
   let cmdSeqCounter = 0;
+
+  const SENSITIVE_PAYLOAD_KEYS = new Set(['password', 'pass', 'auth', 'token']);
+
+  function sanitizePayloadForStorage(payload){
+    if (!payload || typeof payload !== 'object') return {};
+    const out = {};
+    for (const [k, v] of Object.entries(payload)){
+      if (SENSITIVE_PAYLOAD_KEYS.has(k) && v){
+        out[k] = '•••••• (masked)';
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  }
+
+  function formatPayloadTagsHtml(payload){
+    if (!payload || typeof payload !== 'object') return '';
+    const labels = {
+      action: 'Action', mode: 'Mode', ssid: 'SSID', password: 'Password',
+      ip: 'Static IP', gateway: 'Gateway', subnet: 'Subnet', dns: 'DNS',
+      enabled: 'Enabled', startVolts: 'Start V', host: 'Host', auth: 'Auth Secret',
+      clearAuth: 'Clear Auth', user: 'Username', pass: 'Password', url: 'OTA URL'
+    };
+    const tags = [];
+    for (const [k, rawV] of Object.entries(payload)){
+      if (rawV === '' || rawV === undefined || rawV === null) continue;
+      const lbl = labels[k] || k;
+      let val = String(rawV);
+      if (SENSITIVE_PAYLOAD_KEYS.has(k)) val = '••••••';
+      else if (k === 'enabled' || k === 'clearAuth') val = (val === '1' || val === 'true') ? 'ON' : 'OFF';
+      else if (k === 'url' && val.length > 42) val = val.slice(0, 24) + '…' + val.slice(-16);
+      tags.push('<span class="cmd-q-tag"><b>' + escapeHtml(lbl) + ':</b> ' + escapeHtml(val) + '</span>');
+    }
+    return tags.length ? ('<div class="cmd-q-payload">' + tags.join('') + '</div>') : '';
+  }
+
+  function statusPillForStage(stage){
+    if (stage === 'hold_offline') return '<span class="cmd-q-stpill hold">HOLD · ESP OFFLINE</span>';
+    if (stage === 'queued')       return '<span class="cmd-q-stpill">QUEUED</span>';
+    if (stage === 'sending')      return '<span class="cmd-q-stpill run">1/4 SENDING</span>';
+    if (stage === 'sent')         return '<span class="cmd-q-stpill run">2/4 WAITING ESP</span>';
+    if (stage === 'received')     return '<span class="cmd-q-stpill run">3/4 APPLYING</span>';
+    if (stage === 'completed')    return '<span class="cmd-q-stpill ok">4/4 DONE</span>';
+    if (stage === 'timeout')      return '<span class="cmd-q-stpill err">TIMED OUT</span>';
+    if (stage === 'cancelled')    return '<span class="cmd-q-stpill">CANCELLED</span>';
+    return '<span class="cmd-q-stpill err">FAILED</span>';
+  }
   let pendingCmdId = '';
   let pendingCmdStartMs = 0;
   let pendingCmdLabel = '';
@@ -150,6 +205,7 @@
   }
 
   function cmdStepStatesForStage(stage){
+    if (stage === 'hold_offline') return ['', '', '', ''];
     if (stage === 'queued')     return ['', '', '', ''];
     if (stage === 'sending')    return ['active', '', '', ''];
     if (stage === 'sent')       return ['done', 'active', '', ''];
@@ -165,22 +221,34 @@
     const st = cmdStepStatesForStage(job.stage);
     const stepLabels = ['1 Firebase', '2 ESP Got', '3 Applied', '4 Done'];
     const cardCls =
+      job.stage === 'hold_offline' ? ' is-hold' :
       job.stage === 'completed' ? ' is-done' :
       (job.stage === 'error' || job.stage === 'send_error' || job.stage === 'timeout') ? ' is-err' :
       (isLive && job.stage !== 'queued') ? ' is-active' : '';
     const durStr = job.durationMs !== null && job.durationMs !== undefined
       ? ((job.durationMs / 1000).toFixed(1) + 's')
-      : (job.startedAt ? (((Date.now() - job.startedAt) / 1000).toFixed(1) + 's') : 'Queued');
+      : (job.startedAt ? (((Date.now() - job.startedAt) / 1000).toFixed(1) + 's') : (job.stage === 'hold_offline' ? 'On Hold' : 'Queued'));
     const whenStr = job.createdAt ? formatFull(job.createdAt, true) : '';
-    const actBtns = job.stage === 'queued'
-      ? '<button type="button" class="btn-ghost cmd-q-btn-sm" data-cmdq-act="cancel" data-cmd-id="' + escapeHtml(job.id) + '">Cancel</button>'
-      : (!isLive ? '<button type="button" class="btn-ghost cmd-q-btn-sm" data-cmdq-act="retry" data-cmd-id="' + escapeHtml(job.id) + '">Retry</button>' : '');
+    const payloadHtml = formatPayloadTagsHtml(job.displayPayload || job.payload);
+    let actBtns = '';
+    if (job.stage === 'hold_offline'){
+      actBtns = '<span style="display:inline-flex;gap:6px;">' +
+        '<button type="button" class="btn-primary cmd-q-btn-sm" data-cmdq-act="push-now" data-cmd-id="' + escapeHtml(job.id) + '">Push Now</button>' +
+        '<button type="button" class="btn-ghost cmd-q-btn-sm" data-cmdq-act="cancel" data-cmd-id="' + escapeHtml(job.id) + '">Cancel</button>' +
+      '</span>';
+    } else if (job.stage === 'queued'){
+      actBtns = '<button type="button" class="btn-ghost cmd-q-btn-sm" data-cmdq-act="cancel" data-cmd-id="' + escapeHtml(job.id) + '">Cancel</button>';
+    } else if (!isLive && !job.hasSensitive){
+      actBtns = '<button type="button" class="btn-ghost cmd-q-btn-sm" data-cmdq-act="retry" data-cmd-id="' + escapeHtml(job.id) + '">Retry</button>';
+    }
 
     return '<div class="cmd-q-item' + cardCls + '" data-cmd-job-id="' + escapeHtml(job.id) + '">' +
       '<div class="cmd-q-head">' +
         '<span>' + escapeHtml(job.label || (job.payload && job.payload.action) || 'Command') + '</span>' +
+        statusPillForStage(job.stage) +
         '<span class="cmd-q-meta">' + escapeHtml(durStr) + (whenStr ? (' · ' + escapeHtml(whenStr)) : '') + '</span>' +
       '</div>' +
+      payloadHtml +
       '<div class="cmd-q-steps">' +
         stepLabels.map((lbl, idx) => '<div class="cmd-q-step ' + st[idx] + '">' + lbl + '</div>').join('') +
       '</div>' +
@@ -198,22 +266,24 @@
     const histList = document.getElementById('cmd-history-list');
     const qBadge = document.getElementById('cmd-stepper-qbadge');
 
-    const pendingCount = cmdQueue.length;
+    const heldCount = cmdQueue.filter(j => j.stage === 'hold_offline').length;
+    const queuedCount = cmdQueue.length - heldCount;
     if (qBadge){
-      if (pendingCount > 0){
+      if (cmdQueue.length > 0){
         qBadge.style.display = 'inline-flex';
-        qBadge.textContent = '+' + pendingCount + ' queued';
+        qBadge.textContent = heldCount > 0 ? (heldCount + ' held' + (queuedCount ? (' · ' + queuedCount + ' q') : '')) : ('+' + queuedCount + ' queued');
       } else {
         qBadge.style.display = 'none';
       }
     }
 
     if (pill){
-      if (activeCmdJob){
-        pill.textContent = pendingCount > 0 ? ('1 Running · ' + pendingCount + ' Queued') : '1 Running';
-        pill.className = 'status-pill warn';
-      } else if (pendingCount > 0){
-        pill.textContent = pendingCount + ' Queued';
+      const parts = [];
+      if (activeCmdJob) parts.push('1 Running');
+      if (heldCount > 0) parts.push(heldCount + ' Held (Offline)');
+      if (queuedCount > 0) parts.push(queuedCount + ' Queued');
+      if (parts.length){
+        pill.textContent = parts.join(' · ');
         pill.className = 'status-pill warn';
       } else {
         pill.textContent = 'Idle';
@@ -259,10 +329,87 @@
     sendCloudCommand(Object.assign({}, item.payload), item.label, item.slotKey);
   }
 
+  function hideOfflineHoldPrompt(){
+    promptOfflineJobId = '';
+    const el = document.getElementById('cmd-offline-prompt');
+    if (el) el.classList.remove('show');
+  }
+
+  function showOfflineHoldPrompt(job){
+    if (!job) return;
+    promptOfflineJobId = job.id;
+    mountStepperIntoSlot(job.slotKey);
+    pendingCmdLabel = job.label;
+    pendingCmdStartMs = 0;
+    updateCmdStepper('hold_offline', 'Waiting for ESP32 to reconnect — update is safely saved in your pending queue.');
+    const el = document.getElementById('cmd-offline-prompt');
+    const msg = document.getElementById('cmd-offline-prompt-msg');
+    if (msg) msg.textContent = 'ESP32 is offline. Hold "' + job.label.replace(/…$/, '') + '" and auto-push when it reconnects?';
+    if (el) el.classList.add('show');
+  }
+
+  function holdOfflineCmdKeep(){
+    hideOfflineHoldPrompt();
+    dismissCmdStepper();
+    showToast('Held in pending queue — will auto-push when ESP32 comes online');
+  }
+
+  function pushOfflineCmdNow(id){
+    const targetId = id || promptOfflineJobId;
+    hideOfflineHoldPrompt();
+    const job = cmdQueue.find(j => j.id === targetId);
+    if (job){
+      job.stage = 'queued';
+      job.detail = 'Forced push — uploading to Firebase…';
+      persistCmdQueueAndHistory();
+      renderCmdQueueSection();
+      if (!activeCmdJob) processNextCmdQueue();
+      else showToast('Moved to active upload queue');
+    }
+  }
+
+  function cancelActiveOfflinePrompt(){
+    const targetId = promptOfflineJobId;
+    hideOfflineHoldPrompt();
+    dismissCmdStepper();
+    if (targetId) cancelQueuedCmd(targetId);
+  }
+
+  function releaseHeldOfflineQueue(){
+    let released = 0;
+    for (const j of cmdQueue){
+      if (j.stage === 'hold_offline'){
+        j.stage = 'queued';
+        j.detail = 'ESP32 is back online — queued for immediate upload…';
+        released++;
+      }
+    }
+    if (released > 0){
+      hideOfflineHoldPrompt();
+      persistCmdQueueAndHistory();
+      renderCmdQueueSection();
+      showToast('ESP32 online — pushing ' + released + ' held update' + (released === 1 ? '' : 's') + '…');
+      if (!activeCmdJob) processNextCmdQueue();
+    }
+  }
+
   function resumeCmdQueueNow(){
+    let promoted = 0;
+    for (const j of cmdQueue){
+      if (j.stage === 'hold_offline'){
+        j.stage = 'queued';
+        j.detail = 'Manually released — queued for upload…';
+        promoted++;
+      }
+    }
+    if (promoted > 0){
+      hideOfflineHoldPrompt();
+      persistCmdQueueAndHistory();
+      renderCmdQueueSection();
+    }
     if (!activeCmdJob && cmdQueue.length > 0){
       processNextCmdQueue();
-      showToast('Processing queued commands…');
+      showToast('Processing ' + cmdQueue.length + ' queued command(s)…');
     } else if (activeCmdJob){
       showToast('A command is already running');
     } else {
@@ -297,6 +444,9 @@
       activeCmdJob.detail = detailMsg || activeCmdJob.detail;
       activeCmdJob.finishedAt = Date.now();
       activeCmdJob.durationMs = activeCmdJob.startedAt ? Math.max(0, activeCmdJob.finishedAt - activeCmdJob.startedAt) : 0;
+      // Mask any passwords/secrets before storing in offline history
+      activeCmdJob.displayPayload = sanitizePayloadForStorage(activeCmdJob.payload);
+      if (activeCmdJob.hasSensitive) activeCmdJob.payload = activeCmdJob.displayPayload;
       cmdHistory.unshift(activeCmdJob);
       if (cmdHistory.length > CMD_HISTORY_MAX) cmdHistory.length = CMD_HISTORY_MAX;
       activeCmdJob = null;
@@ -304,9 +454,9 @@
     pendingCmdId = '';
     persistCmdQueueAndHistory();
     renderCmdQueueSection();
-    if (cmdQueue.length > 0){
+    if (cmdQueue.some(j => j.stage === 'queued')){
       clearTimeout(cmdNextTimer);
-      cmdNextTimer = setTimeout(() => processNextCmdQueue(), 650);
+      cmdNextTimer = setTimeout(() => processNextCmdQueue(), 500);
     }
   }
 
@@ -378,7 +528,12 @@
       if (dot) dot.textContent = icon;
     };
 
-    if (stage === 'sending'){
+    if (stage !== 'hold_offline') hideOfflineHoldPrompt();
+    if (stage === 'hold_offline'){
+      setSt(s[0], '', '1'); setSt(s[1], '', '2'); setSt(s[2], '', '3'); setSt(s[3], '', '4');
+      if (timeEl) timeEl.textContent = 'HOLD';
+      if (closeBtn) closeBtn.style.display = 'inline-flex';
+    } else if (stage === 'sending'){
       setSt(s[0], 'active', '1'); setSt(s[1], '', '2'); setSt(s[2], '', '3'); setSt(s[3], '', '4');
     } else if (stage === 'sent'){
       setSt(s[0], 'done', '✓'); setSt(s[1], 'active', '2'); setSt(s[2], '', '3'); setSt(s[3], '', '4');
@@ -797,6 +952,12 @@
       }
     }
 
+    const openFbBtn = document.getElementById('btn-open-fallback');
+    if (openFbBtn && status && status.wifi && status.wifi.openFallback !== undefined){
+      window._lastOpenFallbackOn = !!status.wifi.openFallback;
+      openFbBtn.textContent = 'Open Fallback: ' + (window._lastOpenFallbackOn ? 'ON' : 'OFF');
+    }
+
     const otaStEl = document.getElementById('cloud-ota-status');
     if (otaStEl && status && status.ota && status.ota.msg){
       otaStEl.innerHTML = 'ESP32 OTA status: <b>' + escapeHtml(status.ota.state || 'idle') + '</b> — ' + escapeHtml(status.ota.msg);
@@ -829,11 +990,12 @@
     }
   }
 
-  function sendCloudCommand(payloadObj, waitingMsg, slotKey){
+  function sendCloudCommand(payloadObj, waitingMsg, slotKey, forceNow){
     const inferredSlot = slotKey || (
       payloadObj && payloadObj.action === 'setPowerMode' ? 'power-mode' :
-      payloadObj && (payloadObj.action === 'addWifi' || payloadObj.action === 'removeWifi' || payloadObj.action === 'setPreferredWifi') ? 'wifi-control' :
+      payloadObj && /^(addWifi|removeWifi|setPreferredWifi|setOpenFallback)$/.test(payloadObj.action) ? 'wifi-control' :
       payloadObj && payloadObj.action === 'otaUrl' ? 'ota-control' :
+      payloadObj && /^(setFirebaseConfig|setAdminCredentials|formatFs)$/.test(payloadObj.action) ? 'esp-settings' :
       payloadObj && /^(setTelemetry|resetTelemetry|setBatteryTrack|resetBatteryTrack|setStartVoltage|setWifiTrack|resetWifiTrack)$/.test(payloadObj.action) ? 'telemetry-control' :
       'home-actions'
     );
@@ -843,14 +1005,20 @@
       showToast('Set Firebase RTDB host on Graphs tab first');
       return false;
     }
+    const hasSensitive = Object.keys(payloadObj || {}).some(k => SENSITIVE_PAYLOAD_KEYS.has(k) && payloadObj[k]);
+    const espIsOffline = (lastDeviceOnline === false) && !forceNow;
     const id = String(Date.now()) + '_' + (++cmdSeqCounter);
     const job = {
       id: id,
       payload: Object.assign({}, payloadObj),
+      displayPayload: sanitizePayloadForStorage(payloadObj),
+      hasSensitive: hasSensitive,
       label: waitingMsg || ('Action: ' + (payloadObj.action || 'command')),
       slotKey: inferredSlot,
-      stage: 'queued',
-      detail: 'Queued — waiting for earlier upload to finish…',
+      stage: espIsOffline ? 'hold_offline' : 'queued',
+      detail: espIsOffline
+        ? 'ESP32 is offline — holding update until device reconnects'
+        : 'Queued — waiting for earlier upload to finish…',
       createdAt: Date.now(),
       startedAt: null,
       finishedAt: null,
@@ -860,6 +1028,10 @@
     persistCmdQueueAndHistory();
     renderCmdQueueSection();
 
+    if (espIsOffline){
+      showOfflineHoldPrompt(job);
+      return true;
+    }
     if (activeCmdJob){
       showToast('Queued (#' + cmdQueue.length + '): ' + job.label.replace(/…$/, ''));
       return true;
@@ -869,10 +1041,12 @@
 
   async function processNextCmdQueue(){
     if (activeCmdJob || !cmdQueue.length) return false;
+    const nextIdx = cmdQueue.findIndex(j => j.stage === 'queued');
+    if (nextIdx < 0) return false; // only hold_offline jobs waiting
     const host = getHost();
     if (!host) return false;
 
-    activeCmdJob = cmdQueue.shift();
+    activeCmdJob = cmdQueue.splice(nextIdx, 1)[0];
     activeCmdJob.startedAt = Date.now();
     activeCmdJob.stage = 'sending';
     activeCmdJob.detail = 'Uploading command to Firebase…';
@@ -920,16 +1094,19 @@
       updateCmdStepper('sent', activeCmdJob.detail);
       renderCmdQueueSection();
 
+      ensureStatusSse();
       let polls = 0;
+      const pollMs = statusSseOpen ? 2500 : 800;
+      const maxPolls = statusSseOpen ? 12 : 35;
       cmdPollTimer = setInterval(() => {
         polls++;
         fetchStatus();
-        if (polls >= 20){
+        if (polls >= maxPolls){
           const timeoutMsg = 'Timed out waiting for ESP32 ACK (30s) — ESP32 will apply on next wake/poll window.';
           updateCmdStepper('error', timeoutMsg);
           finalizeActiveCmdJob('timeout', timeoutMsg);
         }
-      }, 1500);
+      }, pollMs);
       return true;
     } catch(err){
       const errMsg = 'Network error: ' + err.message;
@@ -965,10 +1142,77 @@
   function cloudAddWifi(){
     const ssid = (document.getElementById('cw-ssid').value || '').trim();
     const pass = document.getElementById('cw-pass').value || '';
+    const ip   = (document.getElementById('cw-ip')?.value || '').trim();
+    const gw   = (document.getElementById('cw-gw')?.value || '').trim();
+    const sn   = (document.getElementById('cw-sn')?.value || '').trim();
+    const dns  = (document.getElementById('cw-dns')?.value || '').trim();
     if (!ssid){ setCloudCmdStatus('Enter a WiFi SSID first.', 'err'); showToast('Enter a WiFi SSID first'); return; }
-    sendCloudCommand({ action: 'addWifi', ssid: ssid, password: pass }, 'Saving WiFi "' + ssid + '" to ESP32…');
-    document.getElementById('cw-ssid').value = '';
-    document.getElementById('cw-pass').value = '';
+    const payload = { action: 'addWifi', ssid: ssid, password: pass };
+    if (ip) payload.ip = ip;
+    if (gw) payload.gateway = gw;
+    if (sn) payload.subnet = sn;
+    if (dns) payload.dns = dns;
+    sendCloudCommand(payload, 'Saving WiFi "' + ssid + '" to ESP32…', 'wifi-control');
+    ['cw-ssid', 'cw-pass', 'cw-ip', 'cw-gw', 'cw-sn', 'cw-dns'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+  }
+
+  function cloudToggleOpenFallback(){
+    const nextEn = !window._lastOpenFallbackOn;
+    sendCloudCommand(
+      { action: 'setOpenFallback', enabled: nextEn ? '1' : '0' },
+      nextEn ? 'Enabling Open-WiFi auto-fallback…' : 'Disabling Open-WiFi auto-fallback…',
+      'wifi-control'
+    );
+  }
+
+  function cloudSyncFirebaseToEsp(clearAuth){
+    const hostInput = (document.getElementById('cw-fb-host')?.value || '').trim();
+    const authInput = (document.getElementById('cw-fb-auth')?.value || '').trim();
+    const targetHost = hostInput || getHost();
+    if (!targetHost){ showToast('Enter a Firebase RTDB host first'); return; }
+    if (!clearAuth && !authInput && !confirm('No auth secret entered — sync host "' + targetHost + '" without changing ESP32 auth token?')) return;
+    if (clearAuth && !confirm('Clear the Firebase auth secret on the ESP32?')) return;
+
+    // Also store the secret locally in this PWA so the dashboard stays authenticated!
+    if (!clearAuth && authInput){
+      const appAuthEl = document.getElementById('fb-auth-secret');
+      if (appAuthEl){ appAuthEl.value = authInput; }
+      try { localStorage.setItem(FB_AUTH_LS, authInput); } catch(e) {}
+    }
+
+    const payload = { action: 'setFirebaseConfig', host: targetHost };
+    if (clearAuth) payload.clearAuth = '1';
+    else if (authInput) payload.auth = authInput;
+
+    sendCloudCommand(payload, clearAuth ? 'Clearing ESP32 Firebase auth…' : 'Syncing Firebase config to ESP32…', 'esp-settings');
+    const authBox = document.getElementById('cw-fb-auth');
+    if (authBox) authBox.value = '';
+  }
+
+  function cloudUpdateAdminCreds(){
+    const user = (document.getElementById('cw-adm-user')?.value || '').trim();
+    const pass = document.getElementById('cw-adm-pass')?.value || '';
+    if (!user || user.length > 64){ showToast('Username must be 1–64 chars'); return; }
+    if (pass.length < 8 || pass.length > 64){ showToast('Password must be 8–64 chars'); return; }
+    sendCloudCommand({ action: 'setAdminCredentials', user: user, pass: pass }, 'Updating ESP32 admin login…', 'esp-settings');
+    const pEl = document.getElementById('cw-adm-pass');
+    if (pEl) pEl.value = '';
+  }
+
+  function cloudFlashCustomOta(){
+    const url = (document.getElementById('cw-custom-ota-url')?.value || '').trim();
+    if (!url.startsWith('https://')){ showToast('OTA URL must start with https://'); return; }
+    if (!confirm('Flash custom firmware from:\n' + url + '\n\nProceed?')) return;
+    sendCloudCommand({ action: 'otaUrl', url: url }, 'Flashing custom OTA binary…', 'ota-control');
+  }
+
+  function cloudFormatFs(){
+    if (!confirm('WARNING: Format ESP32 LittleFS? This erases the offline reading queue and saved WiFi file, then reboots.')) return;
+    if (!confirm('Are you sure? The ESP32 will fall back to default WiFi credentials after reboot.')) return;
+    sendCloudCommand({ action: 'formatFs' }, 'Formatting ESP32 LittleFS…', 'esp-settings');
   }
 
   function cloudRemoveWifi(ssid){
@@ -1016,3 +1260,95 @@
     }
   }
 
+
+  // ---------- Live Firebase SSE Stream for /status.json (instant ACK & status push) ----------
+  let statusSse = null;
+  let statusSseHost = '';
+  let statusSseOpen = false;
+  let statusSseReconnectTimer = null;
+
+  function stopStatusSse(){
+    if (statusSseReconnectTimer){ clearTimeout(statusSseReconnectTimer); statusSseReconnectTimer = null; }
+    if (statusSse){
+      try { statusSse.close(); } catch(e) {}
+      statusSse = null;
+    }
+    statusSseOpen = false;
+    statusSseHost = '';
+  }
+
+  function applyStatusSsePatch(path, data){
+    if (path === '/' || !path){
+      if (data && typeof data === 'object' && data.ip){
+        lastFetchedStatus = data;
+        renderStatusUi();
+      }
+      return;
+    }
+    if (!lastFetchedStatus || typeof lastFetchedStatus !== 'object') return;
+    const parts = path.replace(/^\/+/, '').split('/').filter(Boolean);
+    if (!parts.length) return;
+    let cur = lastFetchedStatus;
+    for (let i = 0; i < parts.length - 1; i++){
+      if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+      cur = cur[parts[i]];
+    }
+    cur[parts[parts.length - 1]] = data;
+    renderStatusUi();
+  }
+
+  function ensureStatusSse(){
+    if (typeof EventSource === 'undefined' || document.hidden) return;
+    const host = getHost();
+    if (!host){ stopStatusSse(); return; }
+    if (statusSse && statusSseHost === host && statusSse.readyState !== 2) return;
+    stopStatusSse();
+    statusSseHost = host;
+    try {
+      const url = appendAuthParam('https://' + host + '/status.json');
+      const es = new EventSource(url);
+      statusSse = es;
+      es.onopen = () => { statusSseOpen = true; };
+      es.addEventListener('put', (ev) => {
+        statusSseOpen = true;
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg) applyStatusSsePatch(msg.path, msg.data);
+        } catch(e) {}
+      });
+      es.addEventListener('patch', (ev) => {
+        statusSseOpen = true;
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg && msg.data && typeof msg.data === 'object'){
+            if (msg.path === '/' || !msg.path){
+              if (!lastFetchedStatus) lastFetchedStatus = {};
+              Object.assign(lastFetchedStatus, msg.data);
+              renderStatusUi();
+            } else {
+              applyStatusSsePatch(msg.path, msg.data);
+            }
+          }
+        } catch(e) {}
+      });
+      es.onerror = () => {
+        statusSseOpen = false;
+        try { es.close(); } catch(e) {}
+        if (statusSse === es) statusSse = null;
+        if (!document.hidden && !statusSseReconnectTimer){
+          statusSseReconnectTimer = setTimeout(() => {
+            statusSseReconnectTimer = null;
+            ensureStatusSse();
+          }, 5000);
+        }
+      };
+    } catch(e) {
+      statusSseOpen = false;
+    }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopStatusSse();
+    else ensureStatusSse();
+  });
+  setTimeout(ensureStatusSse, 800);

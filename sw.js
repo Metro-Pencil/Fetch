@@ -1,4 +1,4 @@
-// Room Logger PWA service worker (v3.9.3).
+// Room Logger PWA service worker (v3.9.5).
 //
 // Precaches the app shell, optimized pre-blurred backdrop, and pinned-version
 // CDN libraries (Chart.js, Hammer.js, zoom plugin) at install time so the PWA
@@ -7,7 +7,7 @@
 // It NEVER caches live data (*.firebaseio.com, ESP32 device paths, OTA .bin,
 // or app-version.json).
 
-const SHELL_CACHE = 'room-logger-shell-v26';
+const SHELL_CACHE = 'room-logger-shell-v28';
 const RUNTIME_CACHE = 'room-logger-runtime-v2';
 
 const PRECACHE_ASSETS = [

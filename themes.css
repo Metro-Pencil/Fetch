@@ -1575,6 +1575,47 @@
   [data-theme="atelier"] .cmd-q-step {
     background: #FFFFFF;
   }
+  .cmd-offline-prompt {
+    display: none;
+    margin-top: 9px; padding: 9px 10px; border-radius: 10px;
+    background: rgba(251, 191, 36, 0.10);
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    font-family: var(--mono); font-size: 11px; color: var(--text);
+  }
+  .cmd-offline-prompt.show { display: block; }
+  .cmd-offline-prompt-msg { line-height: 1.4; margin-bottom: 8px; }
+  .cmd-offline-prompt-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cmd-offline-prompt-actions button {
+    flex: 1 1 110px; min-height: 36px !important; padding: 6px 10px !important; font-size: 11px !important;
+  }
+  .cmd-q-item.is-hold { border-color: rgba(251, 191, 36, 0.55); }
+  .cmd-q-payload {
+    display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px;
+  }
+  .cmd-q-tag {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 7px; border-radius: 7px;
+    background: var(--panel); border: 1px solid var(--border);
+    font-family: var(--mono); font-size: 10px; color: var(--text);
+    max-width: 100%; overflow-wrap: anywhere;
+  }
+  .cmd-q-tag b { color: var(--muted); font-weight: 500; }
+  .cmd-q-stpill {
+    display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 999px;
+    font-family: var(--mono); font-size: 9.5px; font-weight: 600;
+    border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+  }
+  .cmd-q-stpill.hold { color: var(--warn); border-color: rgba(251, 191, 36, 0.45); background: rgba(251, 191, 36, 0.12); }
+  .cmd-q-stpill.run  { color: var(--temp); border-color: rgba(245, 166, 107, 0.45); background: rgba(245, 166, 107, 0.12); }
+  .cmd-q-stpill.ok   { color: var(--ok);   border-color: rgba(74, 222, 128, 0.45);  background: rgba(74, 222, 128, 0.12); }
+  .cmd-q-stpill.err  { color: var(--err);  border-color: rgba(248, 113, 113, 0.45); background: rgba(248, 113, 113, 0.12); }
+  [data-theme="kinetic"] .cmd-q-tag { background: rgba(10, 12, 16, 0.55); }
+  [data-theme="atelier"] .cmd-q-tag { background: #FFFFFF; }
+  .wifi-fallback-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+    padding: 10px 12px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--border);
+    margin-bottom: 10px; font-family: var(--sans); font-size: 12px;
+  }
 
   /* Responsive overrides placed AFTER all theme blocks so Kinetic/Atelier stay aligned on mobile */
   @media (max-width: 600px) {

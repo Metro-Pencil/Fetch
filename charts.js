@@ -1406,6 +1406,7 @@
     sessionPeakKey = null; lastNewDataMs = null;
     noMoreHistory = false; currentFetchLimit = PAGE_SIZE;
     userHasInteracted = false; latestReadingEpoch = null;
+    if (typeof stopStatusSse === 'function') stopStatusSse();
     lastFetchedStatus = null; lastKnownDeviceIp = ''; stagedPowerMode = null;
     lastCloudPanelSig = ''; window._lastRenderedLinkIp = '';
     ['cloud-health-list', 'cloud-wifi-list', 'cloud-telemetry-body', 'cloud-storage-body'].forEach(id => {
