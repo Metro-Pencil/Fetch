@@ -87,6 +87,14 @@ jobs:
 
       - name: Publish firmware/latest.bin & firmware/version.json
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Sync with latest remote branch before writing firmware/ so parallel pushes never cause non-fast-forward rejection
+          git fetch origin "${GITHUB_REF_NAME}"
+          git checkout "${GITHUB_REF_NAME}"
+          git reset --hard "origin/${GITHUB_REF_NAME}"
+
           mkdir -p firmware
           cp build/room_logger.ino.bin firmware/latest.bin
 
@@ -111,12 +119,10 @@ jobs:
           }
           EOF
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add firmware/latest.bin firmware/version.json
           if git diff --cached --quiet; then
             echo "No firmware changes to commit."
           else
             git commit -m "OTA firmware build ${SHORT_SHA}"
-            git push
+            git push origin "HEAD:${GITHUB_REF_NAME}" || (git pull --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}")
           fi
