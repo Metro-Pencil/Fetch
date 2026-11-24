@@ -1734,8 +1734,8 @@ SemaphoreHandle_t telemMutex        = NULL;
 SemaphoreHandle_t fsMutex           = NULL;
 // Independent ESP32 firmware version & build counter (single source of truth for build.yml & PWA).
 // Increment FW_BUILD by +1 on EVERY change to room_logger.ino; NEVER bump for dashboard-only changes!
-#define FW_VERSION "3.9.8"
-#define FW_BUILD   3
+#define FW_VERSION "3.9.9"
+#define FW_BUILD   4
 volatile bool ntpSyncedThisBoot     = false;
 bool          battTrackEnabled       = false;
 bool          wifiTrackEnabled       = false;
@@ -2066,6 +2066,7 @@ bool publishStatusToFirebase() {
     Serial.println("Failed to publish status to Firebase (TLS busy)");
     return false;
   }
+  fbSseClose(); // free ~45 KB mbedTLS heap before opening outbound TLS
   int code = -1;
   {
     WiFiClientSecure client;
@@ -2300,6 +2301,7 @@ void executeFirebaseCommand(const String& body, const String& fbHost, const Stri
   HTTPClient fastHttp;
 
   if (!isSlowCmd && (tlsMutex == NULL || xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(6000)) == pdTRUE)) {
+    fbSseClose(); // never hold 2 simultaneous mbedTLS sessions in RAM
     configureSecureClient(fastClient);
     fastClient.setTimeout(8);
     fastHttp.setReuse(true);
@@ -2313,6 +2315,7 @@ void executeFirebaseCommand(const String& body, const String& fbHost, const Stri
     fastKeepAliveActive = true;
   } else {
     if (tlsMutex == NULL || xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(6000)) == pdTRUE) {
+      fbSseClose();
       WiFiClientSecure client;
       configureSecureClient(client);
       client.setTimeout(6);
@@ -2713,33 +2716,40 @@ void serviceFirebaseSse() {
     return;
   }
 
-  // Non-blocking drain of incoming SSE lines
-  int maxBytes = 2048;
-  while (fbSseClient.available() && maxBytes-- > 0) {
-    char c = (char)fbSseClient.read();
-    fbSseLastActivityMs = now;
-    if (c == '\r') continue;
-    if (c == '\n') {
-      String line = fbSseLineBuf;
-      fbSseLineBuf = "";
-      if (line.startsWith("event:")) {
-        fbSseEventName = line.substring(6);
-        fbSseEventName.trim();
-      } else if (line.startsWith("data:")) {
-        if (fbSseEventName == "put" || fbSseEventName == "patch") {
-          String cmdObj = extractSseDataObject(line);
-          if (cmdObj.length() > 4) {
-            executeFirebaseCommand(cmdObj, fbHost, fbAuth);
-            return; // exit loop cleanly after command execution
+  // Non-blocking drain of incoming SSE lines (brief tlsMutex guard prevents race with putReading()'s fbSseClose)
+  String pendingCmdObj = "";
+  if (tlsMutex == NULL || xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(15)) == pdTRUE) {
+    int maxBytes = 2048;
+    while (fbSseConnected && fbSseClient.available() && maxBytes-- > 0) {
+      char c = (char)fbSseClient.read();
+      fbSseLastActivityMs = now;
+      if (c == '\r') continue;
+      if (c == '\n') {
+        String line = fbSseLineBuf;
+        fbSseLineBuf = "";
+        if (line.startsWith("event:")) {
+          fbSseEventName = line.substring(6);
+          fbSseEventName.trim();
+        } else if (line.startsWith("data:")) {
+          if (fbSseEventName == "put" || fbSseEventName == "patch") {
+            String cmdObj = extractSseDataObject(line);
+            if (cmdObj.length() > 4) {
+              pendingCmdObj = cmdObj;
+              break;
+            }
+          } else if (fbSseEventName == "cancel" || fbSseEventName == "auth_revoked") {
+            fbSseClose();
+            break;
           }
-        } else if (fbSseEventName == "cancel" || fbSseEventName == "auth_revoked") {
-          fbSseClose();
-          return;
         }
+      } else if (fbSseLineBuf.length() < 1536) {
+        fbSseLineBuf += c;
       }
-    } else if (fbSseLineBuf.length() < 1536) {
-      fbSseLineBuf += c;
     }
+    if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+  }
+  if (pendingCmdObj.length() > 4) {
+    executeFirebaseCommand(pendingCmdObj, fbHost, fbAuth);
   }
 }
 
@@ -2831,6 +2841,7 @@ void drainFirebaseCmdQueue() {
   for (int processed = 0; processed < 10; processed++) {
     if (otaInProgress || WiFi.status() != WL_CONNECTED) break;
     if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(4000)) != pdTRUE) break;
+    fbSseClose(); // free SSE heap before outbound TLS
     String body = "";
     int code = -1;
     {
@@ -2887,6 +2898,7 @@ int putReading(unsigned long epoch, const String& jsonPayload) {
     Serial.println("Upload skipped: TLS busy");
     return -1;
   }
+  fbSseClose(); // free ~45 KB mbedTLS heap so putReading() never hits SSL OOM
   int code = -1;
   {
     WiFiClientSecure client;
@@ -3601,6 +3613,7 @@ bool performOtaFromUrl(const String& url, String& errOut, bool streamToHttp) {
     otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
     return false;
   }
+  fbSseClose(); // maximize contiguous heap for OTA TLS download
 
   otaInProgress = true;
   otaLedState = true;
@@ -4513,8 +4526,8 @@ void wifiMaintenanceTask(void* param) {
       lastCmdPollMs = now;
       pollAndHandleFirebaseCommand();
     }
-    // Periodically drain /cmdQueue.json (commands queued in Firebase while ESP32 was offline)
-    if (WiFi.status() == WL_CONNECTED && (lastQueueDrainMs == 0 || (now - lastQueueDrainMs >= 20000UL))) {
+    // Periodically drain /cmdQueue.json (also drains immediately on boot & every WiFi reconnect)
+    if (WiFi.status() == WL_CONNECTED && (lastQueueDrainMs == 0 || (now - lastQueueDrainMs >= 60000UL))) {
       lastQueueDrainMs = now;
       drainFirebaseCmdQueue();
     }
