@@ -1,4 +1,4 @@
-  const APP_VERSION = '3.9.5';
+  const APP_VERSION = '3.9.6';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   const VIEW_ORDER = ['dashboard', 'graphs', 'controls', 'system'];
@@ -257,6 +257,9 @@
         if (h.power){
           const pm = String(h.power.mode || 'normal');
           chips.push('<span class="mini-health-chip ' + (pm === 'normal' ? 'ok' : 'warn') + '"><span class="mhd"></span>' + escapeHtml(pm.charAt(0).toUpperCase() + pm.slice(1)) + '</span>');
+        }
+        if (window._espFwOutdated && window._espFwLatestBuild){
+          chips.push('<span class="mini-health-chip warn" onclick="event.stopPropagation(); showView(\'controls\', \'right\')" style="cursor:pointer;"><span class="mhd"></span>FW Update #' + Number(window._espFwLatestBuild) + '</span>');
         }
         strip.innerHTML = chips.join('');
       }

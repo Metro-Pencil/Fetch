@@ -7,7 +7,7 @@
 // It NEVER caches live data (*.firebaseio.com, ESP32 device paths, OTA .bin,
 // or app-version.json).
 
-const SHELL_CACHE = 'room-logger-shell-v28';
+const SHELL_CACHE = 'room-logger-shell-v29';
 const RUNTIME_CACHE = 'room-logger-runtime-v2';
 
 const PRECACHE_ASSETS = [
@@ -15,12 +15,12 @@ const PRECACHE_ASSETS = [
   'index.html',
   'manifest.json',
   'bg-backdrop.jpg',
-  'base.css',
-  'themes.css',
-  'ui.js',
-  'data.js',
-  'cloud.js',
-  'charts.js',
+  'base.css?v=3.9.6',
+  'themes.css?v=3.9.6',
+  'ui.js?v=3.9.6',
+  'data.js?v=3.9.6',
+  'cloud.js?v=3.9.6',
+  'charts.js?v=3.9.6',
   'icon-192.png',
   'icon-512.png',
   'icon-maskable-512.png',
@@ -90,7 +90,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       caches.open(SHELL_CACHE).then(async (cache) => {
         const cached = await cache.match(req, { ignoreSearch: true });
-        const refresh = fetch(req)
+        const refresh = fetch(req, { cache: 'no-cache' })
           .then((res) => {
             if (res && res.ok) {
               return cache.put(req, res.clone()).then(() => res);

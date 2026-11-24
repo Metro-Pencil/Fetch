@@ -1433,25 +1433,89 @@
     if (cloudBtn) cloudBtn.disabled = !latestBinUrl;
   }
 
+  let latestFwInfo = null;
+  let fwUpdateToastShownBuild = null;
+
+  function getEspFirmwareInfo(){
+    const st = lastFetchedStatus;
+    if (!st) return null;
+    const ver = st.fwVersion || (st.storage && st.storage.fwVersion) || '';
+    const bldRaw = (st.fwBuild !== undefined) ? st.fwBuild : (st.storage && st.storage.fwBuild);
+    const bld = Number.isFinite(Number(bldRaw)) && Number(bldRaw) > 0 ? Number(bldRaw) : 0;
+    return { version: String(ver), build: bld };
+  }
+
+  function renderFirmwareSyncState(){
+    const pill = document.getElementById('ota-status-pill');
+    const metaEl = document.getElementById('ota-meta');
+    const esp = getEspFirmwareInfo();
+    const latest = latestFwInfo;
+
+    if (!latest){
+      if (pill){ pill.textContent = 'No build'; pill.className = 'status-pill'; }
+      return;
+    }
+    const latestBuild = Number(latest.build || 0);
+    const latestLabel = (latest.version ? ('v' + latest.version) : '') + (latestBuild ? (' · Build #' + latestBuild) : (' (' + (latest.commit || 'latest') + ')'));
+    const kb = latest.sizeBytes ? (latest.sizeBytes / 1024).toFixed(1) + ' KB' : 'unknown size';
+    const when = latest.builtAt ? formatFull(Date.parse(latest.builtAt)) : 'unknown time';
+
+    let isOutdated = false;
+    let statusLine = '';
+    if (!esp || (!esp.build && !esp.version)){
+      if (pill){ pill.textContent = latestBuild ? ('Latest #' + latestBuild) : 'Cloud Flash'; pill.className = 'status-pill warn'; }
+      statusLine = 'ESP32 firmware version unknown (pre-v3.9.5) — latest available is <b>' + escapeHtml(latestLabel.trim()) + '</b>.';
+      isOutdated = !!latestBuild;
+    } else if (latestBuild > 0 && esp.build > 0){
+      if (esp.build < latestBuild){
+        isOutdated = true;
+        if (pill){ pill.textContent = 'Update #' + esp.build + ' → #' + latestBuild; pill.className = 'status-pill warn'; }
+        statusLine = '<b>Firmware update available:</b> ESP32 is on Build #' + esp.build + ' (v' + escapeHtml(esp.version || '?') + ') → latest is <b>Build #' + latestBuild + '</b>.';
+      } else {
+        if (pill){ pill.textContent = 'Up to date (#' + esp.build + ')'; pill.className = 'status-pill ok'; }
+        statusLine = '<b>ESP32 is up to date</b> on Build #' + esp.build + ' (v' + escapeHtml(esp.version || '?') + ').';
+      }
+    } else if (latest.version && esp.version && esp.version !== latest.version){
+      isOutdated = true;
+      if (pill){ pill.textContent = 'Update ' + esp.version + ' → ' + latest.version; pill.className = 'status-pill warn'; }
+      statusLine = '<b>Firmware update available:</b> ESP32 v' + escapeHtml(esp.version) + ' → v' + escapeHtml(latest.version) + '.';
+    } else {
+      if (pill){ pill.textContent = 'Up to date'; pill.className = 'status-pill ok'; }
+      statusLine = '<b>ESP32 is up to date</b> (' + escapeHtml(latestLabel.trim()) + ').';
+    }
+
+    if (metaEl){
+      metaEl.innerHTML = statusLine + '<br>Published <b>' + escapeHtml(latest.commit || 'unknown') + '</b> · ' + escapeHtml(kb) + ' · built ' + escapeHtml(when);
+    }
+
+    if (isOutdated && latestBuild && fwUpdateToastShownBuild !== latestBuild){
+      fwUpdateToastShownBuild = latestBuild;
+      showToast('ESP32 firmware update available (Build #' + latestBuild + ')');
+    }
+    window._espFwOutdated = isOutdated;
+    window._espFwLatestBuild = latestBuild;
+  }
+
   async function fetchFirmwareInfo(){
     const metaEl = document.getElementById('ota-meta');
     try{
-      const verUrl = new URL('firmware/version.json', window.location.href).href;
+      const verUrl = new URL('firmware/version.json', window.location.href).href + '?_=' + Date.now();
       const res = await fetch(verUrl, { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const info = await res.json();
+      latestFwInfo = info;
       latestBinUrl = new URL(info.file || 'firmware/latest.bin', window.location.href).href;
-      const kb = info.sizeBytes ? (info.sizeBytes / 1024).toFixed(1) + ' KB' : 'unknown size';
-      const when = info.builtAt ? formatFull(Date.parse(info.builtAt)) : 'unknown time';
-      metaEl.innerHTML =
-        'Latest build <b>' + escapeHtml(info.commit || 'unknown') + '</b> · ' +
-        escapeHtml(kb) + ' · built ' + escapeHtml(when);
+      renderFirmwareSyncState();
+      if (lastFetchedStatus && typeof renderMinimalSummaries === 'function') renderMinimalSummaries(lastFetchedStatus);
     } catch(err){
+      latestFwInfo = null;
       latestBinUrl = '';
-      metaEl.textContent = 'No published build found yet at firmware/version.json (' + err.message + '). Push room_logger.ino to trigger build.yml.';
+      if (metaEl) metaEl.textContent = 'No published build found yet at firmware/version.json (' + err.message + '). Push room_logger.ino to trigger build.yml.';
+      renderFirmwareSyncState();
     }
     updateOtaButtons();
   }
+  setTimeout(fetchFirmwareInfo, 2500);
 
   function openEspOta(){
     if (!lastKnownDeviceIp || !latestBinUrl) return;
@@ -1577,14 +1641,16 @@
     const metaEl = document.getElementById('app-ver-meta');
     if (metaEl) metaEl.textContent = 'Clearing app cache and reloading…';
     try{
-      if ('caches' in window){
-        const keys = await caches.keys();
-        await Promise.all(keys.map(k => caches.delete(k)));
-      }
       if ('serviceWorker' in navigator){
         const regs = await navigator.serviceWorker.getRegistrations();
         await Promise.all(regs.map(r => r.unregister()));
       }
+      if ('caches' in window){
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+      // Force browser HTTP disk cache to revalidate the root document before navigating
+      await fetch(window.location.origin + window.location.pathname, { cache: 'reload' }).catch(() => {});
     } catch(e){
       console.warn('Cache clear warning:', e);
     }

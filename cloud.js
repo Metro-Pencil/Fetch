@@ -965,6 +965,7 @@
 
     renderTelemetryCard(status && status.telemetry, status && status.powerMode);
     renderStorageCard(status && status.storage);
+    if (typeof renderFirmwareSyncState === 'function') renderFirmwareSyncState();
     renderMinimalSummaries(status);
 
     if (pendingCmdId && status && String(status.lastCmdId || '') === pendingCmdId){
