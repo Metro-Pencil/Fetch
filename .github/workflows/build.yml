@@ -1,11 +1,11 @@
 # Single-repo setup: place this at .github/workflows/build.yml in your Room Logger app repo
 # alongside index.html, manifest.json, sw.js, room_logger/room_logger.ino, and room_logger/partitions.csv.
 #
-# ONLY ONE GitHub Secret required (Settings -> Secrets and variables -> Actions):
-#   SECRETS_H : Full contents of your secrets.h file (never commit secrets.h to a public repo!)
-#
-# No PAT or second repo needed -- GitHub Actions uses its built-in GITHUB_TOKEN to commit
-# firmware/latest.bin and firmware/version.json straight back into this same repo.
+# SECURITY NOTE:
+#   Any credentials compiled into secrets.h end up in plaintext inside firmware/latest.bin.
+#   Because real WiFi networks (/wifi_networks.txt) and Firebase/admin credentials (NVS) survive
+#   OTA flashes intact, keep SECRETS_H minimal/placeholder for public repos, or host latest.bin
+#   in a private bucket.
 
 name: Build ESP32 firmware
 
@@ -18,12 +18,20 @@ on:
       - '.github/workflows/build.yml'
   workflow_dispatch:
 
+concurrency:
+  group: firmware-build-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ESP32_CORE_VERSION: "3.3.13"
+      DHT_LIB_VERSION: "1.4.7"
+      ADAFRUIT_SENSOR_VERSION: "1.1.15"
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -38,16 +46,16 @@ jobs:
           path: |
             /home/runner/.arduino15
             /home/runner/Arduino/libraries
-          key: esp32-arduino-core-v1-dht
+          key: esp32-core-${{ env.ESP32_CORE_VERSION }}-dht-${{ env.DHT_LIB_VERSION }}-sensor-${{ env.ADAFRUIT_SENSOR_VERSION }}
 
-      - name: Install ESP32 core & DHT libraries (skipped on cache hit)
+      - name: Install pinned ESP32 core & DHT libraries (skipped on cache hit)
         if: steps.arduino-cache.outputs.cache-hit != 'true'
         run: |
           arduino-cli config init --overwrite --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli core update-index
-          arduino-cli core install esp32:esp32
-          arduino-cli lib install "DHT sensor library"
-          arduino-cli lib install "Adafruit Unified Sensor"
+          arduino-cli core install "esp32:esp32@${ESP32_CORE_VERSION}"
+          arduino-cli lib install "DHT sensor library@${DHT_LIB_VERSION}"
+          arduino-cli lib install "Adafruit Unified Sensor@${ADAFRUIT_SENSOR_VERSION}"
 
       - name: Inject secrets.h from GitHub Secret
         env:
@@ -67,6 +75,10 @@ jobs:
             ./room_logger
           ls -lh build/room_logger.ino.bin
 
+      - name: Always clean up secrets.h
+        if: always()
+        run: rm -f ./room_logger/secrets.h
+
       - name: Upload .bin workflow artifact
         uses: actions/upload-artifact@v4
         with:
@@ -79,20 +91,25 @@ jobs:
           cp build/room_logger.ino.bin firmware/latest.bin
 
           BIN_SIZE=$(stat -c%s firmware/latest.bin)
+          BIN_SHA256=$(sha256sum firmware/latest.bin | awk '{print $1}')
           BUILT_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           SHORT_SHA="${GITHUB_SHA::7}"
+          FW_VER=$(grep -m1 '#define FW_VERSION' room_logger/room_logger.ino | sed -E 's/.*"([^"]+)".*/\1/')
+          FW_BLD=$(grep -m1 '#define FW_BUILD' room_logger/room_logger.ino | awk '{print $3}')
+          FW_VER="${FW_VER:-unknown}"
+          FW_BLD="${FW_BLD:-0}"
 
           cat <<EOF > firmware/version.json
           {
+            "version": "${FW_VER}",
+            "build": ${FW_BLD},
             "commit": "${SHORT_SHA}",
             "builtAt": "${BUILT_AT}",
             "sizeBytes": ${BIN_SIZE},
+            "sha256": "${BIN_SHA256}",
             "file": "firmware/latest.bin"
           }
           EOF
-
-          # Remove injected secrets.h before committing so it is never pushed!
-          rm -f ./room_logger/secrets.h
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
