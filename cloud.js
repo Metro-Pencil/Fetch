@@ -97,6 +97,7 @@
         renderDeviceLinks('');
         dashMsg.textContent = 'Device is currently offline.';
       }
+      checkPendingCmdAck(status);
       renderCloudPanelsIfChanged(status);
       updateOtaButtons();
       updateHeroOverview();
@@ -114,6 +115,7 @@
       renderDeviceLinks(status.ip);
       window._lastRenderedLinkIp = status.ip;
     }
+    checkPendingCmdAck(status);
     renderCloudPanelsIfChanged(status);
     updateOtaButtons();
     updateHeroOverview();
@@ -1070,13 +1072,36 @@
     if (typeof renderFirmwareSyncState === 'function') renderFirmwareSyncState();
     renderMinimalSummaries(status);
 
-    if (pendingCmdId && status && String(status.lastCmdId || '') === pendingCmdId){
+  }
+
+  function checkPendingCmdAck(status){
+    if (!pendingCmdId || !status) return;
+    const isOta = activeCmdJob && activeCmdJob.payload && activeCmdJob.payload.action === 'otaUrl';
+    const curBuild = Number(status.fwBuild || (status.storage && status.storage.fwBuild) || 0);
+
+    // If an OTA command rebooted the ESP32 into a newer build before we polled the final ACK,
+    // treat the new build number (or ota.state === 'ok') as full 4/4 completion!
+    if (isOta && activeCmdJob){
+      const startBld = Number(activeCmdJob.startFwBuild || 0);
+      if ((curBuild > 0 && startBld > 0 && curBuild > startBld) ||
+          (curBuild > 0 && startBld === 0 && activeCmdJob.stage === 'received')){
+        const msg = 'OTA flash complete — ESP32 booted into Build #' + curBuild + (status.fwVersion ? (' (v' + status.fwVersion + ')') : '');
+        updateCmdStepper('completed', msg);
+        setCloudCmdStatus('✓ ' + msg, '');
+        finalizeActiveCmdJob('completed', msg);
+        return;
+      }
+    }
+
+    if (String(status.lastCmdId || '') === pendingCmdId){
       const stg = String(status.lastCmdStage || 'completed');
       if (stg === 'received'){
-        const msg = 'ESP32 received command — applying changes now…';
-        if (activeCmdJob){ activeCmdJob.stage = 'received'; activeCmdJob.detail = msg; renderCmdQueueSection(); }
-        updateCmdStepper('received', msg);
-        setCloudCmdStatus('ESP32 received command — applying…', 'warn');
+        const detail = (isOta && status.ota && status.ota.msg)
+          ? ('ESP32: ' + status.ota.msg)
+          : 'ESP32 received command — applying changes now…';
+        if (activeCmdJob){ activeCmdJob.stage = 'received'; activeCmdJob.detail = detail; renderCmdQueueSection(); }
+        updateCmdStepper('received', detail);
+        setCloudCmdStatus(detail, 'warn');
       } else if (stg === 'error'){
         const msg = 'ESP32 reported error: ' + (status.lastCmdResult || 'Failed');
         updateCmdStepper('error', msg);
@@ -1151,6 +1176,9 @@
 
     activeCmdJob = cmdQueue.splice(nextIdx, 1)[0];
     activeCmdJob.startedAt = Date.now();
+    activeCmdJob.startFwBuild = Number(
+      (lastFetchedStatus && (lastFetchedStatus.fwBuild || (lastFetchedStatus.storage && lastFetchedStatus.storage.fwBuild))) || 0
+    );
     activeCmdJob.stage = 'sending';
     activeCmdJob.detail = 'Uploading command to Firebase…';
     persistCmdQueueAndHistory();
@@ -1198,14 +1226,16 @@
       renderCmdQueueSection();
 
       ensureStatusSse();
+      const isOtaJob = activeCmdJob && activeCmdJob.payload && activeCmdJob.payload.action === 'otaUrl';
+      const timeoutSec = isOtaJob ? 120 : 35;
+      const pollMs = statusSseOpen ? 2000 : 800;
+      const maxPolls = Math.ceil((timeoutSec * 1000) / pollMs);
       let polls = 0;
-      const pollMs = statusSseOpen ? 2500 : 800;
-      const maxPolls = statusSseOpen ? 12 : 35;
       cmdPollTimer = setInterval(() => {
         polls++;
         fetchStatus();
         if (polls >= maxPolls){
-          const timeoutMsg = 'Timed out waiting for ESP32 ACK (30s) — ESP32 will apply on next wake/poll window.';
+          const timeoutMsg = 'Timed out waiting for ESP32 ACK (' + timeoutSec + 's) — ESP32 may still finish applying.';
           updateCmdStepper('error', timeoutMsg);
           finalizeActiveCmdJob('timeout', timeoutMsg);
         }
