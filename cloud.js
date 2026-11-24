@@ -169,6 +169,7 @@
   }
 
   function statusPillForStage(stage){
+    if (stage === 'cloud_queued') return '<span class="cmd-q-stpill hold">IN CLOUD · WAITING ESP</span>';
     if (stage === 'hold_offline') return '<span class="cmd-q-stpill hold">HOLD · ESP OFFLINE</span>';
     if (stage === 'queued')       return '<span class="cmd-q-stpill">QUEUED</span>';
     if (stage === 'sending')      return '<span class="cmd-q-stpill run">1/4 SENDING</span>';
@@ -205,6 +206,7 @@
   }
 
   function cmdStepStatesForStage(stage){
+    if (stage === 'cloud_queued') return ['done', 'active', '', ''];
     if (stage === 'hold_offline') return ['', '', '', ''];
     if (stage === 'queued')     return ['', '', '', ''];
     if (stage === 'sending')    return ['active', '', '', ''];
@@ -221,22 +223,22 @@
     const st = cmdStepStatesForStage(job.stage);
     const stepLabels = ['1 Firebase', '2 ESP Got', '3 Applied', '4 Done'];
     const cardCls =
-      job.stage === 'hold_offline' ? ' is-hold' :
+      (job.stage === 'hold_offline' || job.stage === 'cloud_queued') ? ' is-hold' :
       job.stage === 'completed' ? ' is-done' :
       (job.stage === 'error' || job.stage === 'send_error' || job.stage === 'timeout') ? ' is-err' :
       (isLive && job.stage !== 'queued') ? ' is-active' : '';
     const durStr = job.durationMs !== null && job.durationMs !== undefined
       ? ((job.durationMs / 1000).toFixed(1) + 's')
-      : (job.startedAt ? (((Date.now() - job.startedAt) / 1000).toFixed(1) + 's') : (job.stage === 'hold_offline' ? 'On Hold' : 'Queued'));
+      : (job.startedAt ? (((Date.now() - job.startedAt) / 1000).toFixed(1) + 's') : (job.stage === 'cloud_queued' ? 'In Cloud' : (job.stage === 'hold_offline' ? 'On Hold' : 'Queued')));
     const whenStr = job.createdAt ? formatFull(job.createdAt, true) : '';
     const payloadHtml = formatPayloadTagsHtml(job.displayPayload || job.payload);
     let actBtns = '';
     if (job.stage === 'hold_offline'){
       actBtns = '<span style="display:inline-flex;gap:6px;">' +
-        '<button type="button" class="btn-primary cmd-q-btn-sm" data-cmdq-act="push-now" data-cmd-id="' + escapeHtml(job.id) + '">Push Now</button>' +
+        '<button type="button" class="btn-primary cmd-q-btn-sm" data-cmdq-act="cloud-queue" data-cmd-id="' + escapeHtml(job.id) + '">Queue in Cloud</button>' +
         '<button type="button" class="btn-ghost cmd-q-btn-sm" data-cmdq-act="cancel" data-cmd-id="' + escapeHtml(job.id) + '">Cancel</button>' +
       '</span>';
-    } else if (job.stage === 'queued'){
+    } else if (job.stage === 'cloud_queued' || job.stage === 'queued'){
       actBtns = '<button type="button" class="btn-ghost cmd-q-btn-sm" data-cmdq-act="cancel" data-cmd-id="' + escapeHtml(job.id) + '">Cancel</button>';
     } else if (!isLive && !job.hasSensitive){
       actBtns = '<button type="button" class="btn-ghost cmd-q-btn-sm" data-cmdq-act="retry" data-cmd-id="' + escapeHtml(job.id) + '">Retry</button>';
@@ -266,7 +268,7 @@
     const histList = document.getElementById('cmd-history-list');
     const qBadge = document.getElementById('cmd-stepper-qbadge');
 
-    const heldCount = cmdQueue.filter(j => j.stage === 'hold_offline').length;
+    const heldCount = cmdQueue.filter(j => j.stage === 'hold_offline' || j.stage === 'cloud_queued').length;
     const queuedCount = cmdQueue.length - heldCount;
     if (qBadge){
       if (cmdQueue.length > 0){
@@ -312,8 +314,17 @@
     const idx = cmdQueue.findIndex(j => j.id === id);
     if (idx < 0) return;
     const [removed] = cmdQueue.splice(idx, 1);
-    removed.stage = 'error';
-    removed.detail = 'Cancelled before upload';
+    const wasInCloud = (removed.stage === 'cloud_queued');
+    if (wasInCloud){
+      const host = getHost();
+      if (host){
+        fetch('https://' + host + '/cmdQueue/' + encodeURIComponent(removed.id) + '.json' + getFbAuthParam(), {
+          method: 'DELETE', cache: 'no-store'
+        }).catch(() => {});
+      }
+    }
+    removed.stage = 'cancelled';
+    removed.detail = wasInCloud ? 'Cancelled & removed from Firebase Cloud Queue' : 'Cancelled before upload';
     removed.finishedAt = Date.now();
     removed.durationMs = 0;
     cmdHistory.unshift(removed);
@@ -344,14 +355,104 @@
     updateCmdStepper('hold_offline', 'Waiting for ESP32 to reconnect — update is safely saved in your pending queue.');
     const el = document.getElementById('cmd-offline-prompt');
     const msg = document.getElementById('cmd-offline-prompt-msg');
-    if (msg) msg.textContent = 'ESP32 is offline. Hold "' + job.label.replace(/…$/, '') + '" and auto-push when it reconnects?';
+    if (msg) msg.textContent = 'ESP32 is offline. Queue "' + job.label.replace(/…$/, '') + '" in Firebase Cloud so ESP32 auto-applies it on wake (even with this app closed)?';
     if (el) el.classList.add('show');
   }
 
-  function holdOfflineCmdKeep(){
+  async function queueOfflineInCloud(id){
+    const targetId = id || promptOfflineJobId;
+    const job = cmdQueue.find(j => j.id === targetId);
+    if (!job){ hideOfflineHoldPrompt(); return; }
+    const host = getHost();
+    if (!host){ showToast('Set Firebase RTDB host first'); return; }
+
     hideOfflineHoldPrompt();
-    dismissCmdStepper();
-    showToast('Held in pending queue — will auto-push when ESP32 comes online');
+    job.stage = 'sending';
+    job.detail = 'Uploading to Firebase Cloud Queue (/cmdQueue)…';
+    updateCmdStepper('sending', job.detail);
+    renderCmdQueueSection();
+
+    try {
+      const body = Object.assign({ id: job.id }, job.payload);
+      const url = 'https://' + host + '/cmdQueue/' + encodeURIComponent(job.id) + '.json' + getFbAuthParam();
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        cache: 'no-store'
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+
+      job.stage = 'cloud_queued';
+      job.detail = 'Saved in Firebase Cloud Queue — ESP32 will auto-apply when it comes online (you can close this app).';
+      if (job.hasSensitive) job.payload = job.displayPayload; // mask after uploading to cloud
+      persistCmdQueueAndHistory();
+      updateCmdStepper('sent', job.detail);
+      renderCmdQueueSection();
+      showToast('Queued in Cloud — ESP32 will apply automatically on wake');
+    } catch(err){
+      job.stage = 'hold_offline';
+      job.detail = 'Cloud queue upload failed (' + err.message + ') — still held locally.';
+      persistCmdQueueAndHistory();
+      updateCmdStepper('send_error', job.detail);
+      renderCmdQueueSection();
+    }
+  }
+
+  function holdOfflineCmdKeep(){
+    queueOfflineInCloud();
+  }
+
+  // Reconcile cloud_queued jobs when ESP32 ACKs them or drains /cmdQueue in Firebase
+  async function syncCloudQueueStatus(status){
+    const cloudJobs = cmdQueue.filter(j => j.stage === 'cloud_queued');
+    if (!cloudJobs.length) return;
+    if (status && status.lastCmdId){
+      const ackId = String(status.lastCmdId);
+      const idx = cmdQueue.findIndex(j => j.stage === 'cloud_queued' && j.id === ackId);
+      if (idx >= 0){
+        const stg = String(status.lastCmdStage || 'completed');
+        if (stg !== 'received'){
+          const [doneJob] = cmdQueue.splice(idx, 1);
+          doneJob.stage = (stg === 'error') ? 'error' : 'completed';
+          doneJob.detail = (stg === 'error' ? 'ESP32 error: ' : 'Auto-applied by ESP32 on wake: ') + (status.lastCmdResult || 'Done');
+          doneJob.finishedAt = Date.now();
+          doneJob.durationMs = doneJob.createdAt ? Math.max(0, doneJob.finishedAt - doneJob.createdAt) : 0;
+          cmdHistory.unshift(doneJob);
+          if (cmdHistory.length > CMD_HISTORY_MAX) cmdHistory.length = CMD_HISTORY_MAX;
+          persistCmdQueueAndHistory();
+          renderCmdQueueSection();
+          showToast('ESP32 applied queued update: ' + doneJob.label.replace(/…$/, ''));
+        }
+      }
+    }
+    // Also check if any older cloud_queued items were already drained from /cmdQueue.json while PWA was closed
+    const host = getHost();
+    if (!host || !lastDeviceOnline) return;
+    try {
+      const res = await fetch(appendAuthParam('https://' + host + '/cmdQueue.json?shallow=true'), { cache: 'no-store' });
+      if (!res.ok) return;
+      const keysObj = await res.json();
+      const remaining = (keysObj && typeof keysObj === 'object') ? new Set(Object.keys(keysObj)) : new Set();
+      let changed = false;
+      for (let i = cmdQueue.length - 1; i >= 0; i--){
+        const j = cmdQueue[i];
+        if (j.stage === 'cloud_queued' && !remaining.has(j.id)){
+          cmdQueue.splice(i, 1);
+          j.stage = 'completed';
+          j.detail = 'Drained & applied by ESP32 while app was away';
+          j.finishedAt = Date.now();
+          j.durationMs = j.createdAt ? Math.max(0, j.finishedAt - j.createdAt) : 0;
+          cmdHistory.unshift(j);
+          changed = true;
+        }
+      }
+      if (changed){
+        if (cmdHistory.length > CMD_HISTORY_MAX) cmdHistory.length = CMD_HISTORY_MAX;
+        persistCmdQueueAndHistory();
+        renderCmdQueueSection();
+      }
+    } catch(e) {}
   }
 
   function pushOfflineCmdNow(id){
@@ -965,6 +1066,7 @@
 
     renderTelemetryCard(status && status.telemetry, status && status.powerMode);
     renderStorageCard(status && status.storage);
+    if (typeof syncCloudQueueStatus === 'function') syncCloudQueueStatus(status);
     if (typeof renderFirmwareSyncState === 'function') renderFirmwareSyncState();
     renderMinimalSummaries(status);
 

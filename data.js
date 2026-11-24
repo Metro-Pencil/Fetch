@@ -623,6 +623,7 @@
       const cid = qBtn.getAttribute('data-cmd-id') || '';
       if (act === 'cancel') cancelQueuedCmd(cid);
       else if (act === 'push-now') pushOfflineCmdNow(cid);
+      else if (act === 'cloud-queue') queueOfflineInCloud(cid);
       else if (act === 'retry') retryHistoryCmd(cid);
     }
   });
