@@ -128,6 +128,7 @@ bool publishStatusToFirebase();
 bool publishStatusUsingClient(WiFiClientSecure& client, HTTPClient& http, const String& fbHost, const String& fbAuth);
 void fbSseClose();
 void serviceFirebaseSse();
+void drainFirebaseCmdQueue();
 String jsonEscape(const String& s);
 bool isValidSsid(const String& ssid);
 bool checkInternetReachable();
@@ -1731,7 +1732,10 @@ bool checkInternetReachable() {
 Preferences telemPrefs;
 SemaphoreHandle_t telemMutex        = NULL;
 SemaphoreHandle_t fsMutex           = NULL;
-#define FW_VERSION "3.9.5"
+// Independent ESP32 firmware version & build counter (single source of truth for build.yml & PWA).
+// Increment FW_BUILD by +1 on EVERY change to room_logger.ino; NEVER bump for dashboard-only changes!
+#define FW_VERSION "3.9.7"
+#define FW_BUILD   2
 volatile bool ntpSyncedThisBoot     = false;
 bool          battTrackEnabled       = false;
 bool          wifiTrackEnabled       = false;
@@ -1997,7 +2001,7 @@ String buildStorageJson() {
   j += "\"heapFreeKb\":" + String(heapFreeKb) + ",";
   j += "\"heapMinFreeKb\":" + String(heapMinKb) + ",";
   j += "\"heapMaxAllocKb\":" + String(heapMaxAllocKb) + ",";
-  j += "\"fwVersion\":\"" FW_VERSION "\"";
+  j += "\"fwVersion\":\"" FW_VERSION "\",\"fwBuild\":" + String(FW_BUILD);
   j += "}";
   return j;
 }
@@ -2042,7 +2046,7 @@ bool publishStatusToFirebase() {
 
   String payload;
   payload.reserve(1400);
-  payload = "{\"ip\":\"" + ip.toString() +
+  payload = "{\"fwVersion\":\"" FW_VERSION "\",\"fwBuild\":" + String(FW_BUILD) + ",\"ip\":\"" + ip.toString() +
             "\",\"ssid\":\"" + jsonEscape(WiFi.SSID()) +
             "\",\"fsOk\":" + (fsReady ? "true" : "false") +
             ",\"internetOk\":true" +
@@ -2125,7 +2129,7 @@ bool publishStatusUsingClient(WiFiClientSecure& client, HTTPClient& http, const 
 
   String payload;
   payload.reserve(1400);
-  payload = "{\"ip\":\"" + ip.toString() +
+  payload = "{\"fwVersion\":\"" FW_VERSION "\",\"fwBuild\":" + String(FW_BUILD) + ",\"ip\":\"" + ip.toString() +
             "\",\"ssid\":\"" + jsonEscape(WiFi.SSID()) +
             "\",\"fsOk\":" + (fsReady ? "true" : "false") +
             ",\"internetOk\":true" +
@@ -2266,7 +2270,7 @@ void fbSseClose() {
   fbSseLineBuf = "";
 }
 
-void executeFirebaseCommand(const String& body, const String& fbHost, const String& fbAuth) {
+void executeFirebaseCommand(const String& body, const String& fbHost, const String& fbAuth, const String& cmdPath = "/cmd.json") {
   String cmdId  = jsonExtractField(body, "id");
   String action = jsonExtractField(body, "action");
   if (action.length() == 0 || (cmdId.length() > 0 && cmdId == lastProcessedCmdId)) return;
@@ -2280,7 +2284,7 @@ void executeFirebaseCommand(const String& body, const String& fbHost, const Stri
     fbSseClose();
   }
 
-  String url = "https://" + fbHost + "/cmd.json";
+  String url = "https://" + fbHost + cmdPath;
   if (fbAuth.length() > 0) url += "?auth=" + fbAuth;
 
   lastProcessedCmdId = cmdId.length() > 0 ? cmdId : String(millis());
@@ -2774,6 +2778,85 @@ void pollAndHandleFirebaseCommand() {
   if (code != 200 || body.length() < 4 || body == "null") return;
   executeFirebaseCommand(body, fbHost, fbAuth);
 }
+// Parses a single-entry object returned by GET /cmdQueue.json?orderBy="$key"&limitToFirst=1
+// e.g. {"1732450000123_1":{"id":"1732450000123_1","action":"setPowerMode","mode":"low"}}
+static bool extractFirstQueuedEntry(const String& raw, String& outKey, String& outObj) {
+  int kStart = raw.indexOf('"');
+  if (kStart < 0) return false;
+  int kEnd = raw.indexOf('"', kStart + 1);
+  if (kEnd <= kStart + 1) return false;
+  outKey = raw.substring(kStart + 1, kEnd);
+
+  int objStart = raw.indexOf('{', kEnd + 1);
+  if (objStart < 0) return false;
+  int depth = 0;
+  bool inStr = false;
+  for (int i = objStart; i < (int)raw.length(); i++) {
+    char c = raw[i];
+    if (inStr) {
+      if (c == '\\' && i + 1 < (int)raw.length()) { i++; continue; }
+      if (c == '"') inStr = false;
+    } else {
+      if (c == '"') inStr = true;
+      else if (c == '{') depth++;
+      else if (c == '}') {
+        depth--;
+        if (depth == 0) {
+          outObj = raw.substring(objStart, i + 1);
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// Drains persistent cloud-queued commands from /cmdQueue/<id>.json in FIFO order
+// whenever the ESP32 boots, reconnects, or wakes -- even if the user's phone/PWA is closed!
+void drainFirebaseCmdQueue() {
+  if (otaInProgress || WiFi.status() != WL_CONNECTED) return;
+  if (WiFi.localIP() == IPAddress(0, 0, 0, 0)) return;
+
+  String fbHost, fbAuth;
+  if (xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(500)) != pdTRUE) return;
+  fbHost = currentFirebaseHost;
+  fbAuth = currentFirebaseAuth;
+  xSemaphoreGive(settingsMutex);
+  if (fbHost.length() == 0) return;
+
+  String qUrl = "https://" + fbHost + "/cmdQueue.json?orderBy=%22$key%22&limitToFirst=1";
+  if (fbAuth.length() > 0) qUrl += "&auth=" + fbAuth;
+
+  for (int processed = 0; processed < 10; processed++) {
+    if (otaInProgress || WiFi.status() != WL_CONNECTED) break;
+    if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(4000)) != pdTRUE) break;
+    String body = "";
+    int code = -1;
+    {
+      WiFiClientSecure client;
+      configureSecureClient(client);
+      client.setTimeout(6);
+      HTTPClient http;
+      http.setConnectTimeout(5000);
+      http.setTimeout(6000);
+      if (http.begin(client, qUrl)) {
+        code = http.GET();
+        if (code == 200) body = http.getString();
+        http.end();
+      }
+    }
+    if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+
+    body.trim();
+    if (code != 200 || body.length() < 6 || body == "null" || body == "{}") break;
+
+    String qKey, qObj;
+    if (!extractFirstQueuedEntry(body, qKey, qObj) || qKey.length() == 0) break;
+    Serial.println("[CloudQueue] Draining queued command key=" + qKey);
+    executeFirebaseCommand(qObj, fbHost, fbAuth, "/cmdQueue/" + qKey + ".json");
+  }
+}
+
 
 
 
@@ -4410,6 +4493,7 @@ void wifiMaintenanceTask(void* param) {
   int consecutiveNetFailures = 0;
   int consecutiveDisconnectTries = 0;
   unsigned long lastCmdPollMs = 0;
+  unsigned long lastQueueDrainMs = 0;
 
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -4427,6 +4511,11 @@ void wifiMaintenanceTask(void* param) {
     if (!fbSseConnected && WiFi.status() == WL_CONNECTED && (now - lastCmdPollMs >= 15000UL)) {
       lastCmdPollMs = now;
       pollAndHandleFirebaseCommand();
+    }
+    // Periodically drain /cmdQueue.json (commands queued in Firebase while ESP32 was offline)
+    if (WiFi.status() == WL_CONNECTED && (lastQueueDrainMs == 0 || (now - lastQueueDrainMs >= 20000UL))) {
+      lastQueueDrainMs = now;
+      drainFirebaseCmdQueue();
     }
 
     // Handle async status publish / High Power Saving sleep handoff requested from Core 1.
@@ -4647,6 +4736,8 @@ void wifiMaintenanceTask(void* param) {
 
     if (justConnected) {
       lastZombieReconnectMs = now;
+      drainFirebaseCmdQueue();
+      lastQueueDrainMs = now;
       if (publishStatusToFirebase()) {
         consecutiveNetFailures = 0;
       } else {
