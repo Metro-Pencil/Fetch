@@ -1742,8 +1742,8 @@ SemaphoreHandle_t telemMutex        = NULL;
 SemaphoreHandle_t fsMutex           = NULL;
 // Independent ESP32 firmware version & build counter (single source of truth for build.yml & PWA).
 // Increment FW_BUILD by +1 on EVERY change to room_logger.ino; NEVER bump for dashboard-only changes!
-#define FW_VERSION "3.14.0"
-#define FW_BUILD   9
+#define FW_VERSION "3.15.0"
+#define FW_BUILD   10
 volatile bool ntpSyncedThisBoot     = false;
 bool          battTrackEnabled       = false;
 bool          wifiTrackEnabled       = false;
@@ -2926,7 +2926,7 @@ void executeFirebaseCommand(const String& body, const String& fbHost, const Stri
   Serial.println("[CloudCmd] Executing action=" + action + " id=" + lastProcessedCmdId);
 
   // Fast local commands share ONE keep-alive TLS socket for DELETE /cmd.json + PUT /status.json!
-  bool isSlowCmd = (action == "otaUrl");
+  bool isSlowCmd = (action == "otaUrl" || action == "refreshRollup" || action == "recomputeAnalytics" || action == "formatFs" || action == "setFirebaseConfig");
   int delCode = -1;
   bool fastKeepAliveActive = false;
   WiFiClientSecure fastClient;
