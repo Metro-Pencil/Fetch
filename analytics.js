@@ -1273,26 +1273,27 @@
   // Dedicated button: task ESP32 directly to compile & push /analytics.json + /climateRollup.json + /hourly48h.json
   async function triggerEspRollupSync(){
     const btn = document.getElementById('btn-ai-esp-sync');
-    if (typeof enqueueCloudCommand === 'function'){
-      if (btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
-      try {
-        await enqueueCloudCommand('refreshRollup', {}, 'ESP32 Rollup Sync (48h + 7d/30d)');
-        showToast('Queued ESP32 rollup sync — ESP32 will push 48h & weekly/monthly data to Firebase');
-        const waitMs = Math.max(2500, Math.min(9000, ((lastEspPerfStats && lastEspPerfStats.ewmaTotalMs) || 3500) + 1500));
-        setTimeout(async () => {
-          await Promise.all([fetchCloudClimateRollup(), fetchCloudHourly48h(), fetchCloudPerfStats()]);
-          if (document.getElementById('ai-saved-drawer')?.classList.contains('show')) renderSavedRollupDrawer();
-        }, waitMs);
-      } catch(e) {
-        showToast('ESP32 sync command failed: ' + (e.message || e));
-      } finally {
-        if (btn){ btn.disabled = false; updateEspSyncEtaBadge(); }
-      }
-    } else if (typeof sendCloudCommand === 'function'){
-      sendCloudCommand('refreshRollup', {});
-      showToast('Sent refreshRollup command to ESP32');
-    } else {
+    if (typeof sendCloudCommand !== 'function'){
       showToast('Cloud command queue unavailable');
+      return;
+    }
+    const etaInfo = (typeof getProcessEtaInfo === 'function') ? getProcessEtaInfo('refreshRollup') : { ms: 3800, learned: false };
+    if (btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+    try {
+      sendCloudCommand(
+        { action: 'refreshRollup' },
+        'Syncing 48h & weekly/monthly rollups on ESP32 (' + (typeof formatEtaShort === 'function' ? formatEtaShort(etaInfo.ms, etaInfo.learned) : '~3.8s') + ')…',
+        'air-intel'
+      );
+      const waitMs = Math.max(2500, Math.min(12000, Number(etaInfo.ms || 3800) + 1800));
+      setTimeout(async () => {
+        await Promise.all([fetchCloudClimateRollup(), fetchCloudHourly48h(), fetchCloudPerfStats()]);
+        if (document.getElementById('ai-saved-drawer')?.classList.contains('show')) renderSavedRollupDrawer();
+      }, waitMs);
+    } finally {
+      setTimeout(() => {
+        if (btn){ btn.disabled = false; if (typeof refreshAllProcessEtaBadges === 'function') refreshAllProcessEtaBadges(); else updateEspSyncEtaBadge(); }
+      }, 900);
     }
   }
 
@@ -1387,6 +1388,17 @@
           '<tr><td>' + escapeHtml(b.week) + '</td><td>' + escapeHtml(b.from + '→' + b.to) + '</td><td>' +
           b.tAvg + '°C</td><td>' + b.rhAvg + '%</td><td>' + b.comfortPct + '%</td><td>' + b.moldDays + 'd</td></tr>'
         ).join('') + '</tbody></table>';
+    }
+    if (typeof processTimingsMap === 'object' && processTimingsMap){
+      const entries = Object.entries(processTimingsMap).filter(([, v]) => v && v.ewmaMs > 0);
+      if (entries.length){
+        html += '<div class="ota-meta" style="margin:10px 0 4px;"><b>Learned Process Timings (Cloud /processTimings.json)</b></div>' +
+          '<table class="rollup-table"><thead><tr><th>Process</th><th>Predicted ETA</th><th>Last Run</th><th>Runs</th></tr></thead><tbody>' +
+          entries.map(([k, v]) =>
+            '<tr><td>' + escapeHtml(k) + '</td><td>~' + (Number(v.ewmaMs) / 1000).toFixed(1) + 's</td><td>' +
+            (Number(v.lastMs || v.ewmaMs) / 1000).toFixed(1) + 's</td><td>' + Number(v.samples || 1) + '</td></tr>'
+          ).join('') + '</tbody></table>';
+      }
     }
     pane.innerHTML = html;
   }
@@ -1735,6 +1747,7 @@
     }
 
     geminiGenerating = true;
+    const briefStartMs = Date.now();
     const btn = document.getElementById('btn-ai-refresh');
     const bodyEl = document.getElementById('ai-brief-body');
     if (btn){ btn.disabled = true; btn.textContent = 'Writing…'; }
@@ -1847,6 +1860,7 @@
       renderCachedAiBrief(briefObj);
       syncAiBriefToFirebase(briefObj);
       saveBriefToHistory(briefObj);
+      if (typeof recordProcessTiming === 'function') recordProcessTiming('geminiBrief', Date.now() - briefStartMs);
       if (manual) showToast('Daily room brief updated (' + formatGeminiModelLabel(usedModel) + ')');
     } catch(err){
       if (bodyEl){
@@ -1855,7 +1869,7 @@
       if (manual) showToast('Gemini error: ' + err.message);
     } finally {
       geminiGenerating = false;
-      if (btn){ btn.disabled = false; btn.textContent = 'Refresh Brief'; }
+      if (btn){ btn.disabled = false; if (typeof refreshAllProcessEtaBadges === 'function') refreshAllProcessEtaBadges(); else btn.textContent = 'Refresh Brief'; }
     }
   }
 

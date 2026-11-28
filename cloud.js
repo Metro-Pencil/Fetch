@@ -539,6 +539,176 @@
     showToast('Upload history cleared');
   }
 
+  // ---------- Per-Process Verification Profiles & Cloud-Learned ETA (/processTimings.json) ----------
+  const PROC_TIMINGS_LS = 'rl_process_timings_v1';
+  let processTimingsMap = {};
+  try {
+    const savedT = JSON.parse(localStorage.getItem(PROC_TIMINGS_LS) || '{}');
+    if (savedT && typeof savedT === 'object') processTimingsMap = savedT;
+  } catch(e) {}
+
+  const PROCESS_SPECS = {
+    refreshRollup:      { steps: ['Sent', 'ESP Got Order', 'Building Rollups', 'Rollups Ready'],    mode: 'ack_or_work',     defaultMs: 3800,  timeoutSec: 45 },
+    recomputeAnalytics: { steps: ['Sent', 'ESP Got Order', 'Computing 7 Metrics', 'Analytics Ready'], mode: 'ack_or_work',     defaultMs: 3200,  timeoutSec: 40 },
+    otaUrl:             { steps: ['Sent', 'Cloud Sync & DL', 'Flashing OTA', 'New Build Up'],         mode: 'ota_build',       defaultMs: 28000, timeoutSec: 140 },
+    reboot:             { steps: ['Sent', 'ESP Got Order', 'Rebooting', 'Back Online'],               mode: 'reboot',          defaultMs: 9000,  timeoutSec: 45 },
+    formatFs:           { steps: ['Sent', 'ESP Got Order', 'Formatting FS', 'Rebooted Clean'],        mode: 'reboot',          defaultMs: 10000, timeoutSec: 50 },
+    setFirebaseConfig:  { steps: ['Sent', 'ESP Got Order', 'Saving Config', 'Switched Host'],         mode: 'accept_received', defaultMs: 4000,  timeoutSec: 25 },
+    setPowerMode:       { steps: ['Sent', 'ESP Got Order', 'Switching Mode', 'Mode Active'],          mode: 'state',           defaultMs: 2500,  timeoutSec: 30 },
+    addWifi:            { steps: ['Sent', 'ESP Got Order', 'Saving Wi-Fi', 'Saved in NVS'],           mode: 'state',           defaultMs: 2800,  timeoutSec: 30 },
+    removeWifi:         { steps: ['Sent', 'ESP Got Order', 'Removing Wi-Fi', 'Removed'],              mode: 'state',           defaultMs: 2500,  timeoutSec: 30 },
+    setPreferredWifi:   { steps: ['Sent', 'ESP Got Order', 'Setting Preferred', 'Preferred Set'],     mode: 'state',           defaultMs: 2500,  timeoutSec: 30 },
+    setOpenFallback:    { steps: ['Sent', 'ESP Got Order', 'Saving Fallback', 'Updated'],             mode: 'ack',             defaultMs: 2500,  timeoutSec: 30 },
+    setAdminCredentials:{ steps: ['Sent', 'ESP Got Order', 'Updating Login', 'Saved'],                mode: 'ack',             defaultMs: 2500,  timeoutSec: 30 },
+    setBatteryTrack:    { steps: ['Sent', 'ESP Got Order', 'Toggling Tracker', 'State Synced'],       mode: 'state',           defaultMs: 2500,  timeoutSec: 30 },
+    setTelemetry:       { steps: ['Sent', 'ESP Got Order', 'Toggling Tracker', 'State Synced'],       mode: 'state',           defaultMs: 2500,  timeoutSec: 30 },
+    resetBatteryTrack:  { steps: ['Sent', 'ESP Got Order', 'Resetting Run', 'Counters Zeroed'],       mode: 'ack',             defaultMs: 2500,  timeoutSec: 30 },
+    resetTelemetry:     { steps: ['Sent', 'ESP Got Order', 'Resetting Run', 'Counters Zeroed'],       mode: 'ack',             defaultMs: 2500,  timeoutSec: 30 },
+    setStartVoltage:    { steps: ['Sent', 'ESP Got Order', 'Saving Voltage', 'Voltage Saved'],        mode: 'state',           defaultMs: 2500,  timeoutSec: 30 },
+    setWifiTrack:       { steps: ['Sent', 'ESP Got Order', 'Toggling Wi-Fi Log', 'State Synced'],     mode: 'state',           defaultMs: 2500,  timeoutSec: 30 },
+    resetWifiTrack:     { steps: ['Sent', 'ESP Got Order', 'Resetting Wi-Fi', 'Counters Zeroed'],     mode: 'ack',             defaultMs: 2500,  timeoutSec: 30 },
+    refreshStatus:      { steps: ['Sent', 'ESP Got Order', 'Reading Health', 'Live Updated'],         mode: 'fresh_status',    defaultMs: 2200,  timeoutSec: 25 },
+    geminiBrief:        { steps: ['Gather', 'Weather/AQI', 'Gemini Writing', 'Brief Saved'],          mode: 'client',          defaultMs: 3600,  timeoutSec: 30 }
+  };
+
+  function getProcessSpec(action){
+    return PROCESS_SPECS[action] || { steps: ['Sent', 'ESP Got Order', 'Working', 'Verified'], mode: 'ack', defaultMs: 3000, timeoutSec: 35 };
+  }
+
+  function getProcessEtaInfo(action){
+    const spec = getProcessSpec(action);
+    const rec = processTimingsMap && processTimingsMap[action];
+    if (rec && rec.ewmaMs > 0){
+      return { ms: Number(rec.ewmaMs), samples: Number(rec.samples || 1), learned: true, lastMs: Number(rec.lastMs || rec.ewmaMs) };
+    }
+    return { ms: spec.defaultMs, samples: 0, learned: false, lastMs: spec.defaultMs };
+  }
+
+  function formatEtaShort(ms, learned){
+    const s = (Math.max(100, Number(ms || 0)) / 1000).toFixed(1) + 's';
+    return learned ? ('~' + s) : ('~' + s + ' est.');
+  }
+
+  function applyProcessStepperLabels(action){
+    const spec = getProcessSpec(action);
+    for (let i = 0; i < 4; i++){
+      const el = document.getElementById('cstep-' + (i + 1));
+      if (!el) continue;
+      const spans = el.querySelectorAll('span');
+      if (spans.length >= 2) spans[1].textContent = spec.steps[i] || '';
+    }
+  }
+
+  function refreshAllProcessEtaBadges(){
+    const syncBtn = document.getElementById('btn-ai-esp-sync');
+    if (syncBtn && !syncBtn.disabled){
+      const e = getProcessEtaInfo('refreshRollup');
+      syncBtn.textContent = 'Sync on ESP32 (' + formatEtaShort(e.ms, e.learned) + ')';
+    }
+    const briefBtn = document.getElementById('btn-ai-refresh');
+    if (briefBtn && !briefBtn.disabled){
+      const e = getProcessEtaInfo('geminiBrief');
+      briefBtn.textContent = 'Refresh Brief (' + formatEtaShort(e.ms, e.learned) + ')';
+    }
+  }
+
+  async function fetchCloudProcessTimings(){
+    const host = getHost();
+    if (!host) return processTimingsMap;
+    try {
+      const res = await fetch(appendAuthParam('https://' + host + '/processTimings.json'), { cache: 'no-store' });
+      if (!res.ok) return processTimingsMap;
+      const obj = await res.json();
+      if (obj && typeof obj === 'object'){
+        processTimingsMap = Object.assign({}, processTimingsMap, obj);
+        try { localStorage.setItem(PROC_TIMINGS_LS, JSON.stringify(processTimingsMap)); } catch(e) {}
+        refreshAllProcessEtaBadges();
+      }
+    } catch(e) {}
+    return processTimingsMap;
+  }
+
+  async function recordProcessTiming(action, durationMs){
+    if (!action || !Number.isFinite(durationMs) || durationMs < 150 || durationMs > 180000) return;
+    const prev = processTimingsMap[action];
+    const samples = (prev && prev.samples ? Number(prev.samples) : 0) + 1;
+    const ewmaMs = (prev && prev.ewmaMs > 0)
+      ? Math.round(0.35 * durationMs + 0.65 * Number(prev.ewmaMs))
+      : Math.round(durationMs);
+    const entry = { ewmaMs, lastMs: Math.round(durationMs), samples, updatedAt: Date.now() };
+    processTimingsMap[action] = entry;
+    try { localStorage.setItem(PROC_TIMINGS_LS, JSON.stringify(processTimingsMap)); } catch(e) {}
+    refreshAllProcessEtaBadges();
+    const host = getHost();
+    if (!host) return;
+    try {
+      await fetch('https://' + host + '/processTimings/' + encodeURIComponent(action) + '.json' + getFbAuthParam(), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry),
+        cache: 'no-store'
+      });
+    } catch(e) {}
+  }
+
+  function verifyProcessByState(job, status){
+    if (!job || !job.payload || !status) return null;
+    const act = job.payload.action;
+    const spec = getProcessSpec(act);
+    const curBuild = Number(status.fwBuild || (status.storage && status.storage.fwBuild) || 0);
+    const curUp = Number(status.uptimeSec || (status.health && status.health.uptimeSec) || 0);
+
+    if (spec.mode === 'ota_build'){
+      const startBld = Number(job.startFwBuild || 0);
+      if ((curBuild > 0 && startBld > 0 && curBuild > startBld) ||
+          (curBuild > 0 && startBld === 0 && job.stage === 'received')){
+        return 'OTA flash verified — ESP32 booted into Build #' + curBuild + (status.fwVersion ? (' (v' + status.fwVersion + ')') : '');
+      }
+      return null;
+    }
+    if (spec.mode === 'reboot'){
+      if (job.startUptimeSec > 15 && curUp > 0 && curUp < job.startUptimeSec){
+        return (act === 'formatFs' ? 'LittleFS formatted & ESP32 rebooted cleanly' : 'ESP32 rebooted & back online') + ' (uptime ' + curUp + 's)';
+      }
+      return null;
+    }
+    if (spec.mode === 'fresh_status'){
+      if (Number(status.lastSeen || 0) * 1000 >= job.startedAt - 1000){
+        return 'Live ESP32 health refreshed';
+      }
+      return null;
+    }
+    if (spec.mode === 'state'){
+      if (act === 'setPowerMode' && String(status.powerMode || '').toLowerCase() === String(job.payload.mode || '').toLowerCase()){
+        return 'Power mode confirmed active: ' + status.powerMode;
+      }
+      if (act === 'addWifi' && status.wifi && Array.isArray(status.wifi.networks) &&
+          status.wifi.networks.some(n => n && n.ssid === job.payload.ssid)){
+        return 'Wi-Fi "' + job.payload.ssid + '" confirmed saved on ESP32';
+      }
+      if (act === 'removeWifi' && status.wifi && Array.isArray(status.wifi.networks) &&
+          !status.wifi.networks.some(n => n && n.ssid === job.payload.ssid)){
+        return 'Wi-Fi "' + job.payload.ssid + '" confirmed removed from ESP32';
+      }
+      if (act === 'setPreferredWifi' && status.wifi && String(status.wifi.preferred || '') === String(job.payload.ssid || '')){
+        return job.payload.ssid ? ('Preferred Wi-Fi confirmed: ' + job.payload.ssid) : 'Preferred Wi-Fi cleared';
+      }
+      if ((act === 'setBatteryTrack' || act === 'setTelemetry') && status.telemetry &&
+          Boolean(status.telemetry.battEnabled) === (String(job.payload.enabled) === '1' || job.payload.enabled === true)){
+        return 'Battery tracker ' + (status.telemetry.battEnabled ? 'started' : 'paused');
+      }
+      if (act === 'setWifiTrack' && status.telemetry &&
+          Boolean(status.telemetry.wifiEnabled) === (String(job.payload.enabled) === '1' || job.payload.enabled === true)){
+        return 'Wi-Fi tracker ' + (status.telemetry.wifiEnabled ? 'started' : 'paused');
+      }
+      if (act === 'setStartVoltage' && status.telemetry && Number.isFinite(Number(status.telemetry.startVolts)) &&
+          Math.abs(Number(status.telemetry.startVolts) - Number(job.payload.startVolts)) < 0.05){
+        return 'Start voltage confirmed: ' + Number(status.telemetry.startVolts).toFixed(2) + 'V';
+      }
+    }
+    return null;
+  }
+
   function finalizeActiveCmdJob(finalStage, detailMsg){
     if (cmdPollTimer){ clearInterval(cmdPollTimer); cmdPollTimer = null; }
     if (cmdClockTimer){ clearInterval(cmdClockTimer); cmdClockTimer = null; }
@@ -547,6 +717,9 @@
       activeCmdJob.detail = detailMsg || activeCmdJob.detail;
       activeCmdJob.finishedAt = Date.now();
       activeCmdJob.durationMs = activeCmdJob.startedAt ? Math.max(0, activeCmdJob.finishedAt - activeCmdJob.startedAt) : 0;
+      if (finalStage === 'completed' && activeCmdJob.payload && activeCmdJob.payload.action && activeCmdJob.durationMs > 0){
+        recordProcessTiming(activeCmdJob.payload.action, activeCmdJob.durationMs);
+      }
       // Mask any passwords/secrets before storing in offline history
       activeCmdJob.displayPayload = sanitizePayloadForStorage(activeCmdJob.payload);
       if (activeCmdJob.hasSensitive) activeCmdJob.payload = activeCmdJob.displayPayload;
@@ -1077,45 +1250,57 @@
 
   function checkPendingCmdAck(status){
     if (!pendingCmdId || !status) return;
-    const isOta = activeCmdJob && activeCmdJob.payload && activeCmdJob.payload.action === 'otaUrl';
-    const curBuild = Number(status.fwBuild || (status.storage && status.storage.fwBuild) || 0);
+    const act = activeCmdJob && activeCmdJob.payload ? activeCmdJob.payload.action : '';
+    const spec = getProcessSpec(act);
+    const isOta = act === 'otaUrl';
 
-    // If an OTA command rebooted the ESP32 into a newer build before we polled the final ACK,
-    // treat the new build number (or ota.state === 'ok') as full 4/4 completion!
-    if (isOta && activeCmdJob){
-      const startBld = Number(activeCmdJob.startFwBuild || 0);
-      if ((curBuild > 0 && startBld > 0 && curBuild > startBld) ||
-          (curBuild > 0 && startBld === 0 && activeCmdJob.stage === 'received')){
-        const msg = 'OTA flash complete — ESP32 booted into Build #' + curBuild + (status.fwVersion ? (' (v' + status.fwVersion + ')') : '');
-        updateCmdStepper('completed', msg);
-        setCloudCmdStatus('✓ ' + msg, '');
-        finalizeActiveCmdJob('completed', msg);
-        return;
-      }
-    }
-
+    // 1. Direct ESP32 ACK matching this exact command ID
     if (String(status.lastCmdId || '') === pendingCmdId){
       const stg = String(status.lastCmdStage || 'completed');
       if (stg === 'received'){
         const detail = (isOta && status.ota && status.ota.msg)
           ? ('ESP32: ' + status.ota.msg)
-          : 'ESP32 received command — applying changes now…';
-        if (activeCmdJob){ activeCmdJob.stage = 'received'; activeCmdJob.detail = detail; renderCmdQueueSection(); }
+          : ('Order received — ESP32 is ' + (spec.steps[2] || 'working on it').toLowerCase() + '…');
+        if (activeCmdJob){
+          activeCmdJob.stage = 'received';
+          activeCmdJob.orderReceivedAt = activeCmdJob.orderReceivedAt || Date.now();
+          activeCmdJob.detail = detail;
+          renderCmdQueueSection();
+        }
         updateCmdStepper('received', detail);
         setCloudCmdStatus(detail, 'warn');
+        if (spec.mode === 'accept_received'){
+          const okMsg = 'Order received — ESP32 applying new Firebase config & reconnecting';
+          updateCmdStepper('completed', okMsg);
+          setCloudCmdStatus('✓ ' + okMsg, '');
+          finalizeActiveCmdJob('completed', okMsg);
+        }
+        return;
       } else if (stg === 'error'){
         const msg = 'ESP32 reported error: ' + (status.lastCmdResult || 'Failed');
         updateCmdStepper('error', msg);
         setCloudCmdStatus('✕ ESP32: ' + (status.lastCmdResult || 'Failed'), 'err');
         finalizeActiveCmdJob('error', msg);
+        return;
       } else {
-        const msg = 'Confirmed by ESP32: ' + (status.lastCmdResult || 'Done');
+        const msg = 'Confirmed by ESP32: ' + (status.lastCmdResult || spec.steps[3] || 'Done');
         updateCmdStepper('completed', msg);
         setCloudCmdStatus('✓ ' + (status.lastCmdResult || 'Done'), '');
         stagedPowerMode = null;
         document.querySelectorAll('#cloud-power-grid .power-opt.staged').forEach(b => b.classList.remove('staged'));
         finalizeActiveCmdJob('completed', msg);
+        return;
       }
+    }
+
+    // 2. Tailored per-process state verification (catches reboots, OTA builds, power/wifi/tracker changes directly)
+    const stateVerifiedMsg = verifyProcessByState(activeCmdJob, status);
+    if (stateVerifiedMsg){
+      updateCmdStepper('completed', stateVerifiedMsg);
+      setCloudCmdStatus('✓ ' + stateVerifiedMsg, '');
+      stagedPowerMode = null;
+      document.querySelectorAll('#cloud-power-grid .power-opt.staged').forEach(b => b.classList.remove('staged'));
+      finalizeActiveCmdJob('completed', stateVerifiedMsg);
     }
   }
 
@@ -1124,7 +1309,7 @@
       payloadObj && payloadObj.action === 'setPowerMode' ? 'power-mode' :
       payloadObj && /^(addWifi|removeWifi|setPreferredWifi|setOpenFallback)$/.test(payloadObj.action) ? 'wifi-control' :
       payloadObj && payloadObj.action === 'otaUrl' ? 'ota-control' :
-      payloadObj && payloadObj.action === 'recomputeAnalytics' ? 'air-intel' :
+      payloadObj && (payloadObj.action === 'recomputeAnalytics' || payloadObj.action === 'refreshRollup') ? 'air-intel' :
       payloadObj && /^(setFirebaseConfig|setAdminCredentials|formatFs)$/.test(payloadObj.action) ? 'esp-settings' :
       payloadObj && /^(setTelemetry|resetTelemetry|setBatteryTrack|resetBatteryTrack|setStartVoltage|setWifiTrack|resetWifiTrack)$/.test(payloadObj.action) ? 'telemetry-control' :
       'home-actions'
@@ -1181,6 +1366,13 @@
     activeCmdJob.startFwBuild = Number(
       (lastFetchedStatus && (lastFetchedStatus.fwBuild || (lastFetchedStatus.storage && lastFetchedStatus.storage.fwBuild))) || 0
     );
+    activeCmdJob.startUptimeSec = Number(
+      (lastFetchedStatus && (lastFetchedStatus.uptimeSec || (lastFetchedStatus.health && lastFetchedStatus.health.uptimeSec))) || 0
+    );
+    const procAction = (activeCmdJob.payload && activeCmdJob.payload.action) || '';
+    const procSpec = getProcessSpec(procAction);
+    const procEta = getProcessEtaInfo(procAction);
+    applyProcessStepperLabels(procAction);
     activeCmdJob.stage = 'sending';
     activeCmdJob.detail = 'Uploading command to Firebase…';
     persistCmdQueueAndHistory();
@@ -1198,8 +1390,9 @@
 
     cmdClockTimer = setInterval(() => {
       const elapsed = ((Date.now() - pendingCmdStartMs) / 1000).toFixed(1) + 's';
+      const etaTxt = formatEtaShort(procEta.ms, procEta.learned);
       const tEl = document.getElementById('cmd-stepper-time');
-      if (tEl && pendingCmdStartMs) tEl.textContent = elapsed;
+      if (tEl && pendingCmdStartMs) tEl.textContent = elapsed + ' / ' + etaTxt;
       if (activeCmdJob){
         const liveMeta = document.querySelector('[data-cmd-job-id="' + activeCmdJob.id + '"] .cmd-q-meta');
         if (liveMeta) liveMeta.textContent = elapsed + ' · ' + formatFull(activeCmdJob.createdAt, true);
@@ -1228,8 +1421,7 @@
       renderCmdQueueSection();
 
       ensureStatusSse();
-      const isOtaJob = activeCmdJob && activeCmdJob.payload && activeCmdJob.payload.action === 'otaUrl';
-      const timeoutSec = isOtaJob ? 120 : 35;
+      const timeoutSec = procSpec.timeoutSec || 35;
       const pollMs = statusSseOpen ? 2000 : 800;
       const maxPolls = Math.ceil((timeoutSec * 1000) / pollMs);
       let polls = 0;
@@ -1237,9 +1429,16 @@
         polls++;
         fetchStatus();
         if (polls >= maxPolls){
-          const timeoutMsg = 'Timed out waiting for ESP32 ACK (' + timeoutSec + 's) — ESP32 may still finish applying.';
-          updateCmdStepper('error', timeoutMsg);
-          finalizeActiveCmdJob('timeout', timeoutMsg);
+          if (procSpec.mode === 'ack_or_work' && activeCmdJob && activeCmdJob.orderReceivedAt){
+            const okMsg = 'Order received by ESP32 — still finishing background upload to Firebase';
+            updateCmdStepper('completed', okMsg);
+            setCloudCmdStatus('✓ ' + okMsg, '');
+            finalizeActiveCmdJob('completed', okMsg);
+          } else {
+            const timeoutMsg = 'Timed out waiting for "' + (procAction || 'command') + '" (' + timeoutSec + 's) — ESP32 may still finish applying.';
+            updateCmdStepper('error', timeoutMsg);
+            finalizeActiveCmdJob('timeout', timeoutMsg);
+          }
         }
       }, pollMs);
       return true;
@@ -1487,3 +1686,5 @@
     else ensureStatusSse();
   });
   setTimeout(ensureStatusSse, 800);
+
+  setTimeout(() => { fetchCloudProcessTimings(); }, 1800);
