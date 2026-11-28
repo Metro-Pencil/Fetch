@@ -764,10 +764,14 @@
 
   setTimeout(() => { fetchCloudAnalytics(); }, 1600);
 
-  // ---------- Gemini Flash Daily Room Brief (v3.13.1) ----------
+  // ---------- Gemini Flash Daily Room Brief (v3.13.2 — 48h + Live Outdoor Weather/AQI) ----------
   const GEMINI_KEY_LS   = 'rl_gemini_api_key_v1';
   const GEMINI_BRIEF_LS = 'rl_gemini_daily_brief_v1';
   const GEMINI_MODEL_LS = 'rl_gemini_model_v1';
+  const CLIMATE_ROLLUP_LS = 'rl_climate_rollup_v1';
+  const ROLLUP_INTERVAL_MS = 60 * 60 * 1000; // hourly rollup refresh
+  let lastClimateRollup = null;
+  let rollupSyncBusy = false;
   const GEMINI_MODELS   = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
   let geminiGenerating  = false;
 
@@ -788,7 +792,6 @@
   function getCachedGeminiModel(){
     try {
       const m = (localStorage.getItem(GEMINI_MODEL_LS) || '').trim();
-      // Ignore retired 2.5-flash if somehow cached
       if (m && !/^gemini-2\.5-flash/i.test(m)) return m;
     } catch(e) {}
     return '';
@@ -837,20 +840,24 @@
 
   function formatAiBriefHtml(rawText){
     const lines = String(rawText || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    const paras = [];
-    const bullets = [];
+    const blocks = [];
+    let curBullets = [];
+    const flushBullets = () => {
+      if (curBullets.length){
+        blocks.push('<ul>' + curBullets.map(b => '<li>' + escapeHtml(b) + '</li>').join('') + '</ul>');
+        curBullets = [];
+      }
+    };
     for (const line of lines){
       if (/^[-*•]\s+/.test(line)){
-        bullets.push(line.replace(/^[-*•]\s+/, '').replace(/\*\*(.*?)\*\*/g, '$1'));
+        curBullets.push(line.replace(/^[-*•]\s+/, '').replace(/\*\*(.*?)\*\*/g, '$1'));
       } else {
-        paras.push(line.replace(/\*\*(.*?)\*\*/g, '$1'));
+        flushBullets();
+        blocks.push('<p>' + escapeHtml(line.replace(/\*\*(.*?)\*\*/g, '$1')) + '</p>');
       }
     }
-    let html = paras.map(p => '<p>' + escapeHtml(p) + '</p>').join('');
-    if (bullets.length){
-      html += '<ul>' + bullets.map(b => '<li>' + escapeHtml(b) + '</li>').join('') + '</ul>';
-    }
-    return html || '<p>' + escapeHtml(rawText || '') + '</p>';
+    flushBullets();
+    return blocks.join('') || '<p>' + escapeHtml(rawText || '') + '</p>';
   }
 
   function renderCachedAiBrief(briefObj){
@@ -863,15 +870,16 @@
     if (!briefObj || !briefObj.text){
       const hasKey = !!getGeminiApiKey();
       bodyEl.innerHTML = hasKey
-        ? '<div class="ota-meta" style="margin:0;">Tap <b>Refresh Brief</b> to generate today\'s plain-English summary with ' + escapeHtml(formatGeminiModelLabel(activeModel)) + '.</div>'
-        : '<div class="ota-meta" style="margin:0;">Tap <b>API Key</b> to paste your free Google AI Studio key, then tap <b>Refresh Brief</b> for a plain-English daily summary.</div>';
+        ? '<div class="ota-meta" style="margin:0;">Tap <b>Refresh Brief</b> to generate a 48-hour room &amp; live outdoor weather brief with ' + escapeHtml(formatGeminiModelLabel(activeModel)) + '.</div>'
+        : '<div class="ota-meta" style="margin:0;">Tap <b>API Key</b> to paste your free Google AI Studio key, then tap <b>Refresh Brief</b> for a 48-hour room &amp; outdoor summary.</div>';
       if (metaEl) metaEl.textContent = '';
       return;
     }
     bodyEl.innerHTML = formatAiBriefHtml(briefObj.text);
     if (metaEl){
       const when = briefObj.generatedAt ? timeAgo(Math.max(0, Date.now() - Number(briefObj.generatedAt))) : 'just now';
-      metaEl.textContent = 'Generated ' + when + ' (' + (briefObj.day || '') + ') · ' + (briefObj.model || activeModel);
+      const scopeTag = briefObj.outdoorTag ? (' · ' + briefObj.outdoorTag) : '';
+      metaEl.textContent = 'Generated ' + when + ' (' + (briefObj.day || '') + ') · ' + (briefObj.model || activeModel) + scopeTag;
     }
   }
 
@@ -916,6 +924,433 @@
     } catch(e) {}
   }
 
+  // ---------- Hourly Low-Resolution Weekly & Monthly Rollup (/climateRollup.json) ----------
+  function computeClimateRollup(validReadings){
+    const rows = Array.isArray(validReadings) ? validReadings : [];
+    const days = aggregateDaily(rows);
+    if (!days.length) return null;
+    const recent30 = days.slice(-30);
+    const round1 = v => Math.round(v * 10) / 10;
+    const round2 = v => Math.round(v * 100) / 100;
+
+    const enriched = recent30.map(d => ({
+      day: d.day,
+      t: d.tAvg,
+      h: d.hAvg,
+      ah: d.ahAvg,
+      en: calcEnthalpyKjKg(d.tAvg, d.hAvg),
+      fl: calcHeatIndexC(d.tAvg, d.hAvg),
+      ok: isComfortCompliant(d.tAvg, d.hAvg),
+      m60: (d.hAvg > 60 && d.tAvg >= 20 && d.tAvg <= 30),
+      m65: (d.hAvg > 65 && d.tAvg >= 20 && d.tAvg <= 30)
+    }));
+
+    const summarizePeriod = (slice, includeMaxStreak) => {
+      if (!slice.length) return null;
+      const ts = slice.map(x => x.t);
+      const hs = slice.map(x => x.h);
+      const ahs = slice.map(x => x.ah);
+      const tStat = meanStd(ts);
+      const hStat = meanStd(hs);
+      const ahStat = meanStd(ahs);
+      const enAvg = slice.reduce((a, x) => a + x.en, 0) / slice.length;
+      const flAvg = slice.reduce((a, x) => a + x.fl, 0) / slice.length;
+      let okN = 0, m60 = 0, m65 = 0, curSt = 0, maxSt = 0;
+      for (const x of slice){
+        if (x.ok) okN++;
+        if (x.m60){ m60++; curSt++; if (curSt > maxSt) maxSt = curSt; } else { curSt = 0; }
+        if (x.m65) m65++;
+      }
+      const out = {
+        days: slice.length,
+        tMin: round1(Math.min(...ts)), tAvg: round1(tStat.mean), tMax: round1(Math.max(...ts)),
+        rhMin: round1(Math.min(...hs)), rhAvg: round1(hStat.mean), rhMax: round1(Math.max(...hs)),
+        ahAvg: round2(ahStat.mean),
+        enthalpyAvg: round1(enAvg),
+        feelsLikeAvg: round1(flAvg),
+        comfortPct: round1((okN / slice.length) * 100),
+        moldHighDays: m60,
+        moldStrictDays: m65,
+        volT: round2(tStat.std),
+        volH: round2(hStat.std)
+      };
+      if (includeMaxStreak) out.maxMoldStreak = maxSt;
+      return out;
+    };
+
+    const weekly = summarizePeriod(enriched.slice(-7), false);
+    const monthly = summarizePeriod(enriched, true);
+
+    const weeklyBuckets = [];
+    for (let i = 0; i < enriched.length; i += 7){
+      const chunk = enriched.slice(i, i + 7);
+      const okN = chunk.filter(x => x.ok).length;
+      const mN = chunk.filter(x => x.m60).length;
+      weeklyBuckets.push({
+        week: 'W' + (weeklyBuckets.length + 1),
+        from: chunk[0].day.slice(5),
+        to: chunk[chunk.length - 1].day.slice(5),
+        days: chunk.length,
+        tAvg: round1(chunk.reduce((a, x) => a + x.t, 0) / chunk.length),
+        rhAvg: round1(chunk.reduce((a, x) => a + x.h, 0) / chunk.length),
+        ahAvg: round2(chunk.reduce((a, x) => a + x.ah, 0) / chunk.length),
+        comfortPct: Math.round((okN / chunk.length) * 100),
+        moldDays: mN
+      });
+    }
+
+    const daily30d = enriched.map(x => ({
+      d: x.day.slice(5),
+      t: round1(x.t),
+      h: round1(x.h),
+      ah: round1(x.ah),
+      ok: x.ok ? 1 : 0,
+      m: x.m60 ? 1 : 0
+    }));
+
+    return {
+      computedBy: 'pwa',
+      updatedAt: Date.now(),
+      resolution: 'daily-30d+weekly-4w+monthly',
+      weekly,
+      monthly,
+      weeklyBuckets,
+      daily30d
+    };
+  }
+
+  function loadLocalClimateRollup(){
+    try {
+      const obj = JSON.parse(localStorage.getItem(CLIMATE_ROLLUP_LS) || 'null');
+      if (obj && obj.weekly) return obj;
+    } catch(e) {}
+    return null;
+  }
+
+  async function fetchCloudClimateRollup(){
+    const host = getHost();
+    if (!host) return null;
+    try {
+      const res = await fetch(appendAuthParam('https://' + host + '/climateRollup.json'), { cache: 'no-store' });
+      if (!res.ok) return null;
+      const obj = await res.json();
+      if (obj && obj.weekly){
+        lastClimateRollup = obj;
+        try { localStorage.setItem(CLIMATE_ROLLUP_LS, JSON.stringify(obj)); } catch(e) {}
+        return obj;
+      }
+    } catch(e) {}
+    return null;
+  }
+
+  async function syncClimateRollupToFirebase(rollup){
+    const host = getHost();
+    if (!host || !rollup) return false;
+    try {
+      const res = await fetch('https://' + host + '/climateRollup.json' + getFbAuthParam(), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rollup),
+        cache: 'no-store'
+      });
+      return res.ok;
+    } catch(e) { return false; }
+  }
+
+  // Keeps /climateRollup.json fresh on an hourly cadence when ESP32 is offline (or hasn't updated in >1h)
+  async function ensureHourlyClimateRollup(validReadings, force){
+    if (rollupSyncBusy) return lastClimateRollup || loadLocalClimateRollup();
+    rollupSyncBusy = true;
+    try {
+      const cloud = await fetchCloudClimateRollup();
+      const existing = cloud || lastClimateRollup || loadLocalClimateRollup();
+      const ageMs = existing && existing.updatedAt ? (Date.now() - Number(existing.updatedAt)) : Infinity;
+      const espOnline = isEspOnlineForAnalytics();
+      if (!force && existing && espOnline && ageMs < (ROLLUP_INTERVAL_MS + 5 * 60 * 1000)){
+        lastClimateRollup = existing;
+        return existing;
+      }
+      if (!force && existing && ageMs < ROLLUP_INTERVAL_MS){
+        lastClimateRollup = existing;
+        return existing;
+      }
+      const rows = Array.isArray(validReadings) && validReadings.length
+        ? validReadings
+        : (typeof getValidSorted === 'function' ? getValidSorted() : []);
+      const computed = computeClimateRollup(rows);
+      if (computed){
+        lastClimateRollup = computed;
+        try { localStorage.setItem(CLIMATE_ROLLUP_LS, JSON.stringify(computed)); } catch(e) {}
+        syncClimateRollupToFirebase(computed);
+        return computed;
+      }
+      return existing;
+    } finally {
+      rollupSyncBusy = false;
+    }
+  }
+
+  // Build rich 48-hour (2-day) indoor hourly trajectory + day-by-day mold/comfort/season stats
+  function buildTwoDayRoomSnapshot(validReadings, data){
+    const round1 = v => Math.round(v * 10) / 10;
+    const round2 = v => Math.round(v * 100) / 100;
+    const rows = Array.isArray(validReadings) ? validReadings : [];
+    const latestMs = rows.length ? rows[rows.length - 1].epochMs : Date.now();
+    const anchorMs = Math.max(Date.now(), latestMs);
+    const cutoff48h = anchorMs - 48 * 3600 * 1000;
+
+    // Include at least the last 48h (and if sparse, fall back to the latest 2 distinct calendar days present)
+    let windowRows = rows.filter(r => r.epochMs >= cutoff48h);
+    if (windowRows.length < 4 && rows.length){
+      const recentDays = [];
+      for (let i = rows.length - 1; i >= 0; i--){
+        const dk = localDayKeyFromMs(rows[i].epochMs);
+        if (!recentDays.includes(dk)) recentDays.push(dk);
+        if (recentDays.length >= 2) break;
+      }
+      const daySet = new Set(recentDays);
+      windowRows = rows.filter(r => daySet.has(localDayKeyFromMs(r.epochMs)));
+    }
+
+    // Hourly buckets across the 48h window
+    const hourMap = new Map();
+    const dayMap = new Map();
+
+    for (const r of windowRows){
+      const d = new Date(r.epochMs);
+      const pad = n => String(n).padStart(2, '0');
+      const dayKey = localDayKeyFromMs(r.epochMs);
+      const hourKey = dayKey.slice(5) + ' ' + pad(d.getHours()) + ':00';
+      const fl = calcHeatIndexC(r.t, r.h);
+      const ah = calcAbsoluteHumidity(r.t, r.h);
+      const en = calcEnthalpyKjKg(r.t, r.h);
+      const ok = isComfortCompliant(r.t, r.h);
+
+      let hb = hourMap.get(hourKey);
+      if (!hb){
+        hb = { hour: hourKey, n: 0, sT: 0, minT: r.t, maxT: r.t, sH: 0, sFL: 0, sAH: 0, okN: 0, mold60N: 0, mold65N: 0 };
+        hourMap.set(hourKey, hb);
+      }
+      hb.n++; hb.sT += r.t; hb.sH += r.h; hb.sFL += fl; hb.sAH += ah;
+      if (r.t < hb.minT) hb.minT = r.t;
+      if (r.t > hb.maxT) hb.maxT = r.t;
+      if (ok) hb.okN++;
+      if (r.h > 60 && r.t >= 20 && r.t <= 30) hb.mold60N++;
+      if (r.h > 65 && r.t >= 20 && r.t <= 30) hb.mold65N++;
+
+      let db = dayMap.get(dayKey);
+      if (!db){
+        db = {
+          day: dayKey, n: 0, sT: 0, minT: r.t, maxT: r.t, sH: 0, minH: r.h, maxH: r.h,
+          sFL: 0, maxFL: fl, sAH: 0, sEN: 0, okN: 0,
+          tooCool: 0, tooWarm: 0, tooHumid: 0, tooDry: 0,
+          peakRh: -1, peakRhHour: hourKey
+        };
+        dayMap.set(dayKey, db);
+      }
+      db.n++; db.sT += r.t; db.sH += r.h; db.sFL += fl; db.sAH += ah; db.sEN += en;
+      if (r.t < db.minT) db.minT = r.t;
+      if (r.t > db.maxT) db.maxT = r.t;
+      if (r.h < db.minH) db.minH = r.h;
+      if (r.h > db.maxH) db.maxH = r.h;
+      if (fl > db.maxFL) db.maxFL = fl;
+      if (ok) db.okN++;
+      if (r.t < 20) db.tooCool++;
+      if (r.t > 26) db.tooWarm++;
+      if (r.h > 60) db.tooHumid++;
+      if (r.h < 30) db.tooDry++;
+      if (r.h > db.peakRh){ db.peakRh = r.h; db.peakRhHour = hourKey; }
+    }
+
+    const hourly48h = Array.from(hourMap.values()).slice(-48).map(h => ({
+      hr: h.hour,
+      t: round1(h.sT / h.n),
+      tMin: round1(h.minT),
+      tMax: round1(h.maxT),
+      rh: round1(h.sH / h.n),
+      fl: round1(h.sFL / h.n),
+      ah: round1(h.sAH / h.n),
+      okPct: Math.round((h.okN / h.n) * 100),
+      n: h.n
+    }));
+
+    // Count mold-risk hours per day from hourly buckets
+    const moldHoursByDay = {};
+    for (const h of hourMap.values()){
+      const dk = h.hour.slice(0, 5); // MM-DD
+      if (!moldHoursByDay[dk]) moldHoursByDay[dk] = { over60: 0, over65: 0 };
+      if (h.mold60N > 0) moldHoursByDay[dk].over60++;
+      if (h.mold65N > 0) moldHoursByDay[dk].over65++;
+    }
+
+    const dailyBreakdown = Array.from(dayMap.values()).map(d => {
+      const mmdd = d.day.slice(5);
+      const mh = moldHoursByDay[mmdd] || { over60: 0, over65: 0 };
+      return {
+        day: d.day,
+        samples: d.n,
+        tempC: { min: round1(d.minT), avg: round1(d.sT / d.n), max: round1(d.maxT), swing: round1(d.maxT - d.minT) },
+        humidityPct: { min: round1(d.minH), avg: round1(d.sH / d.n), max: round1(d.maxH), peakAt: d.peakRhHour },
+        feelsLikeC: { avg: round1(d.sFL / d.n), max: round1(d.maxFL) },
+        absHumidityGm3: round2(d.sAH / d.n),
+        enthalpyKjKg: round1(d.sEN / d.n),
+        comfortPct: Math.round((d.okN / d.n) * 100),
+        outsideReasonsPct: {
+          tooCool: Math.round((d.tooCool / d.n) * 100),
+          tooWarm: Math.round((d.tooWarm / d.n) * 100),
+          tooHumid: Math.round((d.tooHumid / d.n) * 100),
+          tooDry: Math.round((d.tooDry / d.n) * 100)
+        },
+        moldHours: { rhOver60In20to30C: mh.over60, rhOver65In20to30C: mh.over65 }
+      };
+    });
+
+    const spanHours = windowRows.length >= 2
+      ? round1((windowRows[windowRows.length - 1].epochMs - windowRows[0].epochMs) / 3600000)
+      : 0;
+
+    return {
+      readingCount48h: windowRows.length,
+      coveredHours: spanHours,
+      dailyBreakdown,
+      hourly48h
+    };
+  }
+
+  // Fetch live outdoor weather + 48h curve (Open-Meteo Forecast) and live air quality (Open-Meteo AQI)
+  async function fetchLiveOutdoorComparison(indoorLive){
+    let loc = null;
+    let locSource = '';
+    try {
+      if (typeof manualWeatherLoc === 'function'){
+        const m = manualWeatherLoc();
+        if (m){ loc = m; locSource = 'app-lat-lon'; }
+      }
+      if (!loc && typeof weatherLoc !== 'undefined' && weatherLoc && isFinite(weatherLoc.lat) && isFinite(weatherLoc.lon)){
+        loc = weatherLoc; locSource = 'cached-device-gps';
+      }
+      if (!loc && typeof resolveWeatherLoc === 'function'){
+        const g = await resolveWeatherLoc();
+        if (g && isFinite(g.lat) && isFinite(g.lon)){
+          loc = g; locSource = 'device-gps';
+        }
+      }
+    } catch(e) {}
+
+    if (!loc){
+      return {
+        available: false,
+        reason: 'No lat,lon configured in Graphs -> Weather location and browser geolocation unavailable.'
+      };
+    }
+
+    const lat = Math.round(loc.lat * 10000) / 10000;
+    const lon = Math.round(loc.lon * 10000) / 10000;
+    const wxUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
+      '&current=temperature_2m,relative_humidity_2m,apparent_temperature,dew_point_2m,surface_pressure,wind_speed_10m,precipitation,weather_code' +
+      '&hourly=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation' +
+      '&past_days=2&forecast_days=1&timezone=auto';
+    const aqiUrl = 'https://air-quality-api.open-meteo.com/v1/air-quality?latitude=' + lat + '&longitude=' + lon +
+      '&current=us_aqi,european_aqi,pm2_5,pm10&timezone=auto';
+
+    const [wxRes, aqiRes] = await Promise.allSettled([
+      fetch(wxUrl, { cache: 'no-store' }).then(r => r.ok ? r.json() : null),
+      fetch(aqiUrl, { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
+    ]);
+
+    const wx = wxRes.status === 'fulfilled' ? wxRes.value : null;
+    const aqi = aqiRes.status === 'fulfilled' ? aqiRes.value : null;
+    if (!wx || !wx.current){
+      return { available: false, lat, lon, reason: 'Open-Meteo outdoor weather fetch failed or offline.' };
+    }
+
+    const round1 = v => (v !== null && v !== undefined && isFinite(v)) ? Math.round(v * 10) / 10 : null;
+    const round2 = v => (v !== null && v !== undefined && isFinite(v)) ? Math.round(v * 100) / 100 : null;
+
+    const outT = Number(wx.current.temperature_2m);
+    const outH = Number(wx.current.relative_humidity_2m);
+    const outAH = (isFinite(outT) && isFinite(outH)) ? round2(calcAbsoluteHumidity(outT, outH)) : null;
+    const outEn = (isFinite(outT) && isFinite(outH)) ? round1(calcEnthalpyKjKg(outT, outH)) : null;
+
+    const liveOutdoor = {
+      source: 'Open-Meteo Forecast + Air Quality',
+      observedAt: wx.current.time || null,
+      tempC: round1(outT),
+      humidityPct: round1(outH),
+      feelsLikeC: round1(wx.current.apparent_temperature),
+      dewPointC: round1(wx.current.dew_point_2m),
+      pressureHpa: round1(wx.current.surface_pressure),
+      windKmh: round1(wx.current.wind_speed_10m),
+      precipMm: round1(wx.current.precipitation),
+      absHumidityGm3: outAH,
+      enthalpyKjKg: outEn,
+      airQuality: (aqi && aqi.current) ? {
+        usAqi: round1(aqi.current.us_aqi),
+        euAqi: round1(aqi.current.european_aqi),
+        pm25: round1(aqi.current.pm2_5),
+        pm10: round1(aqi.current.pm10)
+      } : null
+    };
+
+    const indoorVsOutdoorNow = (indoorLive && isFinite(outT) && isFinite(outH)) ? {
+      deltaTempC: round1(indoorLive.temp - outT),
+      deltaRhPct: round1(indoorLive.hum - outH),
+      deltaAhGm3: (outAH !== null) ? round2(indoorLive.absHumidity - outAH) : null,
+      deltaEnthalpyKjKg: (outEn !== null) ? round1(indoorLive.enthalpy - outEn) : null,
+      ventilationMoistureNote: (outAH !== null)
+        ? (outAH < indoorLive.absHumidity - 0.5
+          ? 'Outdoor air carries less moisture (opening windows dries room)'
+          : (outAH > indoorLive.absHumidity + 0.5
+            ? 'Outdoor air carries more moisture (opening windows adds moisture)'
+            : 'Indoor and outdoor moisture levels are nearly equal'))
+        : null
+    } : null;
+
+    // Summarize outdoor last 48h (up to current hour) + 3-hourly sampled curve
+    let outdoor48hSummary = null;
+    const outdoorCurve48h = [];
+    if (wx.hourly && Array.isArray(wx.hourly.time)){
+      const nowIso = wx.current.time || '';
+      const pts = [];
+      for (let i = 0; i < wx.hourly.time.length; i++){
+        const ts = wx.hourly.time[i];
+        if (nowIso && ts > nowIso) break;
+        const t = wx.hourly.temperature_2m ? wx.hourly.temperature_2m[i] : null;
+        const h = wx.hourly.relative_humidity_2m ? wx.hourly.relative_humidity_2m[i] : null;
+        const p = wx.hourly.precipitation ? wx.hourly.precipitation[i] : 0;
+        if (t !== null && h !== null) pts.push({ ts, t, h, p: p || 0 });
+      }
+      const last48 = pts.slice(-48);
+      if (last48.length){
+        const tsArr = last48.map(p => p.t);
+        const hsArr = last48.map(p => p.h);
+        outdoor48hSummary = {
+          hours: last48.length,
+          tempMinC: round1(Math.min(...tsArr)),
+          tempAvgC: round1(tsArr.reduce((a, b) => a + b, 0) / tsArr.length),
+          tempMaxC: round1(Math.max(...tsArr)),
+          humMinPct: round1(Math.min(...hsArr)),
+          humAvgPct: round1(hsArr.reduce((a, b) => a + b, 0) / hsArr.length),
+          humMaxPct: round1(Math.max(...hsArr)),
+          precipTotalMm: round1(last48.reduce((a, b) => a + b.p, 0))
+        };
+        for (let i = 0; i < last48.length; i += 3){
+          const p = last48[i];
+          outdoorCurve48h.push({ hr: p.ts.slice(5).replace('T', ' '), t: round1(p.t), rh: round1(p.h) });
+        }
+      }
+    }
+
+    return {
+      available: true,
+      location: { lat, lon, source: locSource, timezone: wx.timezone || null },
+      liveOutdoor,
+      indoorVsOutdoorNow,
+      outdoor48hSummary,
+      outdoorCurve48h
+    };
+  }
+
   async function discoverGeminiFlashModel(apiKey){
     try {
       const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + encodeURIComponent(apiKey), { cache: 'no-store' });
@@ -927,7 +1362,6 @@
         .map(m => String(m.name).replace(/^models\//, ''))
         .filter(id => /^gemini-/i.test(id) && /flash/i.test(id) && !/(tts|image|audio|embedding|live|2\.5)/i.test(id));
       if (!eligible.length) return null;
-      // Prefer flash-lite, then highest version number
       eligible.sort((a, b) => {
         const aLite = /flash-lite/i.test(a) ? 1 : 0;
         const bLite = /flash-lite/i.test(b) ? 1 : 0;
@@ -945,10 +1379,10 @@
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // Note: omit sampling params (temperature/topP/topK) — unsupported on Gemini 3.x+
+      // Omit sampling params (temperature/topP/topK) — unsupported on Gemini 3.x+
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 400 }
+        generationConfig: { maxOutputTokens: 900 }
       })
     });
     if (!res.ok){
@@ -982,7 +1416,8 @@
       }
       return;
     }
-    const data = lastRenderedAnalytics || computeAllSevenMetrics(typeof getValidSorted === 'function' ? getValidSorted() : []);
+    const validReadings = (typeof getValidSorted === 'function') ? getValidSorted() : [];
+    const data = lastRenderedAnalytics || computeAllSevenMetrics(validReadings);
     if (!data || !data.live){
       if (manual) showToast('Wait for room readings to load first');
       return;
@@ -999,32 +1434,49 @@
     const btn = document.getElementById('btn-ai-refresh');
     const bodyEl = document.getElementById('ai-brief-body');
     if (btn){ btn.disabled = true; btn.textContent = 'Writing…'; }
-    if (bodyEl && manual) bodyEl.innerHTML = '<div class="ota-meta" style="margin:0;">Asking Gemini Flash to summarize your room…</div>';
+    if (bodyEl && manual) bodyEl.innerHTML = '<div class="ota-meta" style="margin:0;">Gathering 48-hour room readings &amp; live outdoor weather/AQI for Gemini…</div>';
 
     const season = classifySeasonShift(data);
-    const compactStats = {
+    const twoDaySnapshot = buildTwoDayRoomSnapshot(validReadings, data);
+    const [outdoor, climateRollup] = await Promise.all([
+      fetchLiveOutdoorComparison(data.live),
+      ensureHourlyClimateRollup(validReadings, false)
+    ]);
+
+    const payload = {
       localTime: new Date().toLocaleString(),
-      tempC: data.live.temp,
-      humidityPct: data.live.hum,
-      feelsLikeC: data.live.heatIndex,
-      absHumidityGm3: data.live.absHumidity,
-      enthalpyKjKg: data.live.enthalpy,
-      comfortNow: data.live.comfortNow,
-      comfortCompliancePct: (data.comfort && data.comfort.readingPct !== undefined && (data.comfort.totalDays || 0) <= 1)
-        ? data.comfort.readingPct
-        : (data.comfort ? data.comfort.pct : null),
-      moldRisk: data.mold,
-      seasonPhase: season.label,
-      rolling7dVs30d: data.rolling,
-      zScoreAnomalies: data.zscore
+      liveIndoor: {
+        tempC: data.live.temp,
+        humidityPct: data.live.hum,
+        feelsLikeC: data.live.heatIndex,
+        absHumidityGm3: data.live.absHumidity,
+        enthalpyKjKg: data.live.enthalpy,
+        comfortNow: data.live.comfortNow
+      },
+      last48HoursIndoor: twoDaySnapshot,
+      weeklyAndMonthlyRollup: climateRollup || null,
+      comfortMoldSeasonAndTrends: {
+        comfortCompliance: data.comfort,
+        moldRiskPattern: data.mold,
+        seasonTrend: {
+          phase: season.label,
+          summary: season.summary,
+          delta7dVs30dTempC: Math.round((season.dT || 0) * 100) / 100,
+          delta7dVs30dAhGm3: Math.round((season.dAH || 0) * 100) / 100
+        },
+        rolling7dVs30dAndVolatility: data.rolling,
+        zScoreAnomalies14d: data.zscore
+      },
+      liveOutdoorComparison: outdoor
     };
 
     const prompt =
-      'You are a helpful home-climate assistant. Based ONLY on these live ESP32 room sensor metrics, write a super clear, friendly daily room brief for a non-technical user:\n' +
-      '1. One short paragraph (2-3 sentences) describing how the room feels right now, the seasonal trend, and whether comfort/stability looks good or unusual.\n' +
-      '2. Exactly 2 or 3 short bullet points starting with "- " giving practical actions to stay comfortable or prevent mold/dampness.\n' +
-      'Keep total length under 110 words. Plain everyday English, no markdown headers or bolding.\n\n' +
-      'Metrics JSON:\n' + JSON.stringify(compactStats);
+      'You are an insightful, friendly home-climate analyst. Based ONLY on the 48-hour indoor ESP32 sensor dataset and live outdoor weather/air-quality data in the JSON below, write a thorough, easy-to-understand daily room briefing for a non-technical homeowner:\n' +
+      '1. Paragraph 1 (5-6 sentences): Give a clear story of how the room felt and behaved over the last 2 days (yesterday vs today, warmest/coolest hours, day-night swing, comfort zone compliance %, why any hours left the comfort zone, and the 2-day mold/humidity pattern).\n' +
+      '2. Paragraph 2 (4-5 sentences): Compare the indoor room directly against the live outdoor weather & 48-hour outdoor conditions for the user\'s coordinates (temperature gap, absolute humidity / moisture difference, outdoor air quality PM2.5/AQI if present), and weave in the low-resolution weekly vs monthly rollup (this week vs the past month and week-by-week drift), seasonal shift (7d vs 30d), 7-day stability/volatility, and 14-day anomaly Z-scores.\n' +
+      '3. Exactly 3 or 4 practical bullet points starting with "- " giving concrete actions for today (explicitly factoring in whether opening windows right now helps or hurts based on indoor vs outdoor moisture and outdoor AQI, plus comfort/mold prevention).\n' +
+      'If liveOutdoorComparison.available is false, briefly note that outdoor comparison is off until lat,lon is entered in the Graphs weather box. Keep total length around 220-320 words. Plain everyday English, no markdown headings, no bold asterisks.\n\n' +
+      'Room & Outdoor JSON:\n' + JSON.stringify(payload);
 
     try {
       const candidates = [];
@@ -1045,10 +1497,7 @@
           break;
         } catch(err){
           lastErr = err;
-          if (err.status === 404){
-            // Model retired or unavailable for this project — try next candidate
-            continue;
-          }
+          if (err.status === 404) continue;
           if (err.status === 401 || err.status === 403){
             throw new Error('Invalid or restricted Gemini API key (HTTP ' + err.status + ')');
           }
@@ -1072,10 +1521,15 @@
       }
 
       setCachedGeminiModel(usedModel);
+      const rollupTag = climateRollup ? (' + ' + (climateRollup.monthly ? climateRollup.monthly.days : 30) + 'd rollup') : '';
+      const outdoorTag = outdoor && outdoor.available
+        ? ('48h' + rollupTag + ' + outdoor (' + outdoor.location.lat.toFixed(2) + ', ' + outdoor.location.lon.toFixed(2) + ')')
+        : ('48h' + rollupTag + ' indoor');
       const briefObj = {
         day: todayKey,
         generatedAt: Date.now(),
         model: usedModel,
+        outdoorTag: outdoorTag,
         text: text
       };
       try { localStorage.setItem(GEMINI_BRIEF_LS, JSON.stringify(briefObj)); } catch(e) {}
@@ -1101,8 +1555,13 @@
       const cloud = await fetchCloudAiBrief();
       const latest = cloud || local;
       const todayKey = localDayKeyFromMs(Date.now());
+      await ensureHourlyClimateRollup(typeof getValidSorted === 'function' ? getValidSorted() : [], false);
       if (getGeminiApiKey() && (!latest || latest.day !== todayKey)){
         generateGeminiDailyBrief(false);
       }
     }, 3200);
+    // Keep /climateRollup.json updated hourly while the PWA is open (if ESP32 is offline or stale)
+    setInterval(() => {
+      ensureHourlyClimateRollup(typeof getValidSorted === 'function' ? getValidSorted() : [], false);
+    }, 15 * 60 * 1000);
   })();

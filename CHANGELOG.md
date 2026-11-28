@@ -1,3 +1,14 @@
+## v3.14.0 (2026-11-28) — Hourly Weekly/Monthly Firebase Rollup (`/climateRollup.json`) + Gemini Context (Firmware `3.12.0` / Build `7` + Dashboard `3.14.0`)
+- **Pre-Compiled Low-Res Weekly & Monthly Rollup (`/climateRollup.json`)**: Stores compact 7-day (`weekly`), 30-day (`monthly`), week-by-week (`weeklyBuckets`), and 30-day daily (`daily30d`) summaries (temp, RH, AH, Enthalpy, Feels Like, comfort %, mold-risk days, volatility) in Firebase so Gemini briefs have instant multi-week context without scanning raw logs.
+- **Hourly Auto-Sync (ESP32 Online / PWA Fallback)**: ESP32 (`FW_VERSION "3.12.0"`, `FW_BUILD 7`) publishes `/climateRollup.json` once every hour while online; when the ESP32 is offline (or hasn't updated in >1h), any open PWA automatically computes and syncs `/climateRollup.json` on an hourly cadence.
+- **Gemini Integration**: Daily Room Brief now receives `weeklyAndMonthlyRollup` alongside the 48-hour high-res indoor curve and live outdoor weather/AQI.
+
+## v3.13.2 (2026-11-28) — 48-Hour Room Context, Live Outdoor Weather/AQI Comparison & Deeper AI Brief (Dashboard-Only)
+- **Full 48-Hour (2-Day) Indoor Context**: Gemini now receives hourly buckets across the last 48 hours plus a day-by-day Yesterday vs Today breakdown (min/avg/max temp & humidity, swings, Feels Like, AH, Enthalpy, comfort compliance %, outside-comfort reasons, and mold-risk hours >60% / >65% RH).
+- **Live Outdoor Weather & Air Quality Comparison**: Automatically uses your `lat,lon` from the Graphs tab (or browser geolocation) to pull live + 48h outdoor weather from Open-Meteo Forecast and live PM2.5/PM10/US-AQI from Open-Meteo Air Quality, computing exact indoor-vs-outdoor temperature, humidity, absolute humidity, and enthalpy deltas.
+- **Richer Multi-Paragraph Briefing**: Expanded prompt and `maxOutputTokens` (400 → 900) so Gemini generates two full paragraphs (48h room story + indoor-vs-outdoor/seasonal/anomaly analysis) plus 3–4 concrete action tips.
+- **Firmware untouched**: `room_logger/room_logger.ino` remains at `FW_VERSION "3.11.0"` / `FW_BUILD 6` (no ESP32 reflash needed).
+
 ## v3.13.1 (2026-11-28) — Gemini 3.5 Flash-Lite Migration & Auto-Fallback (Dashboard-Only)
 - **Fixed HTTP 404 on retired `gemini-2.5-flash`**: Migrated Daily Room Brief to `gemini-3.5-flash-lite` with automatic 404 fallback through `gemini-3.8-flash` and `gemini-3.1-flash-lite`, plus dynamic `/v1beta/models` auto-discovery if all defaults are ever retired.
 - **Fixed Gemini 3.x breaking API change**: Removed unsupported `temperature` sampling parameter from `generationConfig` and filtered out `thought: true` parts when extracting response text.
