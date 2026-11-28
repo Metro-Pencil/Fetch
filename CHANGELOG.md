@@ -1,3 +1,8 @@
+## v3.17.3 (2026-11-28) — Scannable Side-by-Side Comparison Brief Format (Dashboard-Only)
+- **Side-by-Side Comparison Bullets**: Updated the Gemini prompt to organize briefs into 4 crisp sections (**Right Now: Indoor vs Outdoor**, **48-Hour Pattern & Mold Risk**, **Weekly, Monthly & Local Outlook**, **What to Do Today**) with simultaneous indoor-vs-outdoor and 7d-vs-30d comparisons on the same line instead of dense paragraphs.
+- **Rich Formatting**: Upgraded `formatAiBriefHtml()` and `themes.css` to render section headers, spaced comparison bullets, and XSS-safe `**bold**` key figures.
+- **Firmware untouched**: `room_logger/room_logger.ino` remains at `FW_VERSION "3.15.0"` / `FW_BUILD 10`.
+
 ## v3.17.2 (2026-11-28) — Instant 0ms Saved Data Drawer & Tab Switching (Dashboard-Only)
 - **Instant Stale-While-Revalidate Saved Data**: Opening **Saved Data** or switching between **Weekly & Monthly Rollup**, **Past Briefs**, and **Raw JSON** now renders immediately in 0 ms from RAM + `localStorage` (`rl_hourly_48h_cache_v1`, `rl_climate_rollup_v1`, `rl_gemini_brief_history_v1`) with zero blocking spinner.
 - **Zero Network Calls on Tab Switch**: Background Firebase refresh runs silently at most once per 60 seconds and pre-warms on app boot.

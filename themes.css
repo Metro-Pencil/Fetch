@@ -1869,3 +1869,24 @@
     font-family: var(--mono); font-size: 10px; line-height: 1.4; white-space: pre-wrap; word-break: break-word;
     color: var(--muted); margin: 0;
   }
+
+  /* ---------- Scannable Daily Brief Sections & Comparison Points (v3.17.3) ---------- */
+  .ai-sec-head {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--hum); margin: 11px 0 5px; padding-bottom: 3px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  }
+  .ai-sec-head:first-child { margin-top: 2px; }
+  .ai-brief-body ul.ai-brief-list {
+    margin: 0 0 6px; padding-left: 16px; color: var(--text); font-size: 12.5px; line-height: 1.52;
+  }
+  .ai-brief-body ul.ai-brief-list li {
+    margin-bottom: 6px;
+  }
+  .ai-brief-body ul.ai-brief-list li:last-child {
+    margin-bottom: 2px;
+  }
+  .ai-brief-body strong {
+    color: var(--text); font-weight: 700;
+  }

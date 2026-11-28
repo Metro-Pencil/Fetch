@@ -955,25 +955,30 @@
   }
 
   function formatAiBriefHtml(rawText){
+    const inlineMd = s => escapeHtml(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     const lines = String(rawText || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     const blocks = [];
     let curBullets = [];
     const flushBullets = () => {
       if (curBullets.length){
-        blocks.push('<ul>' + curBullets.map(b => '<li>' + escapeHtml(b) + '</li>').join('') + '</ul>');
+        blocks.push('<ul class="ai-brief-list">' + curBullets.map(b => '<li>' + inlineMd(b) + '</li>').join('') + '</ul>');
         curBullets = [];
       }
     };
     for (const line of lines){
-      if (/^[-*•]\s+/.test(line)){
-        curBullets.push(line.replace(/^[-*•]\s+/, '').replace(/\*\*(.*?)\*\*/g, '$1'));
+      if (/^#{1,3}\s+/.test(line)){
+        flushBullets();
+        const heading = line.replace(/^#{1,3}\s+/, '').replace(/\*\*(.*?)\*\*/g, '$1');
+        blocks.push('<div class="ai-sec-head">' + escapeHtml(heading) + '</div>');
+      } else if (/^[-*•]\s+/.test(line)){
+        curBullets.push(line.replace(/^[-*•]\s+/, ''));
       } else {
         flushBullets();
-        blocks.push('<p>' + escapeHtml(line.replace(/\*\*(.*?)\*\*/g, '$1')) + '</p>');
+        blocks.push('<p>' + inlineMd(line) + '</p>');
       }
     }
     flushBullets();
-    return blocks.join('') || '<p>' + escapeHtml(rawText || '') + '</p>';
+    return blocks.join('') || '<p>' + inlineMd(rawText || '') + '</p>';
   }
 
   function renderCachedAiBrief(briefObj){
@@ -1643,7 +1648,7 @@
       // Omit sampling params (temperature/topP/topK) — unsupported on Gemini 3.x+
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 900 }
+        generationConfig: { maxOutputTokens: 950 }
       })
     }, 18000);
     if (!res.ok){
@@ -1758,11 +1763,20 @@
     };
 
     const prompt =
-      'You are an insightful, friendly home-climate analyst. Based on the 48-hour indoor ESP32 sensor dataset, the weekly/monthly rollup, and the user\'s raw locationCoordinates (latitude/longitude) in the JSON below, write a thorough, easy-to-understand daily room briefing:\n' +
-      '1. Paragraph 1 (5-6 sentences): Give a clear story of how the room felt and behaved over the last 2 days (warmest/coolest hours, day-night swing, feels-like temperature, comfort zone compliance %, and the 2-day humidity/mold pattern).\n' +
-      '2. Paragraph 2 (4-5 sentences): Use locationCoordinates (latitude/longitude + current date) to identify the region and compare the indoor room against typical local outdoor weather, seasonal climate, and air-quality/AQI considerations for that location right now (plus cachedOutdoorNow if present), and weave in the weekly vs monthly rollup, seasonal shift (7d vs 30d), stability/volatility, and 14-day Z-score anomalies.\n' +
-      '3. Exactly 3 or 4 practical bullet points starting with "- " giving concrete actions for today (window ventilation advice, comfort, and mold/dampness prevention tailored to the local climate and indoor readings).\n' +
-      'Keep total length around 220-320 words. Plain everyday English, no markdown headings, no bold asterisks.\n\n' +
+      'You are a sharp, friendly home-climate analyst. Based on the 48-hour indoor ESP32 dataset, the weekly/monthly rollup, and the user\'s raw locationCoordinates in the JSON below, write a super readable, scannable daily room brief WITHOUT losing any detail or numbers. Skip greetings like "Hello there!".\n' +
+      'Format STRICTLY using these 4 short sections and concise bullet points (starting with "- ") that compare indoor vs outdoor and short-term vs long-term data SIDE BY SIDE on the same line:\n\n' +
+      '## Right Now: Indoor vs Outdoor\n' +
+      '- **Temperature:** Compare indoor temp & 48h swing directly against outdoor temp for the coordinates/city right now (include the exact °C gap).\n' +
+      '- **Humidity & Feel:** Compare indoor RH vs outdoor RH, feels-like temperature, and comfort compliance % (state clearly why compliance is high or low).\n\n' +
+      '## 48-Hour Pattern & Mold Risk\n' +
+      '- **48h Stability:** Summarize warmest/coolest hours, day-night swing, and any 14-day Z-score anomalies.\n' +
+      '- **Mold & Moisture:** State the mold risk level/streak and what persistent moisture means for corners/glass.\n\n' +
+      '## Weekly, Monthly & Local Outlook\n' +
+      '- **7d vs 30d Trend:** Compare this week\'s avg temp/RH against the 30-day rollup, volatility, and seasonal shift.\n' +
+      '- **Local Air & AQI:** Mention regional climate and air-quality/AQI context for the coordinates.\n\n' +
+      '## What to Do Today\n' +
+      '- Give 3 short, specific action bullets (bold the 2-3 word action lead-in on each bullet, e.g., **Midday Ventilation:** ...).\n\n' +
+      'Use **bold** only for short labels and key numbers. Keep every bullet to 1-2 crisp sentences. Total length ~220-320 words.\n\n' +
       'Room & Location JSON:\n' + JSON.stringify(payload);
 
     try {
