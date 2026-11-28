@@ -1811,3 +1811,61 @@
     }
   }
 
+
+  /* ---------- Saved Rollup & Brief History Drawer (v3.15.0) ---------- */
+  .ai-saved-drawer {
+    display: none; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);
+  }
+  .ai-saved-drawer.show { display: block; }
+  .ai-saved-tabs {
+    display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;
+  }
+  .ai-saved-tab {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+    padding: 5px 10px !important; min-height: 30px !important; border-radius: 999px !important;
+    background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); cursor: pointer;
+  }
+  .ai-saved-tab.active {
+    background: color-mix(in srgb, var(--hum) 18%, transparent);
+    border-color: color-mix(in srgb, var(--hum) 50%, var(--border));
+    color: var(--text);
+  }
+  .ai-saved-pane {
+    font-family: var(--sans); font-size: 12px; color: var(--text);
+  }
+  .rollup-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 10px;
+  }
+  .rollup-box {
+    padding: 9px 10px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--border);
+  }
+  .rollup-box-title {
+    font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--muted); margin-bottom: 4px;
+  }
+  .rollup-box-val {
+    font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--text);
+  }
+  .rollup-box-sub {
+    font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.4;
+  }
+  .rollup-table {
+    width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 10.5px; margin-top: 6px;
+  }
+  .rollup-table th, .rollup-table td {
+    padding: 5px 6px; border-bottom: 1px solid var(--border); text-align: left;
+  }
+  .rollup-table th { color: var(--muted); font-weight: 600; }
+  .brief-hist-item {
+    padding: 9px 10px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--border);
+    margin-bottom: 8px;
+  }
+  .brief-hist-head {
+    font-family: var(--mono); font-size: 10px; color: var(--muted); margin-bottom: 5px;
+  }
+  .brief-raw-pre {
+    max-height: 240px; overflow: auto; padding: 9px; border-radius: 10px;
+    background: rgba(0,0,0,0.35); border: 1px solid var(--border);
+    font-family: var(--mono); font-size: 10px; line-height: 1.4; white-space: pre-wrap; word-break: break-word;
+    color: var(--muted); margin: 0;
+  }

@@ -1,4 +1,4 @@
-  const APP_VERSION = '3.14.0';
+  const APP_VERSION = '3.16.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   const VIEW_ORDER = ['dashboard', 'graphs', 'controls', 'system'];

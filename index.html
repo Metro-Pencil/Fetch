@@ -541,8 +541,8 @@
 <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <link rel="preload" as="image" href="bg-backdrop.jpg">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="base.css?v=3.14.0">
-<link rel="stylesheet" href="themes.css?v=3.14.0">
+<link rel="stylesheet" href="base.css?v=3.16.0">
+<link rel="stylesheet" href="themes.css?v=3.16.0">
 </head>
 <body>
 <!-- Apple Music-style animated halftone backdrop -->
@@ -598,7 +598,7 @@
     <div class="brand">
       <div class="led" id="fb-led"></div>
       <div>
-        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.14.0</span></h1>
+        <h1>Room Logger <span id="version-badge" style="font-size:10px;color:var(--muted-2);background:var(--panel-2);border:1px solid var(--border);border-radius:999px;padding:2px 7px;vertical-align:middle;margin-left:6px;">v3.16.0</span></h1>
         <div class="sub">esp32 · dht22 · firebase rtdb</div>
       </div>
     </div>
@@ -699,6 +699,8 @@
           </span>
           <span class="ai-brief-actions">
             <button type="button" class="btn-ghost" id="btn-ai-refresh" onclick="generateGeminiDailyBrief(true)">Refresh Brief</button>
+            <button type="button" class="btn-ghost" id="btn-ai-esp-sync" onclick="triggerEspRollupSync()" title="Ask ESP32 to compute &amp; push 48h + weekly/monthly rollup to Firebase">Sync on ESP32</button>
+            <button type="button" class="btn-ghost" id="btn-ai-saved" onclick="toggleSavedRollupDrawer()">Saved Data</button>
             <button type="button" class="btn-ghost" onclick="toggleGeminiKeyDrawer()">API Key</button>
           </span>
         </div>
@@ -706,6 +708,14 @@
           <div class="ota-meta" style="margin:0;">Tap <b>API Key</b> to paste your free Google AI Studio key, then tap <b>Refresh Brief</b> for a plain-English daily summary.</div>
         </div>
         <div class="ai-brief-meta" id="ai-brief-meta"></div>
+        <div class="ai-saved-drawer" id="ai-saved-drawer">
+          <div class="ai-saved-tabs">
+            <button type="button" class="ai-saved-tab active" data-tab="rollup" onclick="switchSavedDrawerTab('rollup')">Weekly &amp; Monthly Rollup</button>
+            <button type="button" class="ai-saved-tab" data-tab="history" onclick="switchSavedDrawerTab('history')">Past Briefs</button>
+            <button type="button" class="ai-saved-tab" data-tab="json" onclick="switchSavedDrawerTab('json')">Raw JSON</button>
+          </div>
+          <div class="ai-saved-pane" id="ai-saved-pane">Loading saved Firebase data…</div>
+        </div>
         <div class="ai-key-drawer" id="ai-key-drawer">
           <div class="ota-meta" style="margin:0;">Get a free key at <code>aistudio.google.com/apikey</code>. Saved <b>only</b> in this device's localStorage (never sent to Firebase or GitHub).</div>
           <div class="ai-key-row">
@@ -1172,11 +1182,11 @@
           <div class="card-head-toggle" style="margin-bottom:4px;">
             <h2>App Theme &amp; Updates</h2>
             <div class="card-head-meta">
-              <span class="minimal-pill-hint">v3.14.0</span>
+              <span class="minimal-pill-hint">v3.16.0</span>
               <span class="expand-chevron" aria-hidden="true">&#9662;</span>
             </div>
           </div>
-          <div class="ota-meta" id="app-ver-meta">Running <b>v3.14.0</b> · checking GitHub for updates…</div>
+          <div class="ota-meta" id="app-ver-meta">Running <b>v3.16.0</b> · checking GitHub for updates…</div>
           <div class="card-detail-drawer">
             <div class="card-detail-content">
               <div class="card-detail-inner-pad">
@@ -1341,10 +1351,10 @@
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.2.0/chartjs-plugin-zoom.min.js"></script>
-<script defer src="ui.js?v=3.14.0"></script>
-<script defer src="data.js?v=3.14.0"></script>
-<script defer src="cloud.js?v=3.14.0"></script>
-<script defer src="charts.js?v=3.14.0"></script>
-<script defer src="analytics.js?v=3.14.0"></script>
+<script defer src="ui.js?v=3.16.0"></script>
+<script defer src="data.js?v=3.16.0"></script>
+<script defer src="cloud.js?v=3.16.0"></script>
+<script defer src="charts.js?v=3.16.0"></script>
+<script defer src="analytics.js?v=3.16.0"></script>
 </body>
 </html>

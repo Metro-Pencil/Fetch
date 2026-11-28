@@ -62,6 +62,94 @@
     return { mean, std: Math.sqrt(sq / arr.length) };
   }
 
+  function meanStd(arr){ return meanAndStd(arr); }
+  function isComfortCompliant(t, rh){ return t >= 20.0 && t <= 26.0 && rh >= 30.0 && rh <= 60.0; }
+
+  // Incremental daily cache: completed past calendar days (day < today) are frozen in localStorage
+  // keyed by sample count so already-computed historical days are never redundantly re-averaged.
+  const FROZEN_DAILY_LS = 'rl_frozen_daily_cache_v1';
+  let frozenDailyCache = null;
+
+  function loadFrozenDailyCache(){
+    if (frozenDailyCache) return frozenDailyCache;
+    try {
+      const obj = JSON.parse(localStorage.getItem(FROZEN_DAILY_LS) || '{}');
+      frozenDailyCache = (obj && typeof obj === 'object') ? obj : {};
+    } catch(e) { frozenDailyCache = {}; }
+    return frozenDailyCache;
+  }
+
+  function saveFrozenDailyCache(cache){
+    const keys = Object.keys(cache).sort();
+    if (keys.length > 90){
+      for (let i = 0; i < keys.length - 90; i++) delete cache[keys[i]];
+    }
+    try { localStorage.setItem(FROZEN_DAILY_LS, JSON.stringify(cache)); } catch(e) {}
+  }
+
+  function aggregateDaily(validReadings){
+    const rows = Array.isArray(validReadings) ? validReadings : [];
+    const todayKey = localDayKeyFromMs(Date.now());
+    const cache = loadFrozenDailyCache();
+    const countsByDay = new Map();
+    for (const r of rows){
+      const tv = (r && r.temp !== undefined) ? r.temp : (r ? r.t : NaN);
+      const hv = (r && r.hum !== undefined) ? r.hum : (r ? r.h : NaN);
+      if (!r || !Number.isFinite(tv) || !Number.isFinite(hv) || !r.epochMs) continue;
+      const day = localDayKeyFromMs(r.epochMs);
+      countsByDay.set(day, (countsByDay.get(day) || 0) + 1);
+    }
+
+    const skipDays = new Set();
+    for (const [day, cnt] of countsByDay.entries()){
+      if (day < todayKey && cache[day] && cache[day].n === cnt){
+        skipDays.add(day);
+      }
+    }
+
+    const byDay = new Map();
+    for (const r of rows){
+      const tv = (r && r.temp !== undefined) ? r.temp : (r ? r.t : NaN);
+      const hv = (r && r.hum !== undefined) ? r.hum : (r ? r.h : NaN);
+      if (!r || !Number.isFinite(tv) || !Number.isFinite(hv) || !r.epochMs) continue;
+      const day = localDayKeyFromMs(r.epochMs);
+      if (skipDays.has(day)) continue;
+      let b = byDay.get(day);
+      if (!b){ b = { day, tSum: 0, hSum: 0, ahSum: 0, n: 0, okN: 0, minT: tv, maxT: tv, minH: hv, maxH: hv }; byDay.set(day, b); }
+      b.tSum += tv; b.hSum += hv; b.ahSum += calcAbsoluteHumidity(tv, hv); b.n++;
+      if (isComfortCompliant(tv, hv)) b.okN++;
+      if (tv < b.minT) b.minT = tv; if (tv > b.maxT) b.maxT = tv;
+      if (hv < b.minH) b.minH = hv; if (hv > b.maxH) b.maxH = hv;
+    }
+
+    let cacheDirty = false;
+    const result = [];
+    const allDays = new Set([...skipDays, ...byDay.keys()]);
+    for (const day of Array.from(allDays).sort((a, b) => a.localeCompare(b))){
+      if (skipDays.has(day)){
+        result.push(cache[day]);
+      } else {
+        const b = byDay.get(day);
+        const row = {
+          day: b.day,
+          tAvg: b.tSum / b.n,
+          hAvg: b.hSum / b.n,
+          ahAvg: b.ahSum / b.n,
+          minT: b.minT, maxT: b.maxT, minH: b.minH, maxH: b.maxH,
+          n: b.n,
+          okN: b.okN
+        };
+        result.push(row);
+        if (day < todayKey){
+          cache[day] = row;
+          cacheDirty = true;
+        }
+      }
+    }
+    if (cacheDirty) saveFrozenDailyCache(cache);
+    return result;
+  }
+
   // Seasonal Shift Classifier (combines 7d vs 30d trend + current month + live temp/moisture)
   function classifySeasonShift(data){
     const lv = (data && data.live) || {};
@@ -772,6 +860,11 @@
   const ROLLUP_INTERVAL_MS = 60 * 60 * 1000; // hourly rollup refresh
   let lastClimateRollup = null;
   let rollupSyncBusy = false;
+  const BRIEF_HISTORY_LS = 'rl_gemini_brief_history_v1';
+  let lastHourly48hCloud = null;
+  let activeSavedTab = 'rollup';
+  const PERF_STATS_LS = 'rl_esp_perf_stats_v1';
+  let lastEspPerfStats = null;
   const GEMINI_MODELS   = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
   let geminiGenerating  = false;
 
@@ -1090,6 +1183,214 @@
     }
   }
 
+  async function fetchCloudHourly48h(){
+    const host = getHost();
+    if (!host) return null;
+    try {
+      const res = await fetch(appendAuthParam('https://' + host + '/hourly48h.json'), { cache: 'no-store' });
+      if (!res.ok) return null;
+      const obj = await res.json();
+      if (obj && Array.isArray(obj.hourly48h)){
+        lastHourly48hCloud = obj;
+        return obj;
+      }
+    } catch(e) {}
+    return null;
+  }
+
+  function loadBriefHistoryLocal(){
+    try {
+      const arr = JSON.parse(localStorage.getItem(BRIEF_HISTORY_LS) || '[]');
+      return Array.isArray(arr) ? arr : [];
+    } catch(e) { return []; }
+  }
+
+  async function saveBriefToHistory(briefObj){
+    if (!briefObj || !briefObj.text) return;
+    let list = loadBriefHistoryLocal().filter(x => x && x.generatedAt !== briefObj.generatedAt);
+    list.unshift(briefObj);
+    list = list.slice(0, 14);
+    try { localStorage.setItem(BRIEF_HISTORY_LS, JSON.stringify(list)); } catch(e) {}
+    const host = getHost();
+    if (!host) return;
+    try {
+      await fetch('https://' + host + '/dailyBriefHistory.json' + getFbAuthParam(), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(list),
+        cache: 'no-store'
+      });
+    } catch(e) {}
+  }
+
+  async function fetchBriefHistoryCloud(){
+    const host = getHost();
+    if (!host) return loadBriefHistoryLocal();
+    try {
+      const res = await fetch(appendAuthParam('https://' + host + '/dailyBriefHistory.json'), { cache: 'no-store' });
+      if (!res.ok) return loadBriefHistoryLocal();
+      const arr = await res.json();
+      if (Array.isArray(arr) && arr.length){
+        try { localStorage.setItem(BRIEF_HISTORY_LS, JSON.stringify(arr.slice(0, 14))); } catch(e) {}
+        return arr.slice(0, 14);
+      }
+    } catch(e) {}
+    return loadBriefHistoryLocal();
+  }
+
+  function loadLocalPerfStats(){
+    try { return JSON.parse(localStorage.getItem(PERF_STATS_LS) || 'null'); } catch(e) { return null; }
+  }
+
+  function updateEspSyncEtaBadge(stats){
+    const btn = document.getElementById('btn-ai-esp-sync');
+    if (!btn || btn.disabled) return;
+    const s = stats || lastEspPerfStats || loadLocalPerfStats();
+    const etaMs = (s && s.ewmaTotalMs > 0) ? Number(s.ewmaTotalMs) : 3500;
+    const etaStr = (etaMs / 1000).toFixed(1) + 's';
+    const suffix = (s && s.samples > 0) ? (' (~' + etaStr + ')') : (' (~' + etaStr + ' est.)');
+    btn.textContent = 'Sync on ESP32' + suffix;
+  }
+
+  async function fetchCloudPerfStats(){
+    const host = getHost();
+    if (!host) return loadLocalPerfStats();
+    try {
+      const res = await fetch(appendAuthParam('https://' + host + '/perfStats.json'), { cache: 'no-store' });
+      if (!res.ok) return loadLocalPerfStats();
+      const obj = await res.json();
+      if (obj && (obj.ewmaTotalMs || obj.samples)){
+        lastEspPerfStats = obj;
+        try { localStorage.setItem(PERF_STATS_LS, JSON.stringify(obj)); } catch(e) {}
+        updateEspSyncEtaBadge(obj);
+        return obj;
+      }
+    } catch(e) {}
+    updateEspSyncEtaBadge(loadLocalPerfStats());
+    return loadLocalPerfStats();
+  }
+
+  // Dedicated button: task ESP32 directly to compile & push /analytics.json + /climateRollup.json + /hourly48h.json
+  async function triggerEspRollupSync(){
+    const btn = document.getElementById('btn-ai-esp-sync');
+    if (typeof enqueueCloudCommand === 'function'){
+      if (btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+      try {
+        await enqueueCloudCommand('refreshRollup', {}, 'ESP32 Rollup Sync (48h + 7d/30d)');
+        showToast('Queued ESP32 rollup sync — ESP32 will push 48h & weekly/monthly data to Firebase');
+        const waitMs = Math.max(2500, Math.min(9000, ((lastEspPerfStats && lastEspPerfStats.ewmaTotalMs) || 3500) + 1500));
+        setTimeout(async () => {
+          await Promise.all([fetchCloudClimateRollup(), fetchCloudHourly48h(), fetchCloudPerfStats()]);
+          if (document.getElementById('ai-saved-drawer')?.classList.contains('show')) renderSavedRollupDrawer();
+        }, waitMs);
+      } catch(e) {
+        showToast('ESP32 sync command failed: ' + (e.message || e));
+      } finally {
+        if (btn){ btn.disabled = false; updateEspSyncEtaBadge(); }
+      }
+    } else if (typeof sendCloudCommand === 'function'){
+      sendCloudCommand('refreshRollup', {});
+      showToast('Sent refreshRollup command to ESP32');
+    } else {
+      showToast('Cloud command queue unavailable');
+    }
+  }
+
+  function toggleSavedRollupDrawer(forceShow){
+    const dr = document.getElementById('ai-saved-drawer');
+    if (!dr) return;
+    const show = (forceShow !== undefined) ? !!forceShow : !dr.classList.contains('show');
+    dr.classList.toggle('show', show);
+    if (show) renderSavedRollupDrawer();
+  }
+
+  function switchSavedDrawerTab(tab){
+    activeSavedTab = tab || 'rollup';
+    document.querySelectorAll('#ai-saved-drawer .ai-saved-tab').forEach(b => {
+      b.classList.toggle('active', b.dataset.tab === activeSavedTab);
+    });
+    renderSavedRollupDrawer();
+  }
+
+  async function renderSavedRollupDrawer(){
+    const pane = document.getElementById('ai-saved-pane');
+    if (!pane) return;
+    pane.innerHTML = '<div class="ota-meta" style="margin:0;">Loading saved Firebase rollup &amp; brief history…</div>';
+
+    const [rollup, h48, hist, perf] = await Promise.all([
+      ensureHourlyClimateRollup(typeof getValidSorted === 'function' ? getValidSorted() : [], false),
+      fetchCloudHourly48h(),
+      fetchBriefHistoryCloud(),
+      fetchCloudPerfStats()
+    ]);
+
+    if (activeSavedTab === 'history'){
+      if (!hist || !hist.length){
+        pane.innerHTML = '<div class="ota-meta" style="margin:0;">No saved briefs yet. Tap <b>Refresh Brief</b> to generate and archive your first summary.</div>';
+        return;
+      }
+      pane.innerHTML = hist.map(item => {
+        const dt = item.generatedAt ? new Date(Number(item.generatedAt)).toLocaleString() : (item.day || '');
+        const tag = item.outdoorTag ? (' · ' + item.outdoorTag) : '';
+        return '<div class="brief-hist-item"><div class="brief-hist-head">' +
+          escapeHtml(dt + ' · ' + (item.model || 'Gemini') + tag) +
+          '</div><div class="ai-brief-body">' + formatAiBriefHtml(item.text) + '</div></div>';
+      }).join('');
+      return;
+    }
+
+    if (activeSavedTab === 'json'){
+      const dump = {
+        firebase_climateRollup: rollup || null,
+        firebase_hourly48h: h48 || null
+      };
+      pane.innerHTML = '<pre class="brief-raw-pre">' + escapeHtml(JSON.stringify(dump, null, 2)) + '</pre>';
+      return;
+    }
+
+    // Default tab: 'rollup'
+    if (!rollup || !rollup.weekly){
+      pane.innerHTML = '<div class="ota-meta" style="margin:0;">No weekly/monthly rollup saved yet. Tap <b>Sync on ESP32</b> or wait for readings to load.</div>';
+      return;
+    }
+    const w = rollup.weekly;
+    const m = rollup.monthly || w;
+    const srcLabel = (rollup.computedBy === 'esp32') ? 'ESP32 (on-device)' : 'PWA (browser)';
+    const updAgo = rollup.updatedAt ? timeAgo(Math.max(0, Date.now() - Number(rollup.updatedAt))) : 'unknown';
+    const h48Info = h48
+      ? (h48.hoursCount + 'h (' + h48.readingCount48h + ' pts · ' + (h48.computedBy || 'esp32') + ')')
+      : 'computed live from loaded readings';
+
+    const perfLine = (perf && perf.samples > 0)
+      ? ('ESP32 sync ETA: <b>~' + (perf.ewmaTotalMs / 1000).toFixed(1) + 's</b> (compute ' + perf.ewmaComputeMs + 'ms + upload ' + (perf.ewmaUploadMs / 1000).toFixed(2) + 's · learned from ' + perf.samples + ' run' + (perf.samples === 1 ? '' : 's') + ')')
+      : 'ESP32 sync ETA: <b>~3.5s est.</b> (auto-calibrates after first ESP32 sync)';
+    let html = '<div class="ota-meta" style="margin:0 0 8px;">Source: <b>' + escapeHtml(srcLabel) +
+      '</b> · Updated <b>' + escapeHtml(updAgo) + '</b> · 48h cache: <b>' + escapeHtml(h48Info) + '</b><br>' + perfLine + '</div>';
+
+    html += '<div class="rollup-grid">' +
+      '<div class="rollup-box"><div class="rollup-box-title">Weekly (' + w.days + 'd)</div>' +
+      '<div class="rollup-box-val">' + w.tAvg + '°C · ' + w.rhAvg + '%</div>' +
+      '<div class="rollup-box-sub">Range: ' + w.tMin + '–' + w.tMax + '°C / ' + w.rhMin + '–' + w.rhMax + '%<br>' +
+      'Comfort: <b>' + w.comfortPct + '%</b> · Mold &gt;60%: <b>' + w.moldHighDays + 'd</b><br>' +
+      'AH: ' + w.ahAvg + ' g/m³ · σT ±' + w.volT + '°C</div></div>' +
+
+      '<div class="rollup-box"><div class="rollup-box-title">Monthly (' + m.days + 'd)</div>' +
+      '<div class="rollup-box-val">' + m.tAvg + '°C · ' + m.rhAvg + '%</div>' +
+      '<div class="rollup-box-sub">Range: ' + m.tMin + '–' + m.tMax + '°C / ' + m.rhMin + '–' + m.rhMax + '%<br>' +
+      'Comfort: <b>' + m.comfortPct + '%</b> · Mold &gt;60%: <b>' + m.moldHighDays + 'd</b> (max streak ' + (m.maxMoldStreak || 0) + 'd)<br>' +
+      'AH: ' + m.ahAvg + ' g/m³ · Enthalpy ' + m.enthalpyAvg + ' kJ/kg</div></div>' +
+      '</div>';
+
+    if (Array.isArray(rollup.weeklyBuckets) && rollup.weeklyBuckets.length){
+      html += '<table class="rollup-table"><thead><tr><th>Week</th><th>Dates</th><th>Temp</th><th>RH</th><th>Comfort</th><th>Mold</th></tr></thead><tbody>' +
+        rollup.weeklyBuckets.map(b =>
+          '<tr><td>' + escapeHtml(b.week) + '</td><td>' + escapeHtml(b.from + '→' + b.to) + '</td><td>' +
+          b.tAvg + '°C</td><td>' + b.rhAvg + '%</td><td>' + b.comfortPct + '%</td><td>' + b.moldDays + 'd</td></tr>'
+        ).join('') + '</tbody></table>';
+    }
+    pane.innerHTML = html;
+  }
+
   // Build rich 48-hour (2-day) indoor hourly trajectory + day-by-day mold/comfort/season stats
   function buildTwoDayRoomSnapshot(validReadings, data){
     const round1 = v => Math.round(v * 10) / 10;
@@ -1117,49 +1418,52 @@
     const dayMap = new Map();
 
     for (const r of windowRows){
+      const rt = (r.temp !== undefined) ? r.temp : r.t;
+      const rh = (r.hum !== undefined) ? r.hum : r.h;
+      if (!Number.isFinite(rt) || !Number.isFinite(rh)) continue;
       const d = new Date(r.epochMs);
       const pad = n => String(n).padStart(2, '0');
       const dayKey = localDayKeyFromMs(r.epochMs);
       const hourKey = dayKey.slice(5) + ' ' + pad(d.getHours()) + ':00';
-      const fl = calcHeatIndexC(r.t, r.h);
-      const ah = calcAbsoluteHumidity(r.t, r.h);
-      const en = calcEnthalpyKjKg(r.t, r.h);
-      const ok = isComfortCompliant(r.t, r.h);
+      const fl = calcHeatIndexC(rt, rh);
+      const ah = calcAbsoluteHumidity(rt, rh);
+      const en = calcEnthalpyKjKg(rt, rh);
+      const ok = isComfortCompliant(rt, rh);
 
       let hb = hourMap.get(hourKey);
       if (!hb){
-        hb = { hour: hourKey, n: 0, sT: 0, minT: r.t, maxT: r.t, sH: 0, sFL: 0, sAH: 0, okN: 0, mold60N: 0, mold65N: 0 };
+        hb = { hour: hourKey, n: 0, sT: 0, minT: rt, maxT: rt, sH: 0, sFL: 0, sAH: 0, okN: 0, mold60N: 0, mold65N: 0 };
         hourMap.set(hourKey, hb);
       }
-      hb.n++; hb.sT += r.t; hb.sH += r.h; hb.sFL += fl; hb.sAH += ah;
-      if (r.t < hb.minT) hb.minT = r.t;
-      if (r.t > hb.maxT) hb.maxT = r.t;
+      hb.n++; hb.sT += rt; hb.sH += rh; hb.sFL += fl; hb.sAH += ah;
+      if (rt < hb.minT) hb.minT = rt;
+      if (rt > hb.maxT) hb.maxT = rt;
       if (ok) hb.okN++;
-      if (r.h > 60 && r.t >= 20 && r.t <= 30) hb.mold60N++;
-      if (r.h > 65 && r.t >= 20 && r.t <= 30) hb.mold65N++;
+      if (rh > 60 && rt >= 20 && rt <= 30) hb.mold60N++;
+      if (rh > 65 && rt >= 20 && rt <= 30) hb.mold65N++;
 
       let db = dayMap.get(dayKey);
       if (!db){
         db = {
-          day: dayKey, n: 0, sT: 0, minT: r.t, maxT: r.t, sH: 0, minH: r.h, maxH: r.h,
+          day: dayKey, n: 0, sT: 0, minT: rt, maxT: rt, sH: 0, minH: rh, maxH: rh,
           sFL: 0, maxFL: fl, sAH: 0, sEN: 0, okN: 0,
           tooCool: 0, tooWarm: 0, tooHumid: 0, tooDry: 0,
           peakRh: -1, peakRhHour: hourKey
         };
         dayMap.set(dayKey, db);
       }
-      db.n++; db.sT += r.t; db.sH += r.h; db.sFL += fl; db.sAH += ah; db.sEN += en;
-      if (r.t < db.minT) db.minT = r.t;
-      if (r.t > db.maxT) db.maxT = r.t;
-      if (r.h < db.minH) db.minH = r.h;
-      if (r.h > db.maxH) db.maxH = r.h;
+      db.n++; db.sT += rt; db.sH += rh; db.sFL += fl; db.sAH += ah; db.sEN += en;
+      if (rt < db.minT) db.minT = rt;
+      if (rt > db.maxT) db.maxT = rt;
+      if (rh < db.minH) db.minH = rh;
+      if (rh > db.maxH) db.maxH = rh;
       if (fl > db.maxFL) db.maxFL = fl;
       if (ok) db.okN++;
-      if (r.t < 20) db.tooCool++;
-      if (r.t > 26) db.tooWarm++;
-      if (r.h > 60) db.tooHumid++;
-      if (r.h < 30) db.tooDry++;
-      if (r.h > db.peakRh){ db.peakRh = r.h; db.peakRhHour = hourKey; }
+      if (rt < 20) db.tooCool++;
+      if (rt > 26) db.tooWarm++;
+      if (rh > 60) db.tooHumid++;
+      if (rh < 30) db.tooDry++;
+      if (rh > db.peakRh){ db.peakRh = rh; db.peakRhHour = hourKey; }
     }
 
     const hourly48h = Array.from(hourMap.values()).slice(-48).map(h => ({
@@ -1438,10 +1742,17 @@
 
     const season = classifySeasonShift(data);
     const twoDaySnapshot = buildTwoDayRoomSnapshot(validReadings, data);
-    const [outdoor, climateRollup] = await Promise.all([
+    const [outdoor, climateRollup, espHourly48h] = await Promise.all([
       fetchLiveOutdoorComparison(data.live),
-      ensureHourlyClimateRollup(validReadings, false)
+      ensureHourlyClimateRollup(validReadings, false),
+      fetchCloudHourly48h()
     ]);
+    // Prefer ESP32's pre-compiled /hourly48h.json if fresher/richer than local loaded window
+    if (espHourly48h && Array.isArray(espHourly48h.hourly48h) && espHourly48h.hourly48h.length > twoDaySnapshot.hourly48h.length){
+      twoDaySnapshot.hourly48h = espHourly48h.hourly48h;
+      twoDaySnapshot.readingCount48h = espHourly48h.readingCount48h || twoDaySnapshot.readingCount48h;
+      twoDaySnapshot.hourlySource = 'esp32';
+    }
 
     const payload = {
       localTime: new Date().toLocaleString(),
@@ -1535,6 +1846,7 @@
       try { localStorage.setItem(GEMINI_BRIEF_LS, JSON.stringify(briefObj)); } catch(e) {}
       renderCachedAiBrief(briefObj);
       syncAiBriefToFirebase(briefObj);
+      saveBriefToHistory(briefObj);
       if (manual) showToast('Daily room brief updated (' + formatGeminiModelLabel(usedModel) + ')');
     } catch(err){
       if (bodyEl){
@@ -1555,7 +1867,7 @@
       const cloud = await fetchCloudAiBrief();
       const latest = cloud || local;
       const todayKey = localDayKeyFromMs(Date.now());
-      await ensureHourlyClimateRollup(typeof getValidSorted === 'function' ? getValidSorted() : [], false);
+      await Promise.all([ensureHourlyClimateRollup(typeof getValidSorted === 'function' ? getValidSorted() : [], false), fetchCloudPerfStats()]);
       if (getGeminiApiKey() && (!latest || latest.day !== todayKey)){
         generateGeminiDailyBrief(false);
       }
