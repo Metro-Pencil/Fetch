@@ -1,9 +1,9 @@
 {
-  "version": "3.14.0",
-  "build": 9,
-  "commit": "b102230",
-  "builtAt": "2026-11-28T09:36:22Z",
-  "sizeBytes": 1418144,
-  "sha256": "66b2a6e77582180ff902dde7d60d4707050fc9f9f66b7e0159357ce0096e1666",
+  "version": "3.15.0",
+  "build": 10,
+  "commit": "15ce6c3",
+  "builtAt": "2026-11-28T09:50:25Z",
+  "sizeBytes": 1418224,
+  "sha256": "af984fe818eda1a64428cf4caa2edccc82d653c435c4202e5c3b84ad848dbabf",
   "file": "firmware/latest.bin"
 }
