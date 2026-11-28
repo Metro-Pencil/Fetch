@@ -763,3 +763,234 @@
   }
 
   setTimeout(() => { fetchCloudAnalytics(); }, 1600);
+
+  // ---------- Gemini 2.5 Flash Daily Room Brief (v3.13.0) ----------
+  const GEMINI_KEY_LS   = 'rl_gemini_api_key_v1';
+  const GEMINI_BRIEF_LS = 'rl_gemini_daily_brief_v1';
+  const GEMINI_MODEL    = 'gemini-2.5-flash';
+  let geminiGenerating  = false;
+
+  function getGeminiApiKey(){
+    try { return (localStorage.getItem(GEMINI_KEY_LS) || '').trim(); } catch(e) { return ''; }
+  }
+
+  function toggleGeminiKeyDrawer(forceShow){
+    const dr = document.getElementById('ai-key-drawer');
+    if (!dr) return;
+    const show = (forceShow !== undefined) ? !!forceShow : !dr.classList.contains('show');
+    dr.classList.toggle('show', show);
+    const inp = document.getElementById('gemini-api-key');
+    if (show && inp){
+      inp.value = getGeminiApiKey();
+      inp.focus();
+    }
+  }
+
+  function saveGeminiApiKey(){
+    const inp = document.getElementById('gemini-api-key');
+    const val = (inp && inp.value ? inp.value : '').trim();
+    if (!val || val.length < 15){
+      showToast('Enter a valid Google AI Studio API key (starts with AIza…)');
+      return;
+    }
+    try { localStorage.setItem(GEMINI_KEY_LS, val); } catch(e) {}
+    toggleGeminiKeyDrawer(false);
+    showToast('Gemini API key saved on this device');
+    generateGeminiDailyBrief(true);
+  }
+
+  function clearGeminiApiKey(){
+    try { localStorage.removeItem(GEMINI_KEY_LS); } catch(e) {}
+    const inp = document.getElementById('gemini-api-key');
+    if (inp) inp.value = '';
+    toggleGeminiKeyDrawer(false);
+    showToast('Gemini API key cleared');
+  }
+
+  function formatAiBriefHtml(rawText){
+    const lines = String(rawText || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const paras = [];
+    const bullets = [];
+    for (const line of lines){
+      if (/^[-*•]\s+/.test(line)){
+        bullets.push(line.replace(/^[-*•]\s+/, '').replace(/\*\*(.*?)\*\*/g, '$1'));
+      } else {
+        paras.push(line.replace(/\*\*(.*?)\*\*/g, '$1'));
+      }
+    }
+    let html = paras.map(p => '<p>' + escapeHtml(p) + '</p>').join('');
+    if (bullets.length){
+      html += '<ul>' + bullets.map(b => '<li>' + escapeHtml(b) + '</li>').join('') + '</ul>';
+    }
+    return html || '<p>' + escapeHtml(rawText || '') + '</p>';
+  }
+
+  function renderCachedAiBrief(briefObj){
+    const bodyEl = document.getElementById('ai-brief-body');
+    const metaEl = document.getElementById('ai-brief-meta');
+    if (!bodyEl) return;
+    if (!briefObj || !briefObj.text){
+      const hasKey = !!getGeminiApiKey();
+      bodyEl.innerHTML = hasKey
+        ? '<div class="ota-meta" style="margin:0;">Tap <b>Refresh Brief</b> to generate today\'s plain-English summary with Gemini 2.5 Flash.</div>'
+        : '<div class="ota-meta" style="margin:0;">Tap <b>API Key</b> to paste your free Google AI Studio key, then tap <b>Refresh Brief</b> for a plain-English daily summary.</div>';
+      if (metaEl) metaEl.textContent = '';
+      return;
+    }
+    bodyEl.innerHTML = formatAiBriefHtml(briefObj.text);
+    if (metaEl){
+      const when = briefObj.generatedAt ? timeAgo(Math.max(0, Date.now() - Number(briefObj.generatedAt))) : 'just now';
+      metaEl.textContent = 'Generated ' + when + ' (' + (briefObj.day || '') + ') · ' + (briefObj.model || GEMINI_MODEL);
+    }
+  }
+
+  function loadLocalAiBrief(){
+    try {
+      const saved = JSON.parse(localStorage.getItem(GEMINI_BRIEF_LS) || 'null');
+      if (saved && saved.text) return saved;
+    } catch(e) {}
+    return null;
+  }
+
+  async function fetchCloudAiBrief(){
+    const host = getHost();
+    if (!host) return null;
+    try {
+      const res = await fetch(appendAuthParam('https://' + host + '/dailyBrief.json'), { cache: 'no-store' });
+      if (!res.ok) return null;
+      const obj = await res.json();
+      if (obj && obj.text){
+        const local = loadLocalAiBrief();
+        if (!local || (obj.generatedAt || 0) > (local.generatedAt || 0)){
+          try { localStorage.setItem(GEMINI_BRIEF_LS, JSON.stringify(obj)); } catch(e) {}
+          renderCachedAiBrief(obj);
+        }
+        return obj;
+      }
+    } catch(e) {}
+    return null;
+  }
+
+  async function syncAiBriefToFirebase(briefObj){
+    const host = getHost();
+    if (!host || !briefObj || !briefObj.text) return;
+    try {
+      // Only sync the generated text/metadata — NEVER the API key!
+      await fetch('https://' + host + '/dailyBrief.json' + getFbAuthParam(), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(briefObj),
+        cache: 'no-store'
+      });
+    } catch(e) {}
+  }
+
+  async function generateGeminiDailyBrief(manual){
+    if (geminiGenerating) return;
+    const apiKey = getGeminiApiKey();
+    if (!apiKey){
+      if (manual){
+        toggleGeminiKeyDrawer(true);
+        showToast('Paste your free Gemini API key first');
+      }
+      return;
+    }
+    const data = lastRenderedAnalytics || computeAllSevenMetrics(typeof getValidSorted === 'function' ? getValidSorted() : []);
+    if (!data || !data.live){
+      if (manual) showToast('Wait for room readings to load first');
+      return;
+    }
+
+    const todayKey = localDayKeyFromMs(Date.now());
+    const cached = loadLocalAiBrief();
+    if (!manual && cached && cached.day === todayKey){
+      renderCachedAiBrief(cached);
+      return;
+    }
+
+    geminiGenerating = true;
+    const btn = document.getElementById('btn-ai-refresh');
+    const bodyEl = document.getElementById('ai-brief-body');
+    if (btn){ btn.disabled = true; btn.textContent = 'Writing…'; }
+    if (bodyEl && manual) bodyEl.innerHTML = '<div class="ota-meta" style="margin:0;">Asking Gemini 2.5 Flash to summarize your room…</div>';
+
+    const season = classifySeasonShift(data);
+    const compactStats = {
+      localTime: new Date().toLocaleString(),
+      tempC: data.live.temp,
+      humidityPct: data.live.hum,
+      feelsLikeC: data.live.heatIndex,
+      absHumidityGm3: data.live.absHumidity,
+      enthalpyKjKg: data.live.enthalpy,
+      comfortNow: data.live.comfortNow,
+      comfortCompliancePct: (data.comfort && data.comfort.readingPct !== undefined && (data.comfort.totalDays || 0) <= 1)
+        ? data.comfort.readingPct
+        : (data.comfort ? data.comfort.pct : null),
+      moldRisk: data.mold,
+      seasonPhase: season.label,
+      rolling7dVs30d: data.rolling,
+      zScoreAnomalies: data.zscore
+    };
+
+    const prompt =
+      'You are a helpful home-climate assistant. Based ONLY on these live ESP32 room sensor metrics, write a super clear, friendly daily room brief for a non-technical user:\n' +
+      '1. One short paragraph (2-3 sentences) describing how the room feels right now, the seasonal trend, and whether comfort/stability looks good or unusual.\n' +
+      '2. Exactly 2 or 3 short bullet points starting with "- " giving practical actions to stay comfortable or prevent mold/dampness.\n' +
+      'Keep total length under 110 words. Plain everyday English, no markdown headers or bolding.\n\n' +
+      'Metrics JSON:\n' + JSON.stringify(compactStats);
+
+    try {
+      const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + encodeURIComponent(apiKey);
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.45, maxOutputTokens: 350 }
+        })
+      });
+      if (!res.ok){
+        const errTxt = await res.text().catch(() => '');
+        if (res.status === 400 || res.status === 403) throw new Error('Invalid or restricted Gemini API key (HTTP ' + res.status + ')');
+        if (res.status === 429) throw new Error('Gemini free-tier rate limit reached — try again in a minute');
+        throw new Error('Gemini HTTP ' + res.status + (errTxt ? (': ' + errTxt.slice(0, 80)) : ''));
+      }
+      const json = await res.json();
+      const parts = json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts;
+      const text = Array.isArray(parts) ? parts.map(p => p.text || '').join('').trim() : '';
+      if (!text) throw new Error('Empty response from Gemini');
+
+      const briefObj = {
+        day: todayKey,
+        generatedAt: Date.now(),
+        model: GEMINI_MODEL,
+        text: text
+      };
+      try { localStorage.setItem(GEMINI_BRIEF_LS, JSON.stringify(briefObj)); } catch(e) {}
+      renderCachedAiBrief(briefObj);
+      syncAiBriefToFirebase(briefObj);
+      if (manual) showToast('Daily room brief updated');
+    } catch(err){
+      if (bodyEl){
+        bodyEl.innerHTML = '<div class="ota-meta" style="margin:0;color:var(--err);">AI brief failed: ' + escapeHtml(err.message) + '</div>';
+      }
+      if (manual) showToast('Gemini error: ' + err.message);
+    } finally {
+      geminiGenerating = false;
+      if (btn){ btn.disabled = false; btn.textContent = 'Refresh Brief'; }
+    }
+  }
+
+  // Boot: render local cached brief immediately, check cloud brief, and auto-generate once per new day if key is set
+  (function initGeminiDailyBrief(){
+    const local = loadLocalAiBrief();
+    renderCachedAiBrief(local);
+    setTimeout(async () => {
+      const cloud = await fetchCloudAiBrief();
+      const latest = cloud || local;
+      const todayKey = localDayKeyFromMs(Date.now());
+      if (getGeminiApiKey() && (!latest || latest.day !== todayKey)){
+        generateGeminiDailyBrief(false);
+      }
+    }, 3200);
+  })();

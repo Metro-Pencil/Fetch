@@ -1736,6 +1736,70 @@
   [data-theme="atelier"] .intel-chip { background: #FFFFFF; }
   [data-theme="atelier"] .intel-advice-sheet { background: #FFFFFF; }
 
+  /* ---------- Gemini 2.5 Flash Daily AI Brief Card (v3.13.0) ---------- */
+  .ai-brief-card {
+    margin-top: 10px;
+    padding: 13px 14px;
+    border-radius: 18px;
+    background: var(--panel);
+    border: 1px solid rgba(125, 196, 228, 0.30);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+  }
+  .ai-brief-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .ai-brief-title-wrap {
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  .ai-brief-title {
+    font-family: var(--display, var(--sans));
+    font-size: 13px; font-weight: 700; color: var(--text);
+  }
+  .ai-brief-badge {
+    font-family: var(--mono); font-size: 9.5px; font-weight: 600;
+    padding: 2px 7px; border-radius: 999px;
+    background: rgba(125, 196, 228, 0.14);
+    border: 1px solid rgba(125, 196, 228, 0.35);
+    color: var(--hum);
+  }
+  .ai-brief-actions {
+    display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
+  }
+  .ai-brief-actions button {
+    min-height: 32px !important; padding: 4px 10px !important; font-size: 11px !important; border-radius: 999px !important;
+  }
+  .ai-brief-body {
+    font-family: var(--sans); font-size: 12.5px; line-height: 1.5; color: var(--text);
+  }
+  .ai-brief-body p { margin: 0 0 7px; }
+  .ai-brief-body ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 12px; }
+  .ai-brief-body li { margin-bottom: 3px; }
+  .ai-brief-meta {
+    margin-top: 8px; font-family: var(--mono); font-size: 10px; color: var(--muted);
+  }
+  .ai-key-drawer {
+    display: none; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border);
+  }
+  .ai-key-drawer.show { display: block; }
+  .ai-key-row {
+    display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px;
+  }
+  .ai-key-row input {
+    flex: 1 1 180px; min-height: 40px; font-size: 12px;
+  }
+  .ai-key-row button {
+    min-height: 40px !important; padding: 6px 12px !important; font-size: 11.5px !important;
+  }
+  [data-theme="kinetic"] .ai-brief-card {
+    background: rgba(16, 19, 27, 0.86);
+    border-color: rgba(125, 196, 228, 0.24);
+  }
+  [data-theme="atelier"] .ai-brief-card {
+    background: #FFFFFF;
+    border-color: rgba(74, 107, 104, 0.28);
+  }
+
   /* Responsive overrides placed AFTER all theme blocks so Kinetic/Atelier stay aligned on mobile */
   @media (max-width: 600px) {
     .card, [data-theme="atelier"] .card, [data-theme="kinetic"] .card {
