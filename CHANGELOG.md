@@ -1,3 +1,9 @@
+## v3.13.1 (2026-11-28) — Gemini 3.5 Flash-Lite Migration & Auto-Fallback (Dashboard-Only)
+- **Fixed HTTP 404 on retired `gemini-2.5-flash`**: Migrated Daily Room Brief to `gemini-3.5-flash-lite` with automatic 404 fallback through `gemini-3.8-flash` and `gemini-3.1-flash-lite`, plus dynamic `/v1beta/models` auto-discovery if all defaults are ever retired.
+- **Fixed Gemini 3.x breaking API change**: Removed unsupported `temperature` sampling parameter from `generationConfig` and filtered out `thought: true` parts when extracting response text.
+- **Dynamic Model Badge**: Remembers the active working model in `localStorage` (`rl_gemini_model_v1`) and displays it on the Daily Room Brief pill.
+- **Firmware untouched**: `room_logger/room_logger.ino` remains at `FW_VERSION "3.11.0"` / `FW_BUILD 6` (no ESP32 reflash needed).
+
 # Room Logger Firmware Changelog
 
 ## Stability & Bug Fixes

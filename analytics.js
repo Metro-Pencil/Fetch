@@ -764,14 +764,41 @@
 
   setTimeout(() => { fetchCloudAnalytics(); }, 1600);
 
-  // ---------- Gemini 2.5 Flash Daily Room Brief (v3.13.0) ----------
+  // ---------- Gemini Flash Daily Room Brief (v3.13.1) ----------
   const GEMINI_KEY_LS   = 'rl_gemini_api_key_v1';
   const GEMINI_BRIEF_LS = 'rl_gemini_daily_brief_v1';
-  const GEMINI_MODEL    = 'gemini-2.5-flash';
+  const GEMINI_MODEL_LS = 'rl_gemini_model_v1';
+  const GEMINI_MODELS   = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
   let geminiGenerating  = false;
 
   function getGeminiApiKey(){
     try { return (localStorage.getItem(GEMINI_KEY_LS) || '').trim(); } catch(e) { return ''; }
+  }
+
+  function formatGeminiModelLabel(modelId){
+    if (!modelId) return 'Gemini Flash';
+    return String(modelId)
+      .replace(/^models\//, '')
+      .replace(/^gemini-/i, 'Gemini ')
+      .replace(/-flash-lite\b/i, ' Flash-Lite')
+      .replace(/-flash\b/i, ' Flash')
+      .replace(/-pro\b/i, ' Pro');
+  }
+
+  function getCachedGeminiModel(){
+    try {
+      const m = (localStorage.getItem(GEMINI_MODEL_LS) || '').trim();
+      // Ignore retired 2.5-flash if somehow cached
+      if (m && !/^gemini-2\.5-flash/i.test(m)) return m;
+    } catch(e) {}
+    return '';
+  }
+
+  function setCachedGeminiModel(modelId){
+    if (!modelId) return;
+    try { localStorage.setItem(GEMINI_MODEL_LS, modelId); } catch(e) {}
+    const badge = document.getElementById('ai-brief-badge');
+    if (badge) badge.textContent = formatGeminiModelLabel(modelId);
   }
 
   function toggleGeminiKeyDrawer(forceShow){
@@ -801,6 +828,7 @@
 
   function clearGeminiApiKey(){
     try { localStorage.removeItem(GEMINI_KEY_LS); } catch(e) {}
+    try { localStorage.removeItem(GEMINI_MODEL_LS); } catch(e) {}
     const inp = document.getElementById('gemini-api-key');
     if (inp) inp.value = '';
     toggleGeminiKeyDrawer(false);
@@ -828,11 +856,14 @@
   function renderCachedAiBrief(briefObj){
     const bodyEl = document.getElementById('ai-brief-body');
     const metaEl = document.getElementById('ai-brief-meta');
+    const badgeEl = document.getElementById('ai-brief-badge');
+    const activeModel = (briefObj && briefObj.model) || getCachedGeminiModel() || GEMINI_MODELS[0];
+    if (badgeEl) badgeEl.textContent = formatGeminiModelLabel(activeModel);
     if (!bodyEl) return;
     if (!briefObj || !briefObj.text){
       const hasKey = !!getGeminiApiKey();
       bodyEl.innerHTML = hasKey
-        ? '<div class="ota-meta" style="margin:0;">Tap <b>Refresh Brief</b> to generate today\'s plain-English summary with Gemini 2.5 Flash.</div>'
+        ? '<div class="ota-meta" style="margin:0;">Tap <b>Refresh Brief</b> to generate today\'s plain-English summary with ' + escapeHtml(formatGeminiModelLabel(activeModel)) + '.</div>'
         : '<div class="ota-meta" style="margin:0;">Tap <b>API Key</b> to paste your free Google AI Studio key, then tap <b>Refresh Brief</b> for a plain-English daily summary.</div>';
       if (metaEl) metaEl.textContent = '';
       return;
@@ -840,7 +871,7 @@
     bodyEl.innerHTML = formatAiBriefHtml(briefObj.text);
     if (metaEl){
       const when = briefObj.generatedAt ? timeAgo(Math.max(0, Date.now() - Number(briefObj.generatedAt))) : 'just now';
-      metaEl.textContent = 'Generated ' + when + ' (' + (briefObj.day || '') + ') · ' + (briefObj.model || GEMINI_MODEL);
+      metaEl.textContent = 'Generated ' + when + ' (' + (briefObj.day || '') + ') · ' + (briefObj.model || activeModel);
     }
   }
 
@@ -885,6 +916,62 @@
     } catch(e) {}
   }
 
+  async function discoverGeminiFlashModel(apiKey){
+    try {
+      const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + encodeURIComponent(apiKey), { cache: 'no-store' });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const models = Array.isArray(data && data.models) ? data.models : [];
+      const eligible = models
+        .filter(m => m && m.name && Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+        .map(m => String(m.name).replace(/^models\//, ''))
+        .filter(id => /^gemini-/i.test(id) && /flash/i.test(id) && !/(tts|image|audio|embedding|live|2\.5)/i.test(id));
+      if (!eligible.length) return null;
+      // Prefer flash-lite, then highest version number
+      eligible.sort((a, b) => {
+        const aLite = /flash-lite/i.test(a) ? 1 : 0;
+        const bLite = /flash-lite/i.test(b) ? 1 : 0;
+        if (aLite !== bLite) return bLite - aLite;
+        return b.localeCompare(a, undefined, { numeric: true });
+      });
+      return eligible[0];
+    } catch(e) {
+      return null;
+    }
+  }
+
+  async function callGeminiModel(apiKey, modelId, prompt){
+    const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(modelId) + ':generateContent?key=' + encodeURIComponent(apiKey);
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // Note: omit sampling params (temperature/topP/topK) — unsupported on Gemini 3.x+
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: 400 }
+      })
+    });
+    if (!res.ok){
+      let errMsg = '';
+      try {
+        const errJson = await res.json();
+        errMsg = (errJson && errJson.error && errJson.error.message) ? errJson.error.message : JSON.stringify(errJson);
+      } catch(e) {
+        errMsg = await res.text().catch(() => '');
+      }
+      const err = new Error(errMsg || ('HTTP ' + res.status));
+      err.status = res.status;
+      throw err;
+    }
+    const json = await res.json();
+    const parts = json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts;
+    const text = Array.isArray(parts)
+      ? parts.filter(p => p && !p.thought && typeof p.text === 'string').map(p => p.text).join('').trim()
+      : '';
+    if (!text) throw new Error('Empty response from Gemini');
+    return text;
+  }
+
   async function generateGeminiDailyBrief(manual){
     if (geminiGenerating) return;
     const apiKey = getGeminiApiKey();
@@ -912,7 +999,7 @@
     const btn = document.getElementById('btn-ai-refresh');
     const bodyEl = document.getElementById('ai-brief-body');
     if (btn){ btn.disabled = true; btn.textContent = 'Writing…'; }
-    if (bodyEl && manual) bodyEl.innerHTML = '<div class="ota-meta" style="margin:0;">Asking Gemini 2.5 Flash to summarize your room…</div>';
+    if (bodyEl && manual) bodyEl.innerHTML = '<div class="ota-meta" style="margin:0;">Asking Gemini Flash to summarize your room…</div>';
 
     const season = classifySeasonShift(data);
     const compactStats = {
@@ -940,36 +1027,61 @@
       'Metrics JSON:\n' + JSON.stringify(compactStats);
 
     try {
-      const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + encodeURIComponent(apiKey);
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.45, maxOutputTokens: 350 }
-        })
-      });
-      if (!res.ok){
-        const errTxt = await res.text().catch(() => '');
-        if (res.status === 400 || res.status === 403) throw new Error('Invalid or restricted Gemini API key (HTTP ' + res.status + ')');
-        if (res.status === 429) throw new Error('Gemini free-tier rate limit reached — try again in a minute');
-        throw new Error('Gemini HTTP ' + res.status + (errTxt ? (': ' + errTxt.slice(0, 80)) : ''));
+      const candidates = [];
+      const remembered = getCachedGeminiModel();
+      if (remembered) candidates.push(remembered);
+      for (const m of GEMINI_MODELS){
+        if (!candidates.includes(m)) candidates.push(m);
       }
-      const json = await res.json();
-      const parts = json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts;
-      const text = Array.isArray(parts) ? parts.map(p => p.text || '').join('').trim() : '';
-      if (!text) throw new Error('Empty response from Gemini');
 
+      let text = '';
+      let usedModel = '';
+      let lastErr = null;
+
+      for (const modelId of candidates){
+        try {
+          text = await callGeminiModel(apiKey, modelId, prompt);
+          usedModel = modelId;
+          break;
+        } catch(err){
+          lastErr = err;
+          if (err.status === 404){
+            // Model retired or unavailable for this project — try next candidate
+            continue;
+          }
+          if (err.status === 401 || err.status === 403){
+            throw new Error('Invalid or restricted Gemini API key (HTTP ' + err.status + ')');
+          }
+          if (err.status === 429){
+            throw new Error('Gemini free-tier rate limit reached — try again in a minute');
+          }
+          throw new Error('Gemini HTTP ' + (err.status || '?') + ': ' + String(err.message || '').slice(0, 120));
+        }
+      }
+
+      if (!text && lastErr && lastErr.status === 404){
+        const discovered = await discoverGeminiFlashModel(apiKey);
+        if (discovered && !candidates.includes(discovered)){
+          text = await callGeminiModel(apiKey, discovered, prompt);
+          usedModel = discovered;
+        }
+      }
+
+      if (!text){
+        throw new Error(lastErr ? ('No active Gemini Flash model available (' + String(lastErr.message || '').slice(0, 100) + ')') : 'No response from Gemini');
+      }
+
+      setCachedGeminiModel(usedModel);
       const briefObj = {
         day: todayKey,
         generatedAt: Date.now(),
-        model: GEMINI_MODEL,
+        model: usedModel,
         text: text
       };
       try { localStorage.setItem(GEMINI_BRIEF_LS, JSON.stringify(briefObj)); } catch(e) {}
       renderCachedAiBrief(briefObj);
       syncAiBriefToFirebase(briefObj);
-      if (manual) showToast('Daily room brief updated');
+      if (manual) showToast('Daily room brief updated (' + formatGeminiModelLabel(usedModel) + ')');
     } catch(err){
       if (bodyEl){
         bodyEl.innerHTML = '<div class="ota-meta" style="margin:0;color:var(--err);">AI brief failed: ' + escapeHtml(err.message) + '</div>';
