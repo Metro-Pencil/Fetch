@@ -119,6 +119,7 @@
 
       const latest = latestEntry();
       renderCurrent(latest);
+      if (typeof renderAirIntelCard === 'function') renderAirIntelCard();
       ensureChart();
 
       if (!userHasInteracted || !chartTemp || !chartTemp.scales || !chartTemp.scales.x){

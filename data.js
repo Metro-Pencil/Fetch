@@ -418,6 +418,134 @@
         changed = true;
       }
     }
+    // Pass 2: Multi-point glitch burst detector (catches 2..6 consecutive glitched readings,
+    // e.g. DHT22 1-bit shift drops like 21.7°C -> 10.8°C -> 10.8°C -> 21.7°C) using anchor
+    // baseline agreement + entry/exit slope checks.
+    const MAX_BURST_LEN = 6;
+    const isQuarantinedAt = (idx) => {
+      const e = rawValid[idx];
+      const k = String(e.rawKey !== undefined ? e.rawKey : e.key);
+      return !!(anomalyVault[k] && (anomalyVault[k].status === 'pending' || anomalyVault[k].status === 'deleted'));
+    };
+
+    for (let i = 1; i < rawValid.length - 2; i++){
+      if (isQuarantinedAt(i) || isQuarantinedAt(i - 1)) continue;
+      const before = rawValid[i - 1];
+      let matchedLen = 0;
+
+      for (let len = 2; len <= MAX_BURST_LEN && (i + len) < rawValid.length; len++){
+        if (isQuarantinedAt(i + len)) continue;
+        const after = rawValid[i + len];
+        const totalWindowMs = after.epochMs - before.epochMs;
+        if (totalWindowMs <= 0 || totalWindowMs > Math.max(NEIGHBOR_MAX_MS * (len + 1), 25 * 60 * 1000)) break;
+
+        const baseT = (before.temp + after.temp) / 2;
+        const baseH = (before.hum + after.hum) / 2;
+        const anchorSpanT = Math.abs(after.temp - before.temp);
+        const anchorSpanH = Math.abs(after.hum - before.hum);
+
+        // Check if every point in [i .. i+len-1] is off the stable baseline AND has steep entry/exit slopes
+        let allTempOff = anchorSpanT < TEMP_SPIKE_DELTA * 0.7;
+        let allHumOff  = anchorSpanH < HUM_SPIKE_DELTA * 0.7;
+        if (!allTempOff && !allHumOff) continue;
+
+        let anyKept = false;
+        let worstDiffT = 0, worstDiffH = 0;
+        for (let k = i; k < i + len; k++){
+          const pt = rawValid[k];
+          const rkPt = String(pt.rawKey !== undefined ? pt.rawKey : pt.key);
+          if (anomalyKept[rkPt]) { anyKept = true; break; }
+          const dt = pt.temp - baseT;
+          const dh = pt.hum - baseH;
+          if (Math.abs(dt) < TEMP_SPIKE_DELTA) allTempOff = false;
+          if (Math.abs(dh) < HUM_SPIKE_DELTA)  allHumOff = false;
+          if (Math.abs(dt) > Math.abs(worstDiffT)) worstDiffT = dt;
+          if (Math.abs(dh) > Math.abs(worstDiffH)) worstDiffH = dh;
+        }
+        if (anyKept || (!allTempOff && !allHumOff)) continue;
+
+        const entryMin = Math.max(0.5, (rawValid[i].epochMs - before.epochMs) / 60000);
+        const exitMin  = Math.max(0.5, (after.epochMs - rawValid[i + len - 1].epochMs) / 60000);
+        const tempSlopeOk = allTempOff &&
+          (Math.abs(rawValid[i].temp - before.temp) / entryMin >= 2.0) &&
+          (Math.abs(after.temp - rawValid[i + len - 1].temp) / exitMin >= 2.0);
+        const humSlopeOk = allHumOff &&
+          (Math.abs(rawValid[i].hum - before.hum) / entryMin >= 6.0) &&
+          (Math.abs(after.hum - rawValid[i + len - 1].hum) / exitMin >= 6.0);
+
+        if (tempSlopeOk || humSlopeOk){
+          for (let k = i; k < i + len; k++){
+            const pt = rawValid[k];
+            const rkPt = String(pt.rawKey !== undefined ? pt.rawKey : pt.key);
+            if (!anomalyVault[rkPt]){
+              const burstReason = tempSlopeOk
+                ? ('Multi-point temp glitch (' + len + ' readings, ' + (worstDiffT >= 0 ? '+' : '') + (pt.temp - baseT).toFixed(1) + '°C vs ' + baseT.toFixed(1) + '°C baseline)')
+                : ('Multi-point humidity glitch (' + len + ' readings, ' + (worstDiffH >= 0 ? '+' : '') + (pt.hum - baseH).toFixed(1) + '% vs ' + baseH.toFixed(1) + '% baseline)');
+              anomalyVault[rkPt] = {
+                rawKey: rkPt,
+                key: pt.key,
+                epochMs: pt.epochMs,
+                temp: pt.temp,
+                hum: pt.hum,
+                prevTemp: before.temp,
+                nextTemp: after.temp,
+                prevHum: before.hum,
+                nextHum: after.hum,
+                reason: burstReason,
+                detectedAt: Date.now(),
+                status: 'pending'
+              };
+              changed = true;
+            }
+          }
+          matchedLen = len;
+          break;
+        }
+      }
+      if (matchedLen > 0) i += matchedLen - 1;
+    }
+
+    // Pass 3: Impossible instantaneous slope guard for trailing/unbracketed bursts (e.g. >=6°C in <=3 min)
+    for (let i = 1; i < rawValid.length; i++){
+      if (isQuarantinedAt(i)) continue;
+      const cur = rawValid[i];
+      const rk = String(cur.rawKey !== undefined ? cur.rawKey : cur.key);
+      if (anomalyKept[rk] || anomalyVault[rk]) continue;
+      // Find nearest non-quarantined predecessor within 4 minutes
+      let pIdx = i - 1;
+      while (pIdx >= 0 && isQuarantinedAt(pIdx)) pIdx--;
+      if (pIdx < 0) continue;
+      const prev = rawValid[pIdx];
+      const dtMs = cur.epochMs - prev.epochMs;
+      if (dtMs <= 0 || dtMs > 4 * 60 * 1000) continue;
+      const dtMin = Math.max(0.5, dtMs / 60000);
+      const dT = cur.temp - prev.temp;
+      const dH = cur.hum - prev.hum;
+      let slopeReason = '';
+      if (Math.abs(dT) >= 6.0 && (Math.abs(dT) / dtMin) >= 3.0){
+        slopeReason = 'Impossible temp slope (' + (dT >= 0 ? '+' : '') + dT.toFixed(1) + '°C in ' + dtMin.toFixed(1) + 'm)';
+      } else if (Math.abs(dH) >= 22.0 && (Math.abs(dH) / dtMin) >= 10.0){
+        slopeReason = 'Impossible humidity slope (' + (dH >= 0 ? '+' : '') + dH.toFixed(1) + '% in ' + dtMin.toFixed(1) + 'm)';
+      }
+      if (slopeReason){
+        anomalyVault[rk] = {
+          rawKey: rk,
+          key: cur.key,
+          epochMs: cur.epochMs,
+          temp: cur.temp,
+          hum: cur.hum,
+          prevTemp: prev.temp,
+          nextTemp: (i + 1 < rawValid.length) ? rawValid[i + 1].temp : null,
+          prevHum: prev.hum,
+          nextHum: (i + 1 < rawValid.length) ? rawValid[i + 1].hum : null,
+          reason: slopeReason,
+          detectedAt: Date.now(),
+          status: 'pending'
+        };
+        changed = true;
+      }
+    }
+
     if (changed) persistAnomalyState();
     renderAnomalyUI();
   }

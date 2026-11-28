@@ -1070,6 +1070,7 @@
     renderStorageCard(status && status.storage);
     if (typeof syncCloudQueueStatus === 'function') syncCloudQueueStatus(status);
     if (typeof renderFirmwareSyncState === 'function') renderFirmwareSyncState();
+    if (typeof renderAirIntelCard === 'function') renderAirIntelCard();
     renderMinimalSummaries(status);
 
   }
@@ -1123,6 +1124,7 @@
       payloadObj && payloadObj.action === 'setPowerMode' ? 'power-mode' :
       payloadObj && /^(addWifi|removeWifi|setPreferredWifi|setOpenFallback)$/.test(payloadObj.action) ? 'wifi-control' :
       payloadObj && payloadObj.action === 'otaUrl' ? 'ota-control' :
+      payloadObj && payloadObj.action === 'recomputeAnalytics' ? 'air-intel' :
       payloadObj && /^(setFirebaseConfig|setAdminCredentials|formatFs)$/.test(payloadObj.action) ? 'esp-settings' :
       payloadObj && /^(setTelemetry|resetTelemetry|setBatteryTrack|resetBatteryTrack|setStartVoltage|setWifiTrack|resetWifiTrack)$/.test(payloadObj.action) ? 'telemetry-control' :
       'home-actions'
