@@ -129,6 +129,9 @@ bool publishStatusUsingClient(WiFiClientSecure& client, HTTPClient& http, const 
 void fbSseClose();
 void serviceFirebaseSse();
 void drainFirebaseCmdQueue();
+bool publishAnalyticsToFirebase(float liveT, float liveH, unsigned long epoch);
+void recordDailyAnalyticsSample(unsigned long epoch, float temp, float hum);
+void loadDailyAnalyticsFromDisk();
 String jsonEscape(const String& s);
 bool isValidSsid(const String& ssid);
 bool checkInternetReachable();
@@ -1734,8 +1737,8 @@ SemaphoreHandle_t telemMutex        = NULL;
 SemaphoreHandle_t fsMutex           = NULL;
 // Independent ESP32 firmware version & build counter (single source of truth for build.yml & PWA).
 // Increment FW_BUILD by +1 on EVERY change to room_logger.ino; NEVER bump for dashboard-only changes!
-#define FW_VERSION "3.9.9"
-#define FW_BUILD   4
+#define FW_VERSION "3.11.0"
+#define FW_BUILD   6
 volatile bool ntpSyncedThisBoot     = false;
 bool          battTrackEnabled       = false;
 bool          wifiTrackEnabled       = false;
@@ -2004,6 +2007,262 @@ String buildStorageJson() {
   j += "\"fwVersion\":\"" FW_VERSION "\",\"fwBuild\":" + String(FW_BUILD);
   j += "}";
   return j;
+}
+
+
+// ---------------- ESP32 Air Intelligence (7 Psychrometric & Statistical Metrics) ----------------
+const char* DAILY_STATS_FILE = "/daily_stats.txt";
+const int MAX_DAILY_STATS = 30;
+struct DailyStat {
+  uint32_t dayNum; // epoch / 86400 (UTC day bucket)
+  float tSum;
+  float hSum;
+  float ahSum;
+  uint32_t count;
+};
+DailyStat dailyRing[MAX_DAILY_STATS];
+int dailyRingCount = 0;
+unsigned long lastAnalyticsPublishMs = 0;
+const unsigned long ANALYTICS_PUBLISH_INTERVAL_MS = 5UL * 60UL * 1000UL; // every 5 min
+
+static float calcVaporPressureHpa(float tempC, float rhPct) {
+  float es = 6.112f * expf((17.67f * tempC) / (tempC + 243.5f));
+  return (rhPct / 100.0f) * es;
+}
+
+static float calcAbsoluteHumidity(float tempC, float rhPct) {
+  float e = calcVaporPressureHpa(tempC, rhPct);
+  return (216.679f * e) / (tempC + 273.15f);
+}
+
+static float calcEnthalpyKjKg(float tempC, float rhPct) {
+  float e = calcVaporPressureHpa(tempC, rhPct);
+  float denom = 1013.25f - e;
+  if (denom < 1.0f) denom = 1.0f;
+  float W = 0.62198f * (e / denom);
+  return 1.006f * tempC + W * (2501.0f + 1.86f * tempC);
+}
+
+static float calcHeatIndexC(float tempC, float rhPct) {
+  if (tempC < 26.7f || rhPct < 40.0f) return tempC;
+  float T = tempC * 1.8f + 32.0f;
+  float R = rhPct;
+  float hiF = -42.379f
+    + 2.04901523f * T
+    + 10.14333127f * R
+    - 0.22475541f * T * R
+    - 0.00683783f * T * T
+    - 0.05481717f * R * R
+    + 0.00122874f * T * T * R
+    + 0.00085282f * T * R * R
+    - 0.00000199f * T * T * R * R;
+  if (R > 85.0f && T >= 80.0f && T <= 87.0f) {
+    hiF += ((R - 85.0f) / 10.0f) * ((87.0f - T) / 5.0f);
+  }
+  return (hiF - 32.0f) / 1.8f;
+}
+
+static String dayNumToIso(uint32_t dayNum) {
+  time_t ep = (time_t)((uint64_t)dayNum * 86400ULL);
+  struct tm t;
+  gmtime_r(&ep, &t);
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%04d-%02d-%02d", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
+  return String(buf);
+}
+
+void loadDailyAnalyticsFromDisk() {
+  if (!fsReady) return;
+  if (fsMutex != NULL && xSemaphoreTake(fsMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
+  dailyRingCount = 0;
+  if (LittleFS.exists(DAILY_STATS_FILE)) {
+    File f = LittleFS.open(DAILY_STATS_FILE, "r");
+    if (f) {
+      while (f.available() && dailyRingCount < MAX_DAILY_STATS) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() < 5) continue;
+        DailyStat s = {0, 0, 0, 0, 0};
+        if (sscanf(line.c_str(), "%u,%f,%f,%f,%u", &s.dayNum, &s.tSum, &s.hSum, &s.ahSum, &s.count) == 5 && s.count > 0) {
+          dailyRing[dailyRingCount++] = s;
+        }
+      }
+      f.close();
+    }
+  }
+  if (fsMutex != NULL) xSemaphoreGive(fsMutex);
+}
+
+static void saveDailyAnalyticsToDisk() {
+  if (!fsReady) return;
+  if (fsMutex != NULL && xSemaphoreTake(fsMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
+  File f = LittleFS.open(DAILY_STATS_FILE, "w");
+  if (f) {
+    for (int i = 0; i < dailyRingCount; i++) {
+      f.printf("%u,%.2f,%.2f,%.2f,%u\n", dailyRing[i].dayNum, dailyRing[i].tSum, dailyRing[i].hSum, dailyRing[i].ahSum, dailyRing[i].count);
+    }
+    f.close();
+  }
+  if (fsMutex != NULL) xSemaphoreGive(fsMutex);
+}
+
+void recordDailyAnalyticsSample(unsigned long epoch, float temp, float hum) {
+  if (epoch < MIN_VALID_EPOCH) return;
+  uint32_t dNum = (uint32_t)(epoch / 86400UL);
+  float ah = calcAbsoluteHumidity(temp, hum);
+  if (dailyRingCount > 0 && dailyRing[dailyRingCount - 1].dayNum == dNum) {
+    DailyStat& cur = dailyRing[dailyRingCount - 1];
+    cur.tSum += temp;
+    cur.hSum += hum;
+    cur.ahSum += ah;
+    cur.count++;
+  } else {
+    if (dailyRingCount >= MAX_DAILY_STATS) {
+      for (int i = 1; i < MAX_DAILY_STATS; i++) dailyRing[i - 1] = dailyRing[i];
+      dailyRingCount = MAX_DAILY_STATS - 1;
+    }
+    dailyRing[dailyRingCount++] = { dNum, temp, hum, ah, 1 };
+  }
+  if (dailyRing[dailyRingCount - 1].count % 10 == 1) {
+    saveDailyAnalyticsToDisk();
+  }
+}
+
+static void calcMeanStdArr(const float* arr, int n, float& outMean, float& outStd) {
+  if (n <= 0) { outMean = 0; outStd = 0; return; }
+  float sum = 0;
+  for (int i = 0; i < n; i++) sum += arr[i];
+  outMean = sum / (float)n;
+  if (n < 2) { outStd = 0; return; }
+  float sq = 0;
+  for (int i = 0; i < n; i++) { float d = arr[i] - outMean; sq += d * d; }
+  outStd = sqrtf(sq / (float)n);
+}
+
+bool publishAnalyticsToFirebase(float liveT, float liveH, unsigned long epoch) {
+  if (WiFi.status() != WL_CONNECTED || !isfinite(liveT) || !isfinite(liveH)) return false;
+  String fbHost, fbAuth;
+  if (xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
+  fbHost = currentFirebaseHost;
+  fbAuth = currentFirebaseAuth;
+  xSemaphoreGive(settingsMutex);
+  if (fbHost.length() == 0) return false;
+
+  float vp = calcVaporPressureHpa(liveT, liveH);
+  float ah = calcAbsoluteHumidity(liveT, liveH);
+  float enth = calcEnthalpyKjKg(liveT, liveH);
+  float hi = calcHeatIndexC(liveT, liveH);
+  bool comfortNow = (liveT >= 20.0f && liveT <= 26.0f && liveH >= 30.0f && liveH <= 60.0f);
+
+  float dT[MAX_DAILY_STATS], dH[MAX_DAILY_STATS], dAH[MAX_DAILY_STATS];
+  int totalDays = dailyRingCount;
+  int compliantDays = 0, moldStreak = 0, moldMaxStreak = 0, moldHighDays = 0, moldStrictDays = 0;
+  for (int i = 0; i < totalDays; i++) {
+    float n = (float)(dailyRing[i].count > 0 ? dailyRing[i].count : 1);
+    dT[i]  = dailyRing[i].tSum / n;
+    dH[i]  = dailyRing[i].hSum / n;
+    dAH[i] = dailyRing[i].ahSum / n;
+    if (dT[i] >= 20.0f && dT[i] <= 26.0f && dH[i] >= 30.0f && dH[i] <= 60.0f) compliantDays++;
+    if (dH[i] > 60.0f && dT[i] >= 20.0f && dT[i] <= 30.0f) {
+      moldHighDays++;
+      moldStreak++;
+      if (moldStreak > moldMaxStreak) moldMaxStreak = moldStreak;
+    } else {
+      moldStreak = 0;
+    }
+    if (dH[i] > 65.0f && dT[i] >= 20.0f && dT[i] <= 30.0f) moldStrictDays++;
+  }
+  float comfortPct = totalDays > 0 ? ((float)compliantDays / (float)totalDays) * 100.0f : (comfortNow ? 100.0f : 0.0f);
+  const char* moldLevel = (moldStreak >= 7) ? "High" : (moldStreak >= 3 ? "Elevated" : (moldStreak >= 1 ? "Low" : "Safe"));
+
+  int start7 = (totalDays > 7) ? (totalDays - 7) : 0;
+  int n7 = totalDays - start7;
+  float t7 = liveT, vol7T = 0, h7 = liveH, vol7H = 0, ah7 = ah, vol7AH = 0;
+  float t30 = liveT, h30 = liveH, ah30 = ah, tmpStd = 0;
+  if (n7 > 0) {
+    calcMeanStdArr(dT + start7, n7, t7, vol7T);
+    calcMeanStdArr(dH + start7, n7, h7, vol7H);
+    calcMeanStdArr(dAH + start7, n7, ah7, vol7AH);
+  }
+  if (totalDays > 0) {
+    calcMeanStdArr(dT, totalDays, t30, tmpStd);
+    calcMeanStdArr(dH, totalDays, h30, tmpStd);
+    calcMeanStdArr(dAH, totalDays, ah30, tmpStd);
+  }
+
+  float latestZT = 0, latestZH = 0, latestZAH = 0;
+  int zCount = 0;
+  String zArrJson = "[";
+  for (int i = 3; i < totalDays; i++) {
+    int ws = (i > 14) ? (i - 14) : 0;
+    int wn = i - ws;
+    float mT, sT, mH, sH, mA, sA;
+    calcMeanStdArr(dT + ws, wn, mT, sT);
+    calcMeanStdArr(dH + ws, wn, mH, sH);
+    calcMeanStdArr(dAH + ws, wn, mA, sA);
+    float zt = (sT > 0.05f) ? ((dT[i] - mT) / sT) : 0.0f;
+    float zh = (sH > 0.10f) ? ((dH[i] - mH) / sH) : 0.0f;
+    float za = (sA > 0.05f) ? ((dAH[i] - mA) / sA) : 0.0f;
+    if (i == totalDays - 1) { latestZT = zt; latestZH = zh; latestZAH = za; }
+    if (fabsf(zt) > 2.5f || fabsf(zh) > 2.5f || fabsf(za) > 2.5f) {
+      if (zCount > 0) zArrJson += ",";
+      String flg = "";
+      if (fabsf(zt) > 2.5f) flg += "T " + String(zt, 1) + "s";
+      if (fabsf(zh) > 2.5f) { if (flg.length()) flg += ", "; flg += "RH " + String(zh, 1) + "s"; }
+      if (fabsf(za) > 2.5f) { if (flg.length()) flg += ", "; flg += "AH " + String(za, 1) + "s"; }
+      zArrJson += "{\"day\":\"" + dayNumToIso(dailyRing[i].dayNum) + "\",\"t\":" + String(dT[i], 1) +
+                  ",\"h\":" + String(dH[i], 1) + ",\"flags\":\"" + flg + "\"}";
+      zCount++;
+    }
+  }
+  zArrJson += "]";
+
+  String payload;
+  payload.reserve(900);
+  payload = "{\"computedBy\":\"esp32\",\"updatedAt\":" + String(epoch) +
+    ",\"live\":{\"temp\":" + String(liveT, 1) + ",\"hum\":" + String(liveH, 1) +
+    ",\"vaporPressureHpa\":" + String(vp, 2) + ",\"absHumidity\":" + String(ah, 2) +
+    ",\"enthalpy\":" + String(enth, 1) + ",\"heatIndex\":" + String(hi, 1) +
+    ",\"comfortNow\":" + (comfortNow ? "true" : "false") +
+    "},\"comfort\":{\"pct\":" + String(comfortPct, 1) + ",\"compliantDays\":" + String(compliantDays) +
+    ",\"totalDays\":" + String(totalDays) +
+    "},\"mold\":{\"level\":\"" + String(moldLevel) + "\",\"streak\":" + String(moldStreak) +
+    ",\"maxStreak\":" + String(moldMaxStreak) + ",\"highRiskDays\":" + String(moldHighDays) +
+    ",\"strictDays\":" + String(moldStrictDays) +
+    "},\"rolling\":{\"days7\":" + String(n7) + ",\"days30\":" + String(totalDays) +
+    ",\"t7\":" + String(t7, 1) + ",\"h7\":" + String(h7, 1) + ",\"ah7\":" + String(ah7, 2) +
+    ",\"t30\":" + String(t30, 1) + ",\"h30\":" + String(h30, 1) + ",\"ah30\":" + String(ah30, 2) +
+    ",\"vol7T\":" + String(vol7T, 2) + ",\"vol7H\":" + String(vol7H, 2) + ",\"vol7AH\":" + String(vol7AH, 2) +
+    "},\"zscore\":{\"latestT\":" + String(latestZT, 2) + ",\"latestH\":" + String(latestZH, 2) +
+    ",\"latestAH\":" + String(latestZAH, 2) + ",\"anomalyCount\":" + String(zCount) +
+    ",\"anomalies\":" + zArrJson + "}}";
+
+  String url = "https://" + fbHost + "/analytics.json";
+  if (fbAuth.length() > 0) url += "?auth=" + fbAuth;
+
+  if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(10000)) != pdTRUE) return false;
+  fbSseClose(); // strictly 1 TLS session in RAM
+  int code = -1;
+  {
+    WiFiClientSecure client;
+    configureSecureClient(client);
+    client.setTimeout(10);
+    HTTPClient http;
+    http.setConnectTimeout(8000);
+    http.setTimeout(10000);
+    if (http.begin(client, url)) {
+      http.addHeader("Content-Type", "application/json");
+      code = http.PUT(payload);
+      http.end();
+    }
+  }
+  if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+  if (code == 200) {
+    lastAnalyticsPublishMs = millis();
+    Serial.println("[Analytics] Published 7 metrics to Firebase /analytics.json");
+    return true;
+  }
+  return false;
 }
 
 bool publishStatusToFirebase() {
@@ -2595,6 +2854,24 @@ void executeFirebaseCommand(const String& body, const String& fbHost, const Stri
     finishAck();
     delay(1200);
     ESP.restart();
+  } else if (action == "recomputeAnalytics") {
+    time_t nowSec = time(nullptr);
+    unsigned long ep = ((unsigned long)nowSec >= MIN_VALID_EPOCH) ? (unsigned long)nowSec : 0;
+    if (isfinite(lastTemp) && isfinite(lastHum) && ep > 0) {
+      // Release keep-alive socket first if active so publishAnalyticsToFirebase can acquire tlsMutex cleanly
+      if (fastKeepAliveActive) {
+        fastClient.stop();
+        fastKeepAliveActive = false;
+        if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+      }
+      bool ok = publishAnalyticsToFirebase(lastTemp, lastHum, ep);
+      lastCmdStage = ok ? "completed" : "error";
+      lastCmdResult = ok ? "7 air metrics calculated on ESP32 & synced to Firebase" : "Failed to publish /analytics.json";
+    } else {
+      lastCmdStage = "error";
+      lastCmdResult = "Waiting for valid sensor reading & clock";
+    }
+    finishAck();
   } else if (action == "refreshStatus") {
     lastCmdStage = "completed";
     lastCmdResult = "Health & storage refreshed";
@@ -3068,6 +3345,55 @@ bool handleReadingCycle() {
     return false;
   }
 
+  // Slope & 3-sample median glitch guard: catches DHT22 1-bit shift drops (e.g. 21.7C -> 10.8C)
+  // before they ever reach Firebase. Allows real rapid environment changes after 3 consistent cycles.
+  static uint8_t consecutiveSlopeRejects = 0;
+  if (lastGoodDhtReadMillis != 0 && isfinite(lastTemp) && isfinite(lastHum)) {
+    unsigned long dtMs = millis() - lastGoodDhtReadMillis;
+    if (dtMs <= 15UL * 60UL * 1000UL) {
+      float dT = fabsf(temp - lastTemp);
+      float dH = fabsf(hum - lastHum);
+      if (dT >= 4.0f || dH >= 15.0f) {
+        // Suspicious jump: take 2 confirmation samples and use median of 3
+        float tArr[3] = { temp, temp, temp };
+        float hArr[3] = { hum, hum, hum };
+        int got = 1;
+        for (int r = 0; r < 2; r++) {
+          vTaskDelay(pdMS_TO_TICKS(2100));
+          float rt = dht.readTemperature();
+          float rh = dht.readHumidity();
+          if (isfinite(rt) && isfinite(rh) && rt >= -40.0f && rt <= 80.0f && rh >= 0.0f && rh <= 100.0f) {
+            tArr[got] = rt;
+            hArr[got] = rh;
+            got++;
+          }
+        }
+        if (got == 3) {
+          // Median of 3
+          auto med3 = [](float a, float b, float c) -> float {
+            if ((a <= b && b <= c) || (c <= b && b <= a)) return b;
+            if ((b <= a && a <= c) || (c <= a && a <= b)) return a;
+            return c;
+          };
+          temp = med3(tArr[0], tArr[1], tArr[2]);
+          hum  = med3(hArr[0], hArr[1], hArr[2]);
+        }
+        dT = fabsf(temp - lastTemp);
+        dH = fabsf(hum - lastHum);
+        float dtMin = (dtMs > 30000UL) ? ((float)dtMs / 60000.0f) : 0.5f;
+        bool impossibleSlope = (dT >= 5.5f && (dT / dtMin) >= 2.5f) || (dH >= 20.0f && (dH / dtMin) >= 9.0f);
+        if (impossibleSlope && consecutiveSlopeRejects < 2) {
+          consecutiveSlopeRejects++;
+          Serial.println("DHT22 glitch rejected (slope " + String(lastTemp, 1) + "C -> " + String(temp, 1) +
+                         "C in " + String(dtMin, 1) + "m; reject #" + String(consecutiveSlopeRejects) + ")");
+          if (litForThisCycle && ledAvailableForStatus()) digitalWrite(LED_PIN, LOW);
+          return false;
+        }
+      }
+    }
+  }
+  consecutiveSlopeRejects = 0;
+
   lastTemp = temp;
   lastHum  = hum;
   lastGoodDhtReadMillis = millis();
@@ -3093,8 +3419,11 @@ bool handleReadingCycle() {
     uploaded = (putReading(epoch, payload) == 200);
   }
 
+  recordDailyAnalyticsSample(epoch, temp, hum);
   if (!uploaded) {
     queueReading(epoch, payload);
+  } else if (lastAnalyticsPublishMs == 0 || (millis() - lastAnalyticsPublishMs >= ANALYTICS_PUBLISH_INTERVAL_MS)) {
+    publishAnalyticsToFirebase(temp, hum, epoch);
   }
 
   if (litForThisCycle && ledAvailableForStatus()) digitalWrite(LED_PIN, LOW);
@@ -4889,7 +5218,8 @@ void setup() {
   loadOtaCredentials();       // pulls in any login saved earlier via /credentials, else secrets.h defaults
   loadFirebaseSettings();     // pulls in any host/auth saved earlier via /firebase, else secrets.h defaults
   loadOpenNetworkSetting();   // pulls in the free-WiFi toggle saved earlier via /wifi, else defaults to ON
-  loadWifiNetworksFromDisk(); // pulls in any networks saved via /wifi, else seeds from secrets.h
+  loadWifiNetworksFromDisk();
+  loadDailyAnalyticsFromDisk(); // pulls in any networks saved via /wifi, else seeds from secrets.h
   loadPreferredWifi();
   loadOtaBinUrl();
   loadPowerMode();            // pulls in Normal / Low / Medium / High power mode
