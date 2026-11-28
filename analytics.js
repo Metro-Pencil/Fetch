@@ -861,12 +861,35 @@
   let lastClimateRollup = null;
   let rollupSyncBusy = false;
   const BRIEF_HISTORY_LS = 'rl_gemini_brief_history_v1';
+  const HOURLY_48H_LS = 'rl_hourly_48h_cache_v1';
   let lastHourly48hCloud = null;
+  let lastSavedDrawerFetchMs = 0;
+  function loadLocalHourly48h(){
+    if (lastHourly48hCloud) return lastHourly48hCloud;
+    try {
+      const obj = JSON.parse(localStorage.getItem(HOURLY_48H_LS) || 'null');
+      if (obj && Array.isArray(obj.hourly48h)){ lastHourly48hCloud = obj; return obj; }
+    } catch(e) {}
+    return null;
+  }
   let activeSavedTab = 'rollup';
   const PERF_STATS_LS = 'rl_esp_perf_stats_v1';
   let lastEspPerfStats = null;
   const GEMINI_MODELS   = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
   let geminiGenerating  = false;
+
+  async function fetchWithTimeout(url, options, timeoutMs){
+    const ms = timeoutMs || 5000;
+    const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), ms) : null;
+    try {
+      const opts = Object.assign({}, options || {});
+      if (ctrl) opts.signal = ctrl.signal;
+      return await fetch(url, opts);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
 
   function getGeminiApiKey(){
     try { return (localStorage.getItem(GEMINI_KEY_LS) || '').trim(); } catch(e) { return ''; }
@@ -988,7 +1011,7 @@
     const host = getHost();
     if (!host) return null;
     try {
-      const res = await fetch(appendAuthParam('https://' + host + '/dailyBrief.json'), { cache: 'no-store' });
+      const res = await fetchWithTimeout(appendAuthParam('https://' + host + '/dailyBrief.json'), { cache: 'no-store' }, 4000);
       if (!res.ok) return null;
       const obj = await res.json();
       if (obj && obj.text){
@@ -1124,7 +1147,7 @@
     const host = getHost();
     if (!host) return null;
     try {
-      const res = await fetch(appendAuthParam('https://' + host + '/climateRollup.json'), { cache: 'no-store' });
+      const res = await fetchWithTimeout(appendAuthParam('https://' + host + '/climateRollup.json'), { cache: 'no-store' }, 4000);
       if (!res.ok) return null;
       const obj = await res.json();
       if (obj && obj.weekly){
@@ -1187,11 +1210,12 @@
     const host = getHost();
     if (!host) return null;
     try {
-      const res = await fetch(appendAuthParam('https://' + host + '/hourly48h.json'), { cache: 'no-store' });
+      const res = await fetchWithTimeout(appendAuthParam('https://' + host + '/hourly48h.json'), { cache: 'no-store' }, 4000);
       if (!res.ok) return null;
       const obj = await res.json();
       if (obj && Array.isArray(obj.hourly48h)){
         lastHourly48hCloud = obj;
+        try { localStorage.setItem(HOURLY_48H_LS, JSON.stringify(obj)); } catch(e) {}
         return obj;
       }
     } catch(e) {}
@@ -1227,7 +1251,7 @@
     const host = getHost();
     if (!host) return loadBriefHistoryLocal();
     try {
-      const res = await fetch(appendAuthParam('https://' + host + '/dailyBriefHistory.json'), { cache: 'no-store' });
+      const res = await fetchWithTimeout(appendAuthParam('https://' + host + '/dailyBriefHistory.json'), { cache: 'no-store' }, 4000);
       if (!res.ok) return loadBriefHistoryLocal();
       const arr = await res.json();
       if (Array.isArray(arr) && arr.length){
@@ -1256,7 +1280,7 @@
     const host = getHost();
     if (!host) return loadLocalPerfStats();
     try {
-      const res = await fetch(appendAuthParam('https://' + host + '/perfStats.json'), { cache: 'no-store' });
+      const res = await fetchWithTimeout(appendAuthParam('https://' + host + '/perfStats.json'), { cache: 'no-store' }, 4000);
       if (!res.ok) return loadLocalPerfStats();
       const obj = await res.json();
       if (obj && (obj.ewmaTotalMs || obj.samples)){
@@ -1302,7 +1326,7 @@
     if (!dr) return;
     const show = (forceShow !== undefined) ? !!forceShow : !dr.classList.contains('show');
     dr.classList.toggle('show', show);
-    if (show) renderSavedRollupDrawer();
+    if (show) renderSavedRollupDrawer(false);
   }
 
   function switchSavedDrawerTab(tab){
@@ -1310,20 +1334,22 @@
     document.querySelectorAll('#ai-saved-drawer .ai-saved-tab').forEach(b => {
       b.classList.toggle('active', b.dataset.tab === activeSavedTab);
     });
-    renderSavedRollupDrawer();
+    // 0ms instant tab switch using cached data — zero network fetches!
+    paintSavedRollupPane();
   }
 
-  async function renderSavedRollupDrawer(){
+  function paintSavedRollupPane(){
     const pane = document.getElementById('ai-saved-pane');
     if (!pane) return;
-    pane.innerHTML = '<div class="ota-meta" style="margin:0;">Loading saved Firebase rollup &amp; brief history…</div>';
 
-    const [rollup, h48, hist, perf] = await Promise.all([
-      ensureHourlyClimateRollup(typeof getValidSorted === 'function' ? getValidSorted() : [], false),
-      fetchCloudHourly48h(),
-      fetchBriefHistoryCloud(),
-      fetchCloudPerfStats()
-    ]);
+    let rollup = lastClimateRollup || loadLocalClimateRollup();
+    if (!rollup){
+      const rows = (typeof getValidSorted === 'function') ? getValidSorted() : [];
+      if (rows.length) rollup = computeClimateRollup(rows);
+    }
+    const h48 = lastHourly48hCloud || loadLocalHourly48h();
+    const hist = loadBriefHistoryLocal();
+    const perf = lastEspPerfStats || loadLocalPerfStats();
 
     if (activeSavedTab === 'history'){
       if (!hist || !hist.length){
@@ -1351,7 +1377,7 @@
 
     // Default tab: 'rollup'
     if (!rollup || !rollup.weekly){
-      pane.innerHTML = '<div class="ota-meta" style="margin:0;">No weekly/monthly rollup saved yet. Tap <b>Sync on ESP32</b> or wait for readings to load.</div>';
+      pane.innerHTML = '<div class="ota-meta" style="margin:0;">No weekly/monthly rollup cached yet. Tap <b>Sync on ESP32</b> or wait a second for Firebase sync.</div>';
       return;
     }
     const w = rollup.weekly;
@@ -1401,6 +1427,26 @@
       }
     }
     pane.innerHTML = html;
+  }
+
+  async function renderSavedRollupDrawer(forceFetch){
+    // 1. Paint immediately in 0ms from RAM / localStorage cache (never blocks on network!)
+    paintSavedRollupPane();
+
+    // 2. Silently refresh from Firebase in the background at most once per 60s (unless forced)
+    if (!forceFetch && (Date.now() - lastSavedDrawerFetchMs) < 60000) return;
+    lastSavedDrawerFetchMs = Date.now();
+    try {
+      await Promise.allSettled([
+        fetchCloudClimateRollup(),
+        fetchCloudHourly48h(),
+        fetchBriefHistoryCloud(),
+        fetchCloudPerfStats()
+      ]);
+      if (document.getElementById('ai-saved-drawer')?.classList.contains('show')){
+        paintSavedRollupPane();
+      }
+    } catch(e) {}
   }
 
   // Build rich 48-hour (2-day) indoor hourly trajectory + day-by-day mold/comfort/season stats
@@ -1533,138 +1579,37 @@
     };
   }
 
-  // Fetch live outdoor weather + 48h curve (Open-Meteo Forecast) and live air quality (Open-Meteo AQI)
-  async function fetchLiveOutdoorComparison(indoorLive){
+  // Instant 0ms location helper: grabs raw lat/lon from app's #weather-loc field or cached GPS (no blocking API calls!)
+  function getRawLocationForGemini(){
     let loc = null;
-    let locSource = '';
+    let source = '';
     try {
       if (typeof manualWeatherLoc === 'function'){
         const m = manualWeatherLoc();
-        if (m){ loc = m; locSource = 'app-lat-lon'; }
+        if (m && Number.isFinite(m.lat) && Number.isFinite(m.lon)){ loc = m; source = 'app-lat-lon'; }
       }
-      if (!loc && typeof weatherLoc !== 'undefined' && weatherLoc && isFinite(weatherLoc.lat) && isFinite(weatherLoc.lon)){
-        loc = weatherLoc; locSource = 'cached-device-gps';
+      if (!loc && typeof weatherLoc !== 'undefined' && weatherLoc && Number.isFinite(weatherLoc.lat) && Number.isFinite(weatherLoc.lon)){
+        loc = weatherLoc; source = 'device-gps';
       }
-      if (!loc && typeof resolveWeatherLoc === 'function'){
-        const g = await resolveWeatherLoc();
-        if (g && isFinite(g.lat) && isFinite(g.lon)){
-          loc = g; locSource = 'device-gps';
+    } catch(e) {}
+    if (!loc) return { available: false, note: 'No lat,lon entered in Graphs -> Weather location field.' };
+    const out = {
+      available: true,
+      latitude: Math.round(loc.lat * 10000) / 10000,
+      longitude: Math.round(loc.lon * 10000) / 10000,
+      source: source
+    };
+    // If Graphs tab already has cached outdoor weather in RAM, include the latest point at 0ms cost
+    try {
+      if (typeof weatherCache !== 'undefined' && weatherCache && Array.isArray(weatherCache.temp) && weatherCache.temp.length){
+        const lt = weatherCache.temp[weatherCache.temp.length - 1];
+        const lh = (Array.isArray(weatherCache.hum) && weatherCache.hum.length) ? weatherCache.hum[weatherCache.hum.length - 1] : null;
+        if (lt && Number.isFinite(lt.y)){
+          out.cachedOutdoorNow = { tempC: Math.round(lt.y * 10) / 10, humidityPct: (lh && Number.isFinite(lh.y)) ? Math.round(lh.y * 10) / 10 : null };
         }
       }
     } catch(e) {}
-
-    if (!loc){
-      return {
-        available: false,
-        reason: 'No lat,lon configured in Graphs -> Weather location and browser geolocation unavailable.'
-      };
-    }
-
-    const lat = Math.round(loc.lat * 10000) / 10000;
-    const lon = Math.round(loc.lon * 10000) / 10000;
-    const wxUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
-      '&current=temperature_2m,relative_humidity_2m,apparent_temperature,dew_point_2m,surface_pressure,wind_speed_10m,precipitation,weather_code' +
-      '&hourly=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation' +
-      '&past_days=2&forecast_days=1&timezone=auto';
-    const aqiUrl = 'https://air-quality-api.open-meteo.com/v1/air-quality?latitude=' + lat + '&longitude=' + lon +
-      '&current=us_aqi,european_aqi,pm2_5,pm10&timezone=auto';
-
-    const [wxRes, aqiRes] = await Promise.allSettled([
-      fetch(wxUrl, { cache: 'no-store' }).then(r => r.ok ? r.json() : null),
-      fetch(aqiUrl, { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
-    ]);
-
-    const wx = wxRes.status === 'fulfilled' ? wxRes.value : null;
-    const aqi = aqiRes.status === 'fulfilled' ? aqiRes.value : null;
-    if (!wx || !wx.current){
-      return { available: false, lat, lon, reason: 'Open-Meteo outdoor weather fetch failed or offline.' };
-    }
-
-    const round1 = v => (v !== null && v !== undefined && isFinite(v)) ? Math.round(v * 10) / 10 : null;
-    const round2 = v => (v !== null && v !== undefined && isFinite(v)) ? Math.round(v * 100) / 100 : null;
-
-    const outT = Number(wx.current.temperature_2m);
-    const outH = Number(wx.current.relative_humidity_2m);
-    const outAH = (isFinite(outT) && isFinite(outH)) ? round2(calcAbsoluteHumidity(outT, outH)) : null;
-    const outEn = (isFinite(outT) && isFinite(outH)) ? round1(calcEnthalpyKjKg(outT, outH)) : null;
-
-    const liveOutdoor = {
-      source: 'Open-Meteo Forecast + Air Quality',
-      observedAt: wx.current.time || null,
-      tempC: round1(outT),
-      humidityPct: round1(outH),
-      feelsLikeC: round1(wx.current.apparent_temperature),
-      dewPointC: round1(wx.current.dew_point_2m),
-      pressureHpa: round1(wx.current.surface_pressure),
-      windKmh: round1(wx.current.wind_speed_10m),
-      precipMm: round1(wx.current.precipitation),
-      absHumidityGm3: outAH,
-      enthalpyKjKg: outEn,
-      airQuality: (aqi && aqi.current) ? {
-        usAqi: round1(aqi.current.us_aqi),
-        euAqi: round1(aqi.current.european_aqi),
-        pm25: round1(aqi.current.pm2_5),
-        pm10: round1(aqi.current.pm10)
-      } : null
-    };
-
-    const indoorVsOutdoorNow = (indoorLive && isFinite(outT) && isFinite(outH)) ? {
-      deltaTempC: round1(indoorLive.temp - outT),
-      deltaRhPct: round1(indoorLive.hum - outH),
-      deltaAhGm3: (outAH !== null) ? round2(indoorLive.absHumidity - outAH) : null,
-      deltaEnthalpyKjKg: (outEn !== null) ? round1(indoorLive.enthalpy - outEn) : null,
-      ventilationMoistureNote: (outAH !== null)
-        ? (outAH < indoorLive.absHumidity - 0.5
-          ? 'Outdoor air carries less moisture (opening windows dries room)'
-          : (outAH > indoorLive.absHumidity + 0.5
-            ? 'Outdoor air carries more moisture (opening windows adds moisture)'
-            : 'Indoor and outdoor moisture levels are nearly equal'))
-        : null
-    } : null;
-
-    // Summarize outdoor last 48h (up to current hour) + 3-hourly sampled curve
-    let outdoor48hSummary = null;
-    const outdoorCurve48h = [];
-    if (wx.hourly && Array.isArray(wx.hourly.time)){
-      const nowIso = wx.current.time || '';
-      const pts = [];
-      for (let i = 0; i < wx.hourly.time.length; i++){
-        const ts = wx.hourly.time[i];
-        if (nowIso && ts > nowIso) break;
-        const t = wx.hourly.temperature_2m ? wx.hourly.temperature_2m[i] : null;
-        const h = wx.hourly.relative_humidity_2m ? wx.hourly.relative_humidity_2m[i] : null;
-        const p = wx.hourly.precipitation ? wx.hourly.precipitation[i] : 0;
-        if (t !== null && h !== null) pts.push({ ts, t, h, p: p || 0 });
-      }
-      const last48 = pts.slice(-48);
-      if (last48.length){
-        const tsArr = last48.map(p => p.t);
-        const hsArr = last48.map(p => p.h);
-        outdoor48hSummary = {
-          hours: last48.length,
-          tempMinC: round1(Math.min(...tsArr)),
-          tempAvgC: round1(tsArr.reduce((a, b) => a + b, 0) / tsArr.length),
-          tempMaxC: round1(Math.max(...tsArr)),
-          humMinPct: round1(Math.min(...hsArr)),
-          humAvgPct: round1(hsArr.reduce((a, b) => a + b, 0) / hsArr.length),
-          humMaxPct: round1(Math.max(...hsArr)),
-          precipTotalMm: round1(last48.reduce((a, b) => a + b.p, 0))
-        };
-        for (let i = 0; i < last48.length; i += 3){
-          const p = last48[i];
-          outdoorCurve48h.push({ hr: p.ts.slice(5).replace('T', ' '), t: round1(p.t), rh: round1(p.h) });
-        }
-      }
-    }
-
-    return {
-      available: true,
-      location: { lat, lon, source: locSource, timezone: wx.timezone || null },
-      liveOutdoor,
-      indoorVsOutdoorNow,
-      outdoor48hSummary,
-      outdoorCurve48h
-    };
+    return out;
   }
 
   async function discoverGeminiFlashModel(apiKey){
@@ -1692,7 +1637,7 @@
 
   async function callGeminiModel(apiKey, modelId, prompt){
     const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(modelId) + ':generateContent?key=' + encodeURIComponent(apiKey);
-    const res = await fetch(endpoint, {
+    const res = await fetchWithTimeout(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // Omit sampling params (temperature/topP/topK) — unsupported on Gemini 3.x+
@@ -1700,7 +1645,7 @@
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { maxOutputTokens: 900 }
       })
-    });
+    }, 18000);
     if (!res.ok){
       let errMsg = '';
       try {
@@ -1751,24 +1696,43 @@
     const btn = document.getElementById('btn-ai-refresh');
     const bodyEl = document.getElementById('ai-brief-body');
     if (btn){ btn.disabled = true; btn.textContent = 'Writing…'; }
-    if (bodyEl && manual) bodyEl.innerHTML = '<div class="ota-meta" style="margin:0;">Gathering 48-hour room readings &amp; live outdoor weather/AQI for Gemini…</div>';
+    if (bodyEl && manual) bodyEl.innerHTML = '<div class="ota-meta" style="margin:0;">Step 1/2: Reading ESP32 48h &amp; rollup cache…</div>';
 
     const season = classifySeasonShift(data);
-    const twoDaySnapshot = buildTwoDayRoomSnapshot(validReadings, data);
-    const [outdoor, climateRollup, espHourly48h] = await Promise.all([
-      fetchLiveOutdoorComparison(data.live),
-      ensureHourlyClimateRollup(validReadings, false),
+    const rawLoc = getRawLocationForGemini();
+
+    // Fast parallel read of ESP32-compiled /climateRollup.json + /hourly48h.json (4s timeout each, zero Open-Meteo calls!)
+    let climateRollup = lastClimateRollup || loadLocalClimateRollup();
+    let espHourly48h = lastHourly48hCloud;
+    const [rRes, hRes] = await Promise.allSettled([
+      fetchCloudClimateRollup(),
       fetchCloudHourly48h()
     ]);
-    // Prefer ESP32's pre-compiled /hourly48h.json if fresher/richer than local loaded window
-    if (espHourly48h && Array.isArray(espHourly48h.hourly48h) && espHourly48h.hourly48h.length > twoDaySnapshot.hourly48h.length){
-      twoDaySnapshot.hourly48h = espHourly48h.hourly48h;
-      twoDaySnapshot.readingCount48h = espHourly48h.readingCount48h || twoDaySnapshot.readingCount48h;
-      twoDaySnapshot.hourlySource = 'esp32';
+    if (rRes.status === 'fulfilled' && rRes.value) climateRollup = rRes.value;
+    if (hRes.status === 'fulfilled' && hRes.value) espHourly48h = hRes.value;
+
+    // Prefer ESP32's pre-compiled /hourly48h.json directly so we don't re-scan raw logs!
+    let twoDayPayload;
+    if (espHourly48h && Array.isArray(espHourly48h.hourly48h) && espHourly48h.hourly48h.length > 0){
+      twoDayPayload = {
+        source: espHourly48h.computedBy || 'esp32',
+        readingCount48h: espHourly48h.readingCount48h || espHourly48h.hourly48h.length,
+        hoursCount: espHourly48h.hoursCount || espHourly48h.hourly48h.length,
+        hourly48h: espHourly48h.hourly48h
+      };
+    } else {
+      twoDayPayload = buildTwoDayRoomSnapshot(validReadings, data);
     }
+
+    if (!climateRollup && validReadings.length){
+      climateRollup = computeClimateRollup(validReadings);
+    }
+
+    if (bodyEl && manual) bodyEl.innerHTML = '<div class="ota-meta" style="margin:0;">Step 2/2: Asking Gemini Flash to write your brief…</div>';
 
     const payload = {
       localTime: new Date().toLocaleString(),
+      locationCoordinates: rawLoc,
       liveIndoor: {
         tempC: data.live.temp,
         humidityPct: data.live.hum,
@@ -1777,7 +1741,7 @@
         enthalpyKjKg: data.live.enthalpy,
         comfortNow: data.live.comfortNow
       },
-      last48HoursIndoor: twoDaySnapshot,
+      last48HoursIndoor: twoDayPayload,
       weeklyAndMonthlyRollup: climateRollup || null,
       comfortMoldSeasonAndTrends: {
         comfortCompliance: data.comfort,
@@ -1790,17 +1754,16 @@
         },
         rolling7dVs30dAndVolatility: data.rolling,
         zScoreAnomalies14d: data.zscore
-      },
-      liveOutdoorComparison: outdoor
+      }
     };
 
     const prompt =
-      'You are an insightful, friendly home-climate analyst. Based ONLY on the 48-hour indoor ESP32 sensor dataset and live outdoor weather/air-quality data in the JSON below, write a thorough, easy-to-understand daily room briefing for a non-technical homeowner:\n' +
-      '1. Paragraph 1 (5-6 sentences): Give a clear story of how the room felt and behaved over the last 2 days (yesterday vs today, warmest/coolest hours, day-night swing, comfort zone compliance %, why any hours left the comfort zone, and the 2-day mold/humidity pattern).\n' +
-      '2. Paragraph 2 (4-5 sentences): Compare the indoor room directly against the live outdoor weather & 48-hour outdoor conditions for the user\'s coordinates (temperature gap, absolute humidity / moisture difference, outdoor air quality PM2.5/AQI if present), and weave in the low-resolution weekly vs monthly rollup (this week vs the past month and week-by-week drift), seasonal shift (7d vs 30d), 7-day stability/volatility, and 14-day anomaly Z-scores.\n' +
-      '3. Exactly 3 or 4 practical bullet points starting with "- " giving concrete actions for today (explicitly factoring in whether opening windows right now helps or hurts based on indoor vs outdoor moisture and outdoor AQI, plus comfort/mold prevention).\n' +
-      'If liveOutdoorComparison.available is false, briefly note that outdoor comparison is off until lat,lon is entered in the Graphs weather box. Keep total length around 220-320 words. Plain everyday English, no markdown headings, no bold asterisks.\n\n' +
-      'Room & Outdoor JSON:\n' + JSON.stringify(payload);
+      'You are an insightful, friendly home-climate analyst. Based on the 48-hour indoor ESP32 sensor dataset, the weekly/monthly rollup, and the user\'s raw locationCoordinates (latitude/longitude) in the JSON below, write a thorough, easy-to-understand daily room briefing:\n' +
+      '1. Paragraph 1 (5-6 sentences): Give a clear story of how the room felt and behaved over the last 2 days (warmest/coolest hours, day-night swing, feels-like temperature, comfort zone compliance %, and the 2-day humidity/mold pattern).\n' +
+      '2. Paragraph 2 (4-5 sentences): Use locationCoordinates (latitude/longitude + current date) to identify the region and compare the indoor room against typical local outdoor weather, seasonal climate, and air-quality/AQI considerations for that location right now (plus cachedOutdoorNow if present), and weave in the weekly vs monthly rollup, seasonal shift (7d vs 30d), stability/volatility, and 14-day Z-score anomalies.\n' +
+      '3. Exactly 3 or 4 practical bullet points starting with "- " giving concrete actions for today (window ventilation advice, comfort, and mold/dampness prevention tailored to the local climate and indoor readings).\n' +
+      'Keep total length around 220-320 words. Plain everyday English, no markdown headings, no bold asterisks.\n\n' +
+      'Room & Location JSON:\n' + JSON.stringify(payload);
 
     try {
       const candidates = [];
@@ -1846,9 +1809,9 @@
 
       setCachedGeminiModel(usedModel);
       const rollupTag = climateRollup ? (' + ' + (climateRollup.monthly ? climateRollup.monthly.days : 30) + 'd rollup') : '';
-      const outdoorTag = outdoor && outdoor.available
-        ? ('48h' + rollupTag + ' + outdoor (' + outdoor.location.lat.toFixed(2) + ', ' + outdoor.location.lon.toFixed(2) + ')')
-        : ('48h' + rollupTag + ' indoor');
+      const outdoorTag = rawLoc && rawLoc.available
+        ? ('48h' + rollupTag + ' · ' + rawLoc.latitude.toFixed(2) + ', ' + rawLoc.longitude.toFixed(2))
+        : ('48h' + rollupTag);
       const briefObj = {
         day: todayKey,
         generatedAt: Date.now(),
@@ -1881,7 +1844,7 @@
       const cloud = await fetchCloudAiBrief();
       const latest = cloud || local;
       const todayKey = localDayKeyFromMs(Date.now());
-      await Promise.all([ensureHourlyClimateRollup(typeof getValidSorted === 'function' ? getValidSorted() : [], false), fetchCloudPerfStats()]);
+      await Promise.allSettled([ensureHourlyClimateRollup(typeof getValidSorted === 'function' ? getValidSorted() : [], false), fetchCloudHourly48h(), fetchBriefHistoryCloud(), fetchCloudPerfStats()]);
       if (getGeminiApiKey() && (!latest || latest.day !== todayKey)){
         generateGeminiDailyBrief(false);
       }

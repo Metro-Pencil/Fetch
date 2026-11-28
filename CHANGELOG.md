@@ -1,3 +1,13 @@
+## v3.17.2 (2026-11-28) — Instant 0ms Saved Data Drawer & Tab Switching (Dashboard-Only)
+- **Instant Stale-While-Revalidate Saved Data**: Opening **Saved Data** or switching between **Weekly & Monthly Rollup**, **Past Briefs**, and **Raw JSON** now renders immediately in 0 ms from RAM + `localStorage` (`rl_hourly_48h_cache_v1`, `rl_climate_rollup_v1`, `rl_gemini_brief_history_v1`) with zero blocking spinner.
+- **Zero Network Calls on Tab Switch**: Background Firebase refresh runs silently at most once per 60 seconds and pre-warms on app boot.
+- **Firmware untouched**: `room_logger/room_logger.ino` remains at `FW_VERSION "3.15.0"` / `FW_BUILD 10`.
+
+## v3.17.1 (2026-11-28) — Fast Non-Blocking Brief & Saved Data Fix (Dashboard-Only)
+- **Removed Open-Meteo & Geolocation Blocking from Refresh Brief**: `generateGeminiDailyBrief()` no longer waits on Open-Meteo HTTP calls or browser GPS prompts; it passes your raw `lat,lon` coordinates directly to Gemini and uses the ESP32's pre-built `/hourly48h.json` and `/climateRollup.json` immediately.
+- **Strict Network Timeouts & Zero-Hang Saved Data**: Added `AbortController` timeouts (4s on Firebase cache reads, 18s on Gemini API) and `try/catch` + `Promise.allSettled` guards so neither **Refresh Brief** nor **Saved Data** can ever hang on "Loading..." or "Writing...".
+- **Firmware untouched**: `room_logger/room_logger.ino` remains at `FW_VERSION "3.15.0"` / `FW_BUILD 10` (no ESP32 reflash needed).
+
 ## v3.17.0 (2026-11-28) — Tailored Per-Process Verification & Cloud-Learned ETA Predictor (Firmware `3.15.0` / Build `10` + Dashboard `3.17.0`)
 - **Tailored Verification for All 19 Processes (`PROCESS_SPECS`)**: Custom step labels, custom timeouts, and real state-level verification per process (`refreshRollup` / `recomputeAnalytics` confirm order received + working without false timeout failures; `reboot` / `formatFs` verify uptime reset; `otaUrl` verifies new `fwBuild`; `setPowerMode`, Wi-Fi, battery/Wi-Fi trackers, and `setStartVoltage` verify live `/status.json` state directly).
 - **ESP32 Immediate "Order Received" ACK (`FW_BUILD 10`)**: Extended `isSlowCmd` in `room_logger.ino` to cover `refreshRollup`, `recomputeAnalytics`, `formatFs`, and `setFirebaseConfig` so the ESP32 immediately confirms receipt before starting multi-second work.
