@@ -130,6 +130,7 @@ void fbSseClose();
 void serviceFirebaseSse();
 void drainFirebaseCmdQueue();
 bool publishAnalyticsToFirebase(float liveT, float liveH, unsigned long epoch);
+bool publishClimateRollupToFirebase(unsigned long epoch);
 void recordDailyAnalyticsSample(unsigned long epoch, float temp, float hum);
 void loadDailyAnalyticsFromDisk();
 String jsonEscape(const String& s);
@@ -1737,8 +1738,8 @@ SemaphoreHandle_t telemMutex        = NULL;
 SemaphoreHandle_t fsMutex           = NULL;
 // Independent ESP32 firmware version & build counter (single source of truth for build.yml & PWA).
 // Increment FW_BUILD by +1 on EVERY change to room_logger.ino; NEVER bump for dashboard-only changes!
-#define FW_VERSION "3.11.0"
-#define FW_BUILD   6
+#define FW_VERSION "3.12.0"
+#define FW_BUILD   7
 volatile bool ntpSyncedThisBoot     = false;
 bool          battTrackEnabled       = false;
 bool          wifiTrackEnabled       = false;
@@ -2024,6 +2025,8 @@ DailyStat dailyRing[MAX_DAILY_STATS];
 int dailyRingCount = 0;
 unsigned long lastAnalyticsPublishMs = 0;
 const unsigned long ANALYTICS_PUBLISH_INTERVAL_MS = 5UL * 60UL * 1000UL; // every 5 min
+unsigned long lastRollupPublishMs = 0;
+const unsigned long ROLLUP_PUBLISH_INTERVAL_MS = 60UL * 60UL * 1000UL; // every 1 hour
 
 static float calcVaporPressureHpa(float tempC, float rhPct) {
   float es = 6.112f * expf((17.67f * tempC) / (tempC + 243.5f));
@@ -2260,6 +2263,143 @@ bool publishAnalyticsToFirebase(float liveT, float liveH, unsigned long epoch) {
   if (code == 200) {
     lastAnalyticsPublishMs = millis();
     Serial.println("[Analytics] Published 7 metrics to Firebase /analytics.json");
+    return true;
+  }
+  return false;
+}
+
+bool publishClimateRollupToFirebase(unsigned long epoch) {
+  if (WiFi.status() != WL_CONNECTED || dailyRingCount <= 0) return false;
+  String fbHost, fbAuth;
+  if (xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
+  fbHost = currentFirebaseHost;
+  fbAuth = currentFirebaseAuth;
+  xSemaphoreGive(settingsMutex);
+  if (fbHost.length() == 0) return false;
+
+  int totalDays = dailyRingCount;
+  float dT[MAX_DAILY_STATS], dH[MAX_DAILY_STATS], dAH[MAX_DAILY_STATS], dEn[MAX_DAILY_STATS], dFL[MAX_DAILY_STATS];
+  bool dOk[MAX_DAILY_STATS], dMold60[MAX_DAILY_STATS], dMold65[MAX_DAILY_STATS];
+
+  for (int i = 0; i < totalDays; i++) {
+    float n = (float)(dailyRing[i].count > 0 ? dailyRing[i].count : 1);
+    dT[i]  = dailyRing[i].tSum / n;
+    dH[i]  = dailyRing[i].hSum / n;
+    dAH[i] = dailyRing[i].ahSum / n;
+    dEn[i] = calcEnthalpyKjKg(dT[i], dH[i]);
+    dFL[i] = calcHeatIndexC(dT[i], dH[i]);
+    dOk[i] = (dT[i] >= 20.0f && dT[i] <= 26.0f && dH[i] >= 30.0f && dH[i] <= 60.0f);
+    dMold60[i] = (dH[i] > 60.0f && dT[i] >= 20.0f && dT[i] <= 30.0f);
+    dMold65[i] = (dH[i] > 65.0f && dT[i] >= 20.0f && dT[i] <= 30.0f);
+  }
+
+  auto buildPeriodJson = [&](int startIdx, int endIdx, bool includeMaxStreak) -> String {
+    int cnt = endIdx - startIdx;
+    if (cnt <= 0) return "null";
+    float tMin = dT[startIdx], tMax = dT[startIdx], hMin = dH[startIdx], hMax = dH[startIdx];
+    float enSum = 0, flSum = 0;
+    int okN = 0, m60 = 0, m65 = 0, curSt = 0, maxSt = 0;
+    for (int i = startIdx; i < endIdx; i++) {
+      if (dT[i] < tMin) tMin = dT[i];
+      if (dT[i] > tMax) tMax = dT[i];
+      if (dH[i] < hMin) hMin = dH[i];
+      if (dH[i] > hMax) hMax = dH[i];
+      enSum += dEn[i];
+      flSum += dFL[i];
+      if (dOk[i]) okN++;
+      if (dMold60[i]) { m60++; curSt++; if (curSt > maxSt) maxSt = curSt; } else { curSt = 0; }
+      if (dMold65[i]) m65++;
+    }
+    float tAvg = 0, volT = 0, hAvg = 0, volH = 0, ahAvg = 0, tmpS = 0;
+    calcMeanStdArr(dT + startIdx, cnt, tAvg, volT);
+    calcMeanStdArr(dH + startIdx, cnt, hAvg, volH);
+    calcMeanStdArr(dAH + startIdx, cnt, ahAvg, tmpS);
+    float okPct = ((float)okN / (float)cnt) * 100.0f;
+    String s = "{\"days\":" + String(cnt) +
+      ",\"tMin\":" + String(tMin, 1) + ",\"tAvg\":" + String(tAvg, 1) + ",\"tMax\":" + String(tMax, 1) +
+      ",\"rhMin\":" + String(hMin, 1) + ",\"rhAvg\":" + String(hAvg, 1) + ",\"rhMax\":" + String(hMax, 1) +
+      ",\"ahAvg\":" + String(ahAvg, 2) + ",\"enthalpyAvg\":" + String(enSum / (float)cnt, 1) +
+      ",\"feelsLikeAvg\":" + String(flSum / (float)cnt, 1) +
+      ",\"comfortPct\":" + String(okPct, 1) +
+      ",\"moldHighDays\":" + String(m60) + ",\"moldStrictDays\":" + String(m65);
+    if (includeMaxStreak) s += ",\"maxMoldStreak\":" + String(maxSt);
+    s += ",\"volT\":" + String(volT, 2) + ",\"volH\":" + String(volH, 2) + "}";
+    return s;
+  };
+
+  int start7 = (totalDays > 7) ? (totalDays - 7) : 0;
+  String weeklyJson = buildPeriodJson(start7, totalDays, false);
+  String monthlyJson = buildPeriodJson(0, totalDays, true);
+
+  // Weekly buckets (7-day chunks across the 30-day ring)
+  String wbJson = "[";
+  int wIdx = 0;
+  for (int i = 0; i < totalDays; i += 7) {
+    int j = (i + 7 < totalDays) ? (i + 7) : totalDays;
+    int cnt = j - i;
+    float sT = 0, sH = 0, sA = 0;
+    int okN = 0, mN = 0;
+    for (int k = i; k < j; k++) {
+      sT += dT[k]; sH += dH[k]; sA += dAH[k];
+      if (dOk[k]) okN++;
+      if (dMold60[k]) mN++;
+    }
+    if (wIdx > 0) wbJson += ",";
+    wIdx++;
+    String dFrom = dayNumToIso(dailyRing[i].dayNum).substring(5);
+    String dTo   = dayNumToIso(dailyRing[j - 1].dayNum).substring(5);
+    wbJson += "{\"week\":\"W" + String(wIdx) + "\",\"from\":\"" + dFrom + "\",\"to\":\"" + dTo +
+              "\",\"days\":" + String(cnt) + ",\"tAvg\":" + String(sT / cnt, 1) +
+              ",\"rhAvg\":" + String(sH / cnt, 1) + ",\"ahAvg\":" + String(sA / cnt, 2) +
+              ",\"comfortPct\":" + String((int)roundf(((float)okN / cnt) * 100.0f)) +
+              ",\"moldDays\":" + String(mN) + "}";
+  }
+  wbJson += "]";
+
+  // Low-res 30-day daily trail
+  String d30Json = "[";
+  for (int i = 0; i < totalDays; i++) {
+    if (i > 0) d30Json += ",";
+    String mmdd = dayNumToIso(dailyRing[i].dayNum).substring(5);
+    d30Json += "{\"d\":\"" + mmdd + "\",\"t\":" + String(dT[i], 1) +
+               ",\"h\":" + String(dH[i], 1) + ",\"ah\":" + String(dAH[i], 1) +
+               ",\"ok\":" + String(dOk[i] ? 1 : 0) + ",\"m\":" + String(dMold60[i] ? 1 : 0) + "}";
+  }
+  d30Json += "]";
+
+  char msBuf[24];
+  snprintf(msBuf, sizeof(msBuf), "%llu", (unsigned long long)epoch * 1000ULL);
+
+  String payload;
+  payload.reserve(2200);
+  payload = "{\"computedBy\":\"esp32\",\"updatedAt\":" + String(msBuf) +
+    ",\"resolution\":\"daily-30d+weekly-4w+monthly\",\"weekly\":" + weeklyJson +
+    ",\"monthly\":" + monthlyJson + ",\"weeklyBuckets\":" + wbJson +
+    ",\"daily30d\":" + d30Json + "}";
+
+  String url = "https://" + fbHost + "/climateRollup.json";
+  if (fbAuth.length() > 0) url += "?auth=" + fbAuth;
+
+  if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(10000)) != pdTRUE) return false;
+  fbSseClose();
+  int code = -1;
+  {
+    WiFiClientSecure client;
+    configureSecureClient(client);
+    client.setTimeout(10);
+    HTTPClient http;
+    http.setConnectTimeout(8000);
+    http.setTimeout(10000);
+    if (http.begin(client, url)) {
+      http.addHeader("Content-Type", "application/json");
+      code = http.PUT(payload);
+      http.end();
+    }
+  }
+  if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+  if (code == 200) {
+    lastRollupPublishMs = millis();
+    Serial.println("[Analytics] Published hourly weekly/monthly rollup to /climateRollup.json");
     return true;
   }
   return false;
@@ -3422,8 +3562,13 @@ bool handleReadingCycle() {
   recordDailyAnalyticsSample(epoch, temp, hum);
   if (!uploaded) {
     queueReading(epoch, payload);
-  } else if (lastAnalyticsPublishMs == 0 || (millis() - lastAnalyticsPublishMs >= ANALYTICS_PUBLISH_INTERVAL_MS)) {
-    publishAnalyticsToFirebase(temp, hum, epoch);
+  } else {
+    if (lastAnalyticsPublishMs == 0 || (millis() - lastAnalyticsPublishMs >= ANALYTICS_PUBLISH_INTERVAL_MS)) {
+      publishAnalyticsToFirebase(temp, hum, epoch);
+    }
+    if (lastRollupPublishMs == 0 || (millis() - lastRollupPublishMs >= ROLLUP_PUBLISH_INTERVAL_MS)) {
+      publishClimateRollupToFirebase(epoch);
+    }
   }
 
   if (litForThisCycle && ledAvailableForStatus()) digitalWrite(LED_PIN, LOW);
