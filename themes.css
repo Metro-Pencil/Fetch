@@ -1617,6 +1617,125 @@
     margin-bottom: 10px; font-family: var(--sans); font-size: 12px;
   }
 
+  /* ---------- Hero Top Insight Strip, Actionable Advice Sheet & SVG Visuals (v3.12.0) ---------- */
+  .cream-metrics.three-col {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .cream-metrics.three-col .cream-metric-val {
+    font-size: clamp(1.35rem, 5.2vw, 1.85rem);
+  }
+  .hero-intel-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: 12px;
+  }
+  .intel-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
+    padding: 6px 11px;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: transform 120ms ease, border-color 160ms ease, background-color 160ms ease;
+  }
+  .intel-chip:active { transform: scale(0.96); }
+  .intel-chip.active {
+    border-color: var(--temp);
+    background: rgba(245, 166, 107, 0.16);
+  }
+  .intel-chip .idot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0;
+  }
+  .intel-chip.ok .idot   { background: var(--ok); }
+  .intel-chip.warn .idot { background: var(--warn); }
+  .intel-chip.err .idot  { background: var(--err); }
+  .intel-chip.info .idot { background: var(--hum); }
+
+  .intel-advice-sheet {
+    display: none;
+    margin-top: 10px;
+    padding: 13px 14px;
+    border-radius: 16px;
+    background: var(--panel);
+    border: 1px solid rgba(245, 166, 107, 0.38);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.28);
+  }
+  .intel-advice-sheet.show { display: block; }
+  .intel-advice-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-bottom: 6px;
+  }
+  .intel-advice-title {
+    font-family: var(--display, var(--sans));
+    font-size: 13.5px; font-weight: 700; color: var(--text);
+  }
+  .intel-advice-plain {
+    font-family: var(--sans); font-size: 12.5px; line-height: 1.48; color: var(--text);
+    margin: 0 0 8px;
+  }
+  .intel-advice-tips {
+    margin: 0; padding-left: 16px;
+    font-family: var(--sans); font-size: 12px; line-height: 1.5; color: var(--muted);
+  }
+  .intel-advice-tips li { margin-bottom: 3px; }
+  .intel-advice-tech {
+    margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  }
+  .intel-plain-note {
+    font-family: var(--sans); font-size: 12px; line-height: 1.45; color: var(--muted);
+    margin-top: 7px;
+  }
+  .intel-viz-box {
+    margin-top: 10px;
+    padding: 10px;
+    border-radius: 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+  }
+  .intel-viz-title {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-bottom: 6px;
+  }
+  .intel-viz-svg {
+    width: 100%; height: auto; display: block; overflow: visible;
+  }
+  .enth-scale {
+    position: relative;
+    height: 10px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #60A5FA 0%, #4ADE80 35%, #FBBF24 68%, #FB7185 100%);
+    margin-top: 8px;
+  }
+  .enth-pin {
+    position: absolute; top: -3px; width: 4px; height: 16px;
+    border-radius: 3px; background: #FFFFFF; box-shadow: 0 0 6px rgba(0,0,0,0.65);
+    transform: translateX(-50%);
+  }
+  .mold-dots {
+    display: flex; gap: 6px; margin-top: 8px;
+  }
+  .mold-dot {
+    flex: 1; height: 8px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border);
+  }
+  .mold-dot.on-low  { background: var(--warn); border-color: transparent; }
+  .mold-dot.on-elev { background: #F97316; border-color: transparent; }
+  .mold-dot.on-high { background: var(--err); border-color: transparent; }
+
+  [data-theme="kinetic"] .intel-chip { background: rgba(16, 18, 24, 0.84); border-color: rgba(255, 255, 255, 0.12); }
+  [data-theme="kinetic"] .intel-advice-sheet { background: rgba(16, 18, 24, 0.94); }
+  [data-theme="atelier"] .intel-chip { background: #FFFFFF; }
+  [data-theme="atelier"] .intel-advice-sheet { background: #FFFFFF; }
+
   /* Responsive overrides placed AFTER all theme blocks so Kinetic/Atelier stay aligned on mobile */
   @media (max-width: 600px) {
     .card, [data-theme="atelier"] .card, [data-theme="kinetic"] .card {

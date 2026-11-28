@@ -1,4 +1,4 @@
-  const APP_VERSION = '3.11.0';
+  const APP_VERSION = '3.12.0';
   document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
   const VIEW_ORDER = ['dashboard', 'graphs', 'controls', 'system'];
@@ -143,7 +143,8 @@
 
   function cycleHeroDial(forceMode){
     const center = document.getElementById('hero-gauge-center');
-    heroDialMode = forceMode || (heroDialMode === 'temp' ? 'hum' : 'temp');
+    const dialOrder = ['temp', 'hum', 'feels'];
+    heroDialMode = forceMode || dialOrder[(dialOrder.indexOf(heroDialMode) + 1) % dialOrder.length];
     if (center){
       clearTimeout(window._dialSwitchTimer);
       center.classList.add('switching');
@@ -179,17 +180,29 @@
 
     const tempValEl = document.getElementById('hero-temp-val');
     const humValEl = document.getElementById('hero-hum-val');
+    const feelsValEl = document.getElementById('hero-feels-val');
+    const feelsLblEl = document.getElementById('hero-feels-lbl');
+    const feelsC = (latest && typeof calcHeatIndexC === 'function')
+      ? calcHeatIndexC(latest.temp, latest.hum)
+      : (latest ? latest.temp : null);
     if (latest){
       if (tempValEl) tempValEl.innerHTML = latest.temp.toFixed(1) + '<span>°C</span>';
       if (humValEl) humValEl.innerHTML = latest.hum.toFixed(1) + '<span>%RH</span>';
+      if (feelsValEl && feelsC !== null) feelsValEl.innerHTML = feelsC.toFixed(1) + '<span>°C</span>';
+      if (feelsLblEl && feelsC !== null){
+        const feelTag = feelsC >= 32 ? 'Hot / Oppressive' : (feelsC >= 27 ? 'Warm' : (feelsC >= 20 ? 'Feels Comfy' : (feelsC >= 15 ? 'Cool' : 'Chilly')));
+        feelsLblEl.textContent = feelTag;
+      }
     }
 
     const gaugeVal = document.getElementById('hero-gauge-val');
     const gaugeSub = document.getElementById('hero-gauge-sub');
     const dotT = document.getElementById('dial-dot-temp');
     const dotH = document.getElementById('dial-dot-hum');
+    const dotF = document.getElementById('dial-dot-feels');
     if (dotT) dotT.classList.toggle('active', heroDialMode === 'temp');
     if (dotH) dotH.classList.toggle('active', heroDialMode === 'hum');
+    if (dotF) dotF.classList.toggle('active', heroDialMode === 'feels');
 
     if (heroDialMode === 'temp'){
       const t = latest ? latest.temp : null;
@@ -197,12 +210,17 @@
       if (gaugeSub) gaugeSub.textContent = 'Room Temp';
       const pct = t !== null ? Math.max(6, Math.min(100, ((t - 10) / 35) * 100)) : 28;
       renderHeroGaugeSvg(pct, '#F5A66B');
-    } else {
+    } else if (heroDialMode === 'hum'){
       const h = latest ? latest.hum : null;
       if (gaugeVal) gaugeVal.innerHTML = (h !== null ? Math.round(h) : '—') + '<span class="unit-sup">%</span>';
       if (gaugeSub) gaugeSub.textContent = 'Humidity';
       const pct = h !== null ? Math.max(6, Math.min(100, h)) : 46;
       renderHeroGaugeSvg(pct, '#7DC4E4');
+    } else {
+      if (gaugeVal) gaugeVal.innerHTML = (feelsC !== null ? feelsC.toFixed(1) : '—') + '<span class="unit-sup">°C</span>';
+      if (gaugeSub) gaugeSub.textContent = 'Feels Like';
+      const pct = feelsC !== null ? Math.max(6, Math.min(100, ((feelsC - 10) / 35) * 100)) : 32;
+      renderHeroGaugeSvg(pct, '#5EEAD4');
     }
 
     const wifiEl = document.getElementById('hero-wifi-name');
