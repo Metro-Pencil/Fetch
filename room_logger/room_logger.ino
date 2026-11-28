@@ -131,6 +131,10 @@ void serviceFirebaseSse();
 void drainFirebaseCmdQueue();
 bool publishAnalyticsToFirebase(float liveT, float liveH, unsigned long epoch);
 bool publishClimateRollupToFirebase(unsigned long epoch);
+bool publishHourly48hToFirebase(unsigned long epoch);
+bool publishPerfStatsToFirebase(unsigned long epoch, unsigned long computeMs, unsigned long uploadMs, unsigned long totalMs);
+void loadHourly48hFromDisk();
+void recordHourly48hSample(unsigned long epoch, float temp, float hum);
 void recordDailyAnalyticsSample(unsigned long epoch, float temp, float hum);
 void loadDailyAnalyticsFromDisk();
 String jsonEscape(const String& s);
@@ -1738,8 +1742,8 @@ SemaphoreHandle_t telemMutex        = NULL;
 SemaphoreHandle_t fsMutex           = NULL;
 // Independent ESP32 firmware version & build counter (single source of truth for build.yml & PWA).
 // Increment FW_BUILD by +1 on EVERY change to room_logger.ino; NEVER bump for dashboard-only changes!
-#define FW_VERSION "3.12.0"
-#define FW_BUILD   7
+#define FW_VERSION "3.14.0"
+#define FW_BUILD   9
 volatile bool ntpSyncedThisBoot     = false;
 bool          battTrackEnabled       = false;
 bool          wifiTrackEnabled       = false;
@@ -2405,6 +2409,235 @@ bool publishClimateRollupToFirebase(unsigned long epoch) {
   return false;
 }
 
+// ---------- 48-Hour Hourly Ring Buffer on LittleFS (~2.2 KB) + /hourly48h.json ----------
+const char* HOURLY_48H_FILE = "/hourly_48h.txt";
+const int MAX_HOURLY_48H = 48;
+struct HourlyStat {
+  uint32_t hourNum; // epoch / 3600
+  float tSum;
+  float tMin;
+  float tMax;
+  float hSum;
+  float ahSum;
+  uint32_t okN;
+  uint32_t count;
+};
+HourlyStat hourlyRing[MAX_HOURLY_48H];
+int hourlyRingCount = 0;
+
+static String hourNumToShort(uint32_t hourNum) {
+  time_t ep = (time_t)((uint64_t)hourNum * 3600ULL);
+  struct tm t;
+  gmtime_r(&ep, &t);
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%02d-%02d %02d:00", t.tm_mon + 1, t.tm_mday, t.tm_hour);
+  return String(buf);
+}
+
+void loadHourly48hFromDisk() {
+  if (!fsReady) return;
+  if (fsMutex != NULL && xSemaphoreTake(fsMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
+  hourlyRingCount = 0;
+  if (LittleFS.exists(HOURLY_48H_FILE)) {
+    File f = LittleFS.open(HOURLY_48H_FILE, "r");
+    if (f) {
+      while (f.available() && hourlyRingCount < MAX_HOURLY_48H) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() < 8) continue;
+        HourlyStat s = {0, 0, 0, 0, 0, 0, 0, 0};
+        if (sscanf(line.c_str(), "%u,%f,%f,%f,%f,%f,%u,%u",
+                   &s.hourNum, &s.tSum, &s.tMin, &s.tMax, &s.hSum, &s.ahSum, &s.okN, &s.count) == 8 && s.count > 0) {
+          hourlyRing[hourlyRingCount++] = s;
+        }
+      }
+      f.close();
+    }
+  }
+  if (fsMutex != NULL) xSemaphoreGive(fsMutex);
+}
+
+static void saveHourly48hToDisk() {
+  if (!fsReady) return;
+  if (fsMutex != NULL && xSemaphoreTake(fsMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
+  File f = LittleFS.open(HOURLY_48H_FILE, "w");
+  if (f) {
+    for (int i = 0; i < hourlyRingCount; i++) {
+      f.printf("%u,%.2f,%.1f,%.1f,%.2f,%.2f,%u,%u\n",
+               hourlyRing[i].hourNum, hourlyRing[i].tSum, hourlyRing[i].tMin, hourlyRing[i].tMax,
+               hourlyRing[i].hSum, hourlyRing[i].ahSum, hourlyRing[i].okN, hourlyRing[i].count);
+    }
+    f.close();
+  }
+  if (fsMutex != NULL) xSemaphoreGive(fsMutex);
+}
+
+void recordHourly48hSample(unsigned long epoch, float temp, float hum) {
+  if (epoch < MIN_VALID_EPOCH) return;
+  uint32_t hNum = (uint32_t)(epoch / 3600UL);
+  float ah = calcAbsoluteHumidity(temp, hum);
+  uint32_t ok = (temp >= 20.0f && temp <= 26.0f && hum >= 30.0f && hum <= 60.0f) ? 1 : 0;
+  bool rolled = false;
+  if (hourlyRingCount > 0 && hourlyRing[hourlyRingCount - 1].hourNum == hNum) {
+    HourlyStat& cur = hourlyRing[hourlyRingCount - 1];
+    cur.tSum += temp;
+    if (temp < cur.tMin) cur.tMin = temp;
+    if (temp > cur.tMax) cur.tMax = temp;
+    cur.hSum += hum;
+    cur.ahSum += ah;
+    cur.okN += ok;
+    cur.count++;
+  } else {
+    rolled = true;
+    if (hourlyRingCount >= MAX_HOURLY_48H) {
+      for (int i = 1; i < MAX_HOURLY_48H; i++) hourlyRing[i - 1] = hourlyRing[i];
+      hourlyRingCount = MAX_HOURLY_48H - 1;
+    }
+    hourlyRing[hourlyRingCount++] = { hNum, temp, temp, temp, hum, ah, ok, 1 };
+  }
+  if (rolled || (hourlyRing[hourlyRingCount - 1].count % 10 == 1)) {
+    saveHourly48hToDisk();
+  }
+}
+
+bool publishHourly48hToFirebase(unsigned long epoch) {
+  if (WiFi.status() != WL_CONNECTED || hourlyRingCount <= 0) return false;
+  String fbHost, fbAuth;
+  if (xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
+  fbHost = currentFirebaseHost;
+  fbAuth = currentFirebaseAuth;
+  xSemaphoreGive(settingsMutex);
+  if (fbHost.length() == 0) return false;
+
+  uint32_t totalSamples = 0;
+  String arr = "[";
+  for (int i = 0; i < hourlyRingCount; i++) {
+    float n = (float)(hourlyRing[i].count > 0 ? hourlyRing[i].count : 1);
+    float avgT = hourlyRing[i].tSum / n;
+    float avgH = hourlyRing[i].hSum / n;
+    float avgA = hourlyRing[i].ahSum / n;
+    float avgFL = calcHeatIndexC(avgT, avgH);
+    int okPct = (int)roundf(((float)hourlyRing[i].okN / n) * 100.0f);
+    totalSamples += hourlyRing[i].count;
+    if (i > 0) arr += ",";
+    arr += "{\"hr\":\"" + hourNumToShort(hourlyRing[i].hourNum) + "\",\"t\":" + String(avgT, 1) +
+           ",\"tMin\":" + String(hourlyRing[i].tMin, 1) + ",\"tMax\":" + String(hourlyRing[i].tMax, 1) +
+           ",\"rh\":" + String(avgH, 1) + ",\"fl\":" + String(avgFL, 1) +
+           ",\"ah\":" + String(avgA, 1) + ",\"okPct\":" + String(okPct) +
+           ",\"n\":" + String(hourlyRing[i].count) + "}";
+  }
+  arr += "]";
+
+  char msBuf[24];
+  snprintf(msBuf, sizeof(msBuf), "%llu", (unsigned long long)epoch * 1000ULL);
+  String payload;
+  payload.reserve(4200);
+  payload = "{\"computedBy\":\"esp32\",\"updatedAt\":" + String(msBuf) +
+            ",\"readingCount48h\":" + String(totalSamples) +
+            ",\"hoursCount\":" + String(hourlyRingCount) +
+            ",\"hourly48h\":" + arr + "}";
+
+  String url = "https://" + fbHost + "/hourly48h.json";
+  if (fbAuth.length() > 0) url += "?auth=" + fbAuth;
+
+  if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(10000)) != pdTRUE) return false;
+  fbSseClose();
+  int code = -1;
+  {
+    WiFiClientSecure client;
+    configureSecureClient(client);
+    client.setTimeout(10);
+    HTTPClient http;
+    http.setConnectTimeout(8000);
+    http.setTimeout(10000);
+    if (http.begin(client, url)) {
+      http.addHeader("Content-Type", "application/json");
+      code = http.PUT(payload);
+      http.end();
+    }
+  }
+  if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+  if (code == 200) {
+    Serial.println("[Analytics] Published 48h hourly ring to /hourly48h.json");
+    return true;
+  }
+  return false;
+}
+
+// ---------- Adaptive ESP32 Sync Timing Telemetry (/perfStats.json, ~320 bytes) ----------
+int espPerfSamples = 0;
+float espPerfEwmaComputeMs = 0;
+float espPerfEwmaUploadMs = 0;
+float espPerfEwmaTotalMs = 0;
+unsigned long espPerfHist[8] = {0};
+int espPerfHistCount = 0;
+
+bool publishPerfStatsToFirebase(unsigned long epoch, unsigned long computeMs, unsigned long uploadMs, unsigned long totalMs) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  if (espPerfSamples == 0) {
+    espPerfEwmaComputeMs = (float)computeMs;
+    espPerfEwmaUploadMs  = (float)uploadMs;
+    espPerfEwmaTotalMs   = (float)totalMs;
+  } else {
+    espPerfEwmaComputeMs = 0.35f * (float)computeMs + 0.65f * espPerfEwmaComputeMs;
+    espPerfEwmaUploadMs  = 0.35f * (float)uploadMs  + 0.65f * espPerfEwmaUploadMs;
+    espPerfEwmaTotalMs   = 0.35f * (float)totalMs   + 0.65f * espPerfEwmaTotalMs;
+  }
+  espPerfSamples++;
+  if (espPerfHistCount < 8) {
+    espPerfHist[espPerfHistCount++] = totalMs;
+  } else {
+    for (int i = 1; i < 8; i++) espPerfHist[i - 1] = espPerfHist[i];
+    espPerfHist[7] = totalMs;
+  }
+
+  String fbHost, fbAuth;
+  if (xSemaphoreTake(settingsMutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
+  fbHost = currentFirebaseHost;
+  fbAuth = currentFirebaseAuth;
+  xSemaphoreGive(settingsMutex);
+  if (fbHost.length() == 0) return false;
+
+  String histJson = "[";
+  for (int i = 0; i < espPerfHistCount; i++) {
+    if (i > 0) histJson += ",";
+    histJson += String(espPerfHist[i]);
+  }
+  histJson += "]";
+
+  char msBuf[24];
+  snprintf(msBuf, sizeof(msBuf), "%llu", (unsigned long long)epoch * 1000ULL);
+  String payload = "{\"samples\":" + String(espPerfSamples) +
+    ",\"updatedAt\":" + String(msBuf) +
+    ",\"ewmaComputeMs\":" + String((unsigned long)roundf(espPerfEwmaComputeMs)) +
+    ",\"ewmaUploadMs\":" + String((unsigned long)roundf(espPerfEwmaUploadMs)) +
+    ",\"ewmaTotalMs\":" + String((unsigned long)roundf(espPerfEwmaTotalMs)) +
+    ",\"lastRun\":{\"computeMs\":" + String(computeMs) + ",\"uploadMs\":" + String(uploadMs) +
+    ",\"totalMs\":" + String(totalMs) + "},\"historyMs\":" + histJson + "}";
+
+  String url = "https://" + fbHost + "/perfStats.json";
+  if (fbAuth.length() > 0) url += "?auth=" + fbAuth;
+
+  if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(8000)) != pdTRUE) return false;
+  fbSseClose();
+  int code = -1;
+  {
+    WiFiClientSecure client;
+    configureSecureClient(client);
+    client.setTimeout(8);
+    HTTPClient http;
+    http.setConnectTimeout(6000);
+    http.setTimeout(8000);
+    if (http.begin(client, url)) {
+      http.addHeader("Content-Type", "application/json");
+      code = http.PUT(payload);
+      http.end();
+    }
+  }
+  if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
+  return code == 200;
+}
+
 bool publishStatusToFirebase() {
   if (WiFi.status() != WL_CONNECTED) return false;
   IPAddress ip = WiFi.localIP();
@@ -2994,19 +3227,28 @@ void executeFirebaseCommand(const String& body, const String& fbHost, const Stri
     finishAck();
     delay(1200);
     ESP.restart();
-  } else if (action == "recomputeAnalytics") {
+  } else if (action == "recomputeAnalytics" || action == "refreshRollup") {
     time_t nowSec = time(nullptr);
     unsigned long ep = ((unsigned long)nowSec >= MIN_VALID_EPOCH) ? (unsigned long)nowSec : 0;
     if (isfinite(lastTemp) && isfinite(lastHum) && ep > 0) {
-      // Release keep-alive socket first if active so publishAnalyticsToFirebase can acquire tlsMutex cleanly
       if (fastKeepAliveActive) {
         fastClient.stop();
         fastKeepAliveActive = false;
         if (tlsMutex != NULL) xSemaphoreGive(tlsMutex);
       }
-      bool ok = publishAnalyticsToFirebase(lastTemp, lastHum, ep);
+      unsigned long tStart = millis();
+      bool okA = publishAnalyticsToFirebase(lastTemp, lastHum, ep);
+      bool okR = publishClimateRollupToFirebase(ep);
+      bool okH = publishHourly48hToFirebase(ep);
+      unsigned long totalMs = millis() - tStart;
+      unsigned long estComputeMs = (totalMs > 40) ? 25 : totalMs;
+      unsigned long estUploadMs  = (totalMs > estComputeMs) ? (totalMs - estComputeMs) : 0;
+      bool ok = okA || okR || okH;
+      if (ok) publishPerfStatsToFirebase(ep, estComputeMs, estUploadMs, totalMs);
       lastCmdStage = ok ? "completed" : "error";
-      lastCmdResult = ok ? "7 air metrics calculated on ESP32 & synced to Firebase" : "Failed to publish /analytics.json";
+      lastCmdResult = ok
+        ? ("ESP32 synced rollups in " + String(totalMs / 1000.0f, 1) + "s")
+        : "Failed to publish ESP32 rollup/analytics to Firebase";
     } else {
       lastCmdStage = "error";
       lastCmdResult = "Waiting for valid sensor reading & clock";
@@ -3560,6 +3802,7 @@ bool handleReadingCycle() {
   }
 
   recordDailyAnalyticsSample(epoch, temp, hum);
+  recordHourly48hSample(epoch, temp, hum);
   if (!uploaded) {
     queueReading(epoch, payload);
   } else {
@@ -3567,7 +3810,11 @@ bool handleReadingCycle() {
       publishAnalyticsToFirebase(temp, hum, epoch);
     }
     if (lastRollupPublishMs == 0 || (millis() - lastRollupPublishMs >= ROLLUP_PUBLISH_INTERVAL_MS)) {
-      publishClimateRollupToFirebase(epoch);
+      unsigned long t0 = millis();
+      bool rOk = publishClimateRollupToFirebase(epoch);
+      bool hOk = publishHourly48hToFirebase(epoch);
+      unsigned long dt = millis() - t0;
+      if (rOk || hOk) publishPerfStatsToFirebase(epoch, 20, (dt > 20 ? dt - 20 : 0), dt);
     }
   }
 
@@ -4081,6 +4328,31 @@ bool performOtaFromUrl(const String& url, String& errOut, bool streamToHttp) {
     otaStreamLog("[OTA] FAILED: " + errOut, streamToHttp);
     return false;
   }
+
+  // Pre-OTA safety: sync all queued offline readings & climate rollups to Firebase,
+  // then clean temporary LittleFS queue files before allocating OTA TLS buffers.
+  otaStreamLog("[OTA] Syncing local LittleFS readings & rollups to cloud...", streamToHttp);
+  for (int pass = 0; pass < 5 && fsReady && LittleFS.exists(QUEUE_FILE); pass++) {
+    drainQueue(50);
+    yield();
+  }
+  {
+    time_t nowSec = time(nullptr);
+    unsigned long ep = ((unsigned long)nowSec >= MIN_VALID_EPOCH) ? (unsigned long)nowSec : 0;
+    if (ep > 0) {
+      if (isfinite(lastTemp) && isfinite(lastHum)) publishAnalyticsToFirebase(lastTemp, lastHum, ep);
+      bool rOk = publishClimateRollupToFirebase(ep);
+      bool hOk = publishHourly48hToFirebase(ep);
+      if (fsReady && (rOk || hOk)) {
+        if (fsMutex == NULL || xSemaphoreTake(fsMutex, pdMS_TO_TICKS(1500)) == pdTRUE) {
+          if (LittleFS.exists(QUEUE_TMP_FILE)) LittleFS.remove(QUEUE_TMP_FILE);
+          if (fsMutex != NULL) xSemaphoreGive(fsMutex);
+        }
+        otaStreamLog("[OTA] Cloud sync complete & temp storage cleaned.", streamToHttp);
+      }
+    }
+  }
+
   otaStreamLog("[OTA] Waiting for TLS lock...", streamToHttp);
   if (tlsMutex != NULL && xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
     errOut = "Device busy with another HTTPS request -- try again.";
@@ -5364,7 +5636,8 @@ void setup() {
   loadFirebaseSettings();     // pulls in any host/auth saved earlier via /firebase, else secrets.h defaults
   loadOpenNetworkSetting();   // pulls in the free-WiFi toggle saved earlier via /wifi, else defaults to ON
   loadWifiNetworksFromDisk();
-  loadDailyAnalyticsFromDisk(); // pulls in any networks saved via /wifi, else seeds from secrets.h
+  loadDailyAnalyticsFromDisk();
+  loadHourly48hFromDisk(); // pulls in any networks saved via /wifi, else seeds from secrets.h
   loadPreferredWifi();
   loadOtaBinUrl();
   loadPowerMode();            // pulls in Normal / Low / Medium / High power mode
